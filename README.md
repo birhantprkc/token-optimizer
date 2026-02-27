@@ -64,11 +64,11 @@ Per-message overhead:  ~43,000 tokens
 Context used:          38% before your first message
 
 QUICK WINS
-  Slim CLAUDE.md + MEMORY.md:    -5,200 tokens/msg
-  Archive 30 unused skills:      -3,000 tokens/msg
-  Prune MCP + add .claudeignore: -7,000 tokens/msg
+  Slim CLAUDE.md + MEMORY.md:      -5,200 tokens/msg
+  Archive unused skills + commands: -4,800 tokens/msg
+  Prune MCP + add .claudeignore:    -5,000 tokens/msg
 
-Total: -15,200 tokens/msg recovered
+Total: ~15,000 tokens/msg recovered
 
 Ready to implement? Everything backed up first.
 ```

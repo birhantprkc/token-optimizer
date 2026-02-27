@@ -42,9 +42,9 @@ fail()  { printf "${RED}x${NC} %s\n" "$1"; exit 1; }
 
 info "Checking prerequisites..."
 
-# Python 3.10+
+# Python 3.8+
 if ! command -v python3 &>/dev/null; then
-    fail "python3 not found. Install Python 3.10+ first."
+    fail "python3 not found. Install Python 3.8+ first."
 fi
 
 PY_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)

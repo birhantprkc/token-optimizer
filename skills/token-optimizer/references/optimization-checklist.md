@@ -390,7 +390,7 @@ Also track with `/cost` at end of each session and `npx ccusage@latest daily` fo
 ```
 
 **Baseline (well-optimized)**: ~21K tokens first message
-**Typical (unoptimized)**: ~27K tokens first message
+**Power user (unoptimized)**: ~43K tokens first message
 **Note**: Pre-Tool-Search (2025), unoptimized setups reached 40-80K+
 
 ---
@@ -399,7 +399,7 @@ Also track with `/cost` at end of each session and `npx ccusage@latest daily` fo
 
 **Before** (unaudited power user, 3+ months of use, Tool Search active):
 - Core system + built-in tools: ~15,000 tokens (fixed)
-- MCP tools: ~12,000 tokens (170 deferred tools + loaded schemas)
+- MCP tools: ~9,000 tokens (deferred tools + server instructions)
 - Skills (~60): ~6,000 tokens
 - Commands (~60): ~3,000 tokens
 - CLAUDE.md: ~3,500 tokens (grown organically, never trimmed)
@@ -413,8 +413,8 @@ Also track with `/cost` at end of each session and `npx ccusage@latest daily` fo
 1. CLAUDE.md: 3,500 -> 800 tokens (progressive disclosure)
 2. MEMORY.md: 3,500 -> 1,000 tokens (dedup with CLAUDE.md)
 3. Skills: 60 -> 30 (30 archived, ~3,000 tokens saved)
-4. Commands: 60 -> 25 (35 archived, ~1,750 tokens saved)
-5. MCP: pruned unused servers (~5,000 tokens saved)
+4. Commands: 60 -> 25 (35 archived, ~1,800 tokens saved)
+5. MCP: pruned unused servers (~3,000 tokens saved)
 6. .claudeignore created (~2,000 tokens saved from system reminders)
 - **Config savings: ~15,000 tokens/msg (35% reduction in consumed overhead)**
 - **After consumed: ~28,000 tokens/msg (14% of 200K)**
