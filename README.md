@@ -1,6 +1,8 @@
-# Token Optimizer
+<p align="center">
+  <img src="skills/token-optimizer/assets/logo.svg" alt="Token Optimizer" width="780">
+</p>
 
-**Run `/context` on a fresh Claude Code session. See how much is already gone. This tool shows you where it went and gets it back.**
+<p align="center"><strong>Run <code>/context</code> on a fresh Claude Code session. See how much is already gone.<br>This tool shows you where it went and gets it back.</strong></p>
 
 ![Token Optimizer in action](skills/token-optimizer/assets/hero-terminal.svg)
 
@@ -174,7 +176,8 @@ python3 ~/.claude/skills/token-optimizer/scripts/measure.py compare
 skills/token-optimizer/
   SKILL.md                             Orchestrator
   assets/
-    hero-terminal.svg                  Animated terminal demo
+    logo.svg                           Animated ASCII logo
+    hero-terminal.svg                  Terminal demo
     before-after.svg                   Token breakdown comparison
     how-it-works.svg                   5-phase flow diagram
     user-profiles.svg                  Context usage by setup type
@@ -189,12 +192,6 @@ skills/token-optimizer/
     hooks-starter.json                 Hook configuration example
   scripts/
     measure.py                         Before/after measurement tool
-tests/
-  conftest.py                          Shared pytest fixtures
-  test_measure.py                      measure.py unit tests
-  test_consistency.py                  Cross-file number validation
-  test_skill_structure.py              Structural validity
-  test_examples.py                     Example file validation
 install.sh                             One-command installer
 ```
 
