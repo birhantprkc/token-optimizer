@@ -171,6 +171,126 @@ python3 ~/.claude/skills/token-optimizer/scripts/measure.py snapshot after
 python3 ~/.claude/skills/token-optimizer/scripts/measure.py compare
 ```
 
+## Usage Analytics
+
+The optimizer doesn't just audit your config once. It tracks how you actually use Claude Code over time, so you can spot patterns, catch waste, and make informed decisions about what to keep and what to archive.
+
+Two commands power this: `trends` for usage patterns and `health` for session hygiene. Both work from the CLI and appear as interactive tabs in the dashboard.
+
+### Automatic Collection
+
+Add a one-line SessionEnd hook and usage data collects itself:
+
+```json
+{
+  "hooks": {
+    "SessionEnd": [{
+      "hooks": [{
+        "type": "command",
+        "command": "python3 ~/.claude/skills/token-optimizer/scripts/measure.py collect --quiet"
+      }]
+    }]
+  }
+}
+```
+
+Every session end parses the JSONL log into a local SQLite database (`~/.claude/_backups/token-optimizer/trends.db`). No external services. No API calls. Your data stays on your machine.
+
+You can also collect manually or backfill older sessions:
+
+```bash
+# Collect last 90 days of sessions (default)
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py collect
+
+# Backfill a longer history
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py collect --days 180
+```
+
+Collection is idempotent. Running it twice on the same sessions won't double-count anything.
+
+### Usage Trends
+
+```bash
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py trends
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py trends --days 7
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py trends --json
+```
+
+Scans your session history and shows:
+
+**Skills usage**: Which skills you actually invoke vs. which sit idle loading frontmatter every session. This is the most actionable insight. If you have 59 skills installed but only use 8 in the last 30 days, that's 51 skills costing ~100 tokens each, every session, for nothing.
+
+**Model mix**: Your opus/sonnet/haiku split across all sessions. If you see 90% opus, you're probably overspending on data-gathering agents that would work fine on haiku.
+
+**Daily breakdown**: Per-day session count, token volume, and which skills were used. In the dashboard, each day expands to show individual sessions with duration, message count, cache hit rate, and skills used.
+
+```
+USAGE TRENDS (last 30 days)
+  Sessions: 70 | Avg duration: 340 min
+
+SKILLS
+  Used (8 of 59 installed):
+    morning .................. 28 sessions
+    evening-auto ............. 25 sessions
+    recall ................... 12 sessions
+
+  Never used (last 30 days):
+    api-docs, condition-based-waiting, ...
+    (51 skills, ~5,100 tokens overhead)
+
+MODEL MIX
+  sonnet ████████████████████░░░░░ 63%  3.4M tokens
+  opus   ████████████░░░░░░░░░░░░░ 22%  1.2M tokens
+  haiku  ███████░░░░░░░░░░░░░░░░░░ 15%  800K tokens
+```
+
+### Clickable Skill Details
+
+In the dashboard, every skill listed in trends is clickable. Click a skill name and it expands to show:
+
+- **Description**: What the skill does (from SKILL.md frontmatter)
+- **Frontmatter tokens**: How much it costs per session just sitting in the menu
+- **File structure**: What files the skill contains (SKILL.md, references/, scripts/, etc.)
+
+Never-used skills link directly to the Quick Wins tab so you can archive them in one step.
+
+### Session Health
+
+```bash
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py health
+```
+
+Detects running Claude Code processes and flags problems:
+
+- **Stale sessions** (24h+): Still running but probably forgotten. Long sessions accumulate context bloat.
+- **Zombie sessions** (48h+): Almost certainly orphaned. Safe to kill.
+- **Outdated versions**: Running an older Claude Code version than what's installed. Restart to get fixes.
+- **Automated processes**: Lists any launchd/cron jobs running Claude.
+
+```
+SESSION HEALTH CHECK
+  Installed version: 2.1.63
+
+RUNNING SESSIONS (2)
+  PID 521     (2d 8h ago)  v2.1.62  OUTDATED  ZOMBIE
+  PID 91719   (1d 2h ago)  v2.1.63  STALE
+
+RECOMMENDATIONS
+  - 1 session running older version. Restart to get latest fixes.
+  - 2 sessions running 24+ hours. Check if still needed.
+```
+
+### Dashboard Analytics Tabs
+
+When you generate the dashboard (`measure.py dashboard --coord-path PATH`), trends and health appear as dedicated tabs alongside the optimization findings. The Trends tab includes:
+
+- Date range selector (7/14/30 days + calendar date picker)
+- Interactive daily breakdown table (click a day to expand individual sessions)
+- Skills usage bars with clickable detail panels
+- Model mix visualization with cost-saving context
+
+The right panel collapses on analytics tabs since they're informational, giving the data more room.
+
 ## vs Alternatives
 
 | Tool | What It Does | Limitation |
@@ -186,7 +306,7 @@ python3 ~/.claude/skills/token-optimizer/scripts/measure.py compare
 skills/token-optimizer/
   SKILL.md                             Orchestrator
   assets/
-    dashboard.html                     Interactive optimization dashboard
+    dashboard.html                     Interactive dashboard (optimization + analytics)
     logo.svg                           Animated ASCII logo
     hero-terminal.svg                  Terminal demo
     before-after.svg                   Token breakdown comparison
@@ -202,7 +322,7 @@ skills/token-optimizer/
     claudeignore-template              .claudeignore starter
     hooks-starter.json                 Hook configuration example
   scripts/
-    measure.py                         Before/after measurement tool
+    measure.py                         Measurement, trends, health & collection tool
 install.sh                             One-command installer
 ```
 

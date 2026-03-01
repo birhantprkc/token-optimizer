@@ -56,6 +56,36 @@ COORD_PATH=$(mktemp -d /tmp/token-optimizer-XXXXXXXXXX)
 mkdir -p "$COORD_PATH"/{audit,analysis,plan,verification}
 ```
 
+4. **Check SessionEnd hook** (first-time setup, skips silently if already installed):
+```bash
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py check-hook
+```
+   - If exit 0: hook is already installed, skip entirely and proceed to Phase 1.
+   - If exit 1: explain and offer to install:
+
+   ```
+   [Token Optimizer] Usage analytics hook not installed.
+
+   The SessionEnd hook runs `measure.py collect` once when a session closes (~1 second).
+   It collects session duration, token usage, skills invoked, and model mix into a local
+   SQLite database. No data leaves your machine. No background process, no daemon.
+
+   Why a hook instead of a cron job? Session data only exists after a session ends.
+   A cron job polling mid-session would find nothing new. The hook fires exactly once,
+   runs for ~1 second, exits. Zero background processes. It's the Claude Code native
+   pattern for post-session work.
+
+   Data stored: ~/.claude/_backups/token-optimizer/trends.db
+   Remove anytime: delete the SessionEnd entry from ~/.claude/settings.json
+   ```
+
+   Ask user:
+   1. Install it (run `measure.py setup-hook --dry-run` first to show the diff, then confirm and run `measure.py setup-hook`)
+   2. Show me the JSON first (run `measure.py setup-hook --dry-run` and stop)
+   3. Skip for now
+
+   If skipped, note it and continue. The audit still works without it, but the Trends tab will only have data from manual `measure.py collect` runs.
+
 Output: `[Token Optimizer Initialized] Backup: $BACKUP_DIR | Coordination: $COORD_PATH`
 
 ---
@@ -153,6 +183,16 @@ Read `references/implementation-playbook.md` for detailed steps.
 Available actions: 4A (CLAUDE.md), 4B (MEMORY.md), 4C (Skills), 4D (.claudeignore), 4E (MCP), 4F (Hooks), 4G (Cache Structure), 4H (Rules Cleanup), 4I (Settings Tuning), 4J (Skill Description Tightening), 4K (Compact Instructions Setup).
 
 Templates in `examples/`. Always backup before changes. Present diffs for approval.
+
+---
+
+## Measurement Tool: Additional Commands
+
+Beyond the core `report`/`snapshot`/`compare`/`dashboard` commands, the measurement tool includes:
+
+- **`measure.py trends [--days N] [--json]`**: Scans all JSONL session logs across projects. Shows which skills you actually use, subagent patterns, model mix, and cross-references against installed skills to surface unused ones. Default: last 30 days.
+- **`measure.py health`**: Detects running Claude Code sessions, checks their version against installed, flags stale/zombie processes, and shows automated Claude-related processes.
+- Both `trends` and `health` data appear as interactive tabs in the dashboard when generated via `measure.py dashboard`.
 
 ---
 

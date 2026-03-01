@@ -10,6 +10,12 @@ Usage:
     python3 measure.py compare            # Compare before vs after
     python3 measure.py report             # Full standalone report
     python3 measure.py dashboard --coord-path /tmp/...  # Generate interactive dashboard
+    python3 measure.py health             # Check running session health
+    python3 measure.py trends             # Usage trends (last 30 days)
+    python3 measure.py trends --days 7    # Usage trends (shorter window)
+    python3 measure.py trends --json      # Machine-readable output
+    python3 measure.py collect             # Collect sessions into SQLite DB
+    python3 measure.py collect --quiet     # Silent mode (for SessionEnd hook)
 
 Snapshots are saved to SNAPSHOT_DIR (default: ~/.claude/_backups/token-optimizer/)
 
@@ -390,24 +396,72 @@ def measure_components():
     skill_tokens = 0
     skill_names = []
     verbose_skills = []
+    skills_detail = {}
     if skills_dir.exists():
         for item in sorted(skills_dir.iterdir()):
             skill_md = item / "SKILL.md"
             if item.is_dir() and skill_md.exists():
                 skill_count += 1
                 skill_names.append(item.name)
-                skill_tokens += estimate_tokens_from_frontmatter(skill_md)
+                fm_tokens = estimate_tokens_from_frontmatter(skill_md)
+                skill_tokens += fm_tokens
                 desc_len = _get_frontmatter_description_length(skill_md)
                 if desc_len > 200:
                     verbose_skills.append({
                         "name": item.name,
                         "description_chars": desc_len,
                     })
+                # Collect per-skill detail for dashboard
+                detail = {
+                    "name": item.name,
+                    "frontmatter_tokens": fm_tokens,
+                    "description_chars": desc_len,
+                }
+                # Gather file structure (top-level only)
+                try:
+                    children = sorted(p.name for p in item.iterdir() if not p.name.startswith("."))
+                    detail["files"] = children
+                except OSError:
+                    detail["files"] = []
+                # Read description from frontmatter or first paragraph
+                try:
+                    with open(skill_md, "r", encoding="utf-8") as f:
+                        content = f.read(4000)  # first 4K is enough
+                    if content.startswith("---"):
+                        end = content.find("---", 3)
+                        if end > 0:
+                            fm_block = content[3:end]
+                            for line in fm_block.split("\n"):
+                                stripped = line.strip()
+                                if stripped.startswith("description:"):
+                                    desc_text = stripped[12:].strip().strip("|").strip(">").strip()
+                                    if not desc_text:
+                                        # Multi-line description
+                                        desc_lines = []
+                                        for dl in fm_block.split("\n")[fm_block.split("\n").index(line)+1:]:
+                                            if dl and dl[0] in (' ', '\t'):
+                                                desc_lines.append(dl.strip())
+                                            else:
+                                                break
+                                        desc_text = " ".join(desc_lines)
+                                    detail["description"] = desc_text[:200]
+                                    break
+                    # Fallback: no YAML frontmatter, grab first non-heading paragraph
+                    if "description" not in detail:
+                        for line in content.split("\n"):
+                            stripped = line.strip()
+                            if stripped and not stripped.startswith("#") and not stripped.startswith("---"):
+                                detail["description"] = stripped[:200]
+                                break
+                except (OSError, UnicodeDecodeError):
+                    pass
+                skills_detail[item.name] = detail
     components["skills"] = {
         "count": skill_count,
         "tokens": skill_tokens,
         "names": skill_names,
     }
+    components["skills_detail"] = skills_detail
 
     # Commands (read actual file sizes for frontmatter estimate)
     commands_dir = CLAUDE_DIR / "commands"
@@ -1005,11 +1059,25 @@ def generate_dashboard(coord_path):
         except (OSError, UnicodeDecodeError):
             pass
 
+    # Collect trends and health data
+    print("  Collecting usage trends...")
+    try:
+        trends = _collect_trends_data(days=30)
+    except Exception:
+        trends = None
+    print("  Checking session health...")
+    try:
+        health = _collect_health_data()
+    except Exception:
+        health = None
+
     # Assemble data
     data = {
         "snapshot": snapshot,
         "audit": audit,
         "plan": plan,
+        "trends": trends,
+        "health": health,
         "generated_at": datetime.now().isoformat(),
     }
 
@@ -1035,6 +1103,1256 @@ def generate_dashboard(coord_path):
     return str(out_path)
 
 
+def _find_all_jsonl_files(days=30):
+    """Find all JSONL session files across all projects within the given day window."""
+    projects_base = CLAUDE_DIR / "projects"
+    if not projects_base.exists():
+        return []
+
+    cutoff = datetime.now().timestamp() - (days * 86400)
+    results = []
+    for project_dir in projects_base.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for jf in project_dir.glob("*.jsonl"):
+            try:
+                mtime = jf.stat().st_mtime
+                if mtime >= cutoff:
+                    results.append((jf, mtime, project_dir.name))
+            except OSError:
+                continue
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
+
+
+def _find_subagent_jsonl_files(session_jsonl_path):
+    """Find subagent JSONL files for a given session.
+
+    Claude Code stores subagent logs in {session-uuid}/subagents/*.jsonl
+    next to the parent {session-uuid}.jsonl file.
+    """
+    session_dir = session_jsonl_path.parent / session_jsonl_path.stem
+    subagent_dir = session_dir / "subagents"
+    if not subagent_dir.is_dir():
+        return []
+    results = []
+    for jf in subagent_dir.glob("*.jsonl"):
+        try:
+            if jf.stat().st_size > 0:
+                results.append(jf)
+        except OSError:
+            continue
+    return results
+
+
+def _extract_skills_and_agents_from_subagent(filepath):
+    """Parse a subagent JSONL file for Skill and Task tool calls only.
+
+    Returns (skills_dict, subagents_dict) without extracting token usage
+    (parent session already accounts for API cost).
+    """
+    skills = {}
+    subagents = {}
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("type") != "assistant":
+                    continue
+                content = record.get("message", {}).get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                        continue
+                    tool_name = block.get("name", "")
+                    inp = block.get("input", {})
+                    if tool_name == "Skill":
+                        skill = inp.get("skill", "unknown")
+                        skills[skill] = skills.get(skill, 0) + 1
+                    elif tool_name == "Task":
+                        agent_type = inp.get("subagent_type", "unknown")
+                        subagents[agent_type] = subagents.get(agent_type, 0) + 1
+    except (PermissionError, OSError):
+        pass
+    return skills, subagents
+
+
+def _parse_session_jsonl(filepath):
+    """Parse a single JSONL session file in one streaming pass.
+
+    Returns a dict with extracted session metrics, or None if the file
+    is empty or unparseable.
+    """
+    skills_used = {}
+    subagents_used = {}
+    tool_calls = {}
+    total_input = 0
+    total_output = 0
+    total_cache_read = 0
+    total_cache_create = 0
+    model_usage = {}
+    version = None
+    first_ts = None
+    last_ts = None
+    message_count = 0
+    api_calls = 0
+
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                # Extract version (take the first non-None we see)
+                if version is None:
+                    v = record.get("version")
+                    if v:
+                        version = v
+
+                # Extract timestamp
+                ts_str = record.get("timestamp")
+                if ts_str:
+                    try:
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        if first_ts is None:
+                            first_ts = ts
+                        last_ts = ts
+                    except (ValueError, TypeError):
+                        pass
+
+                rec_type = record.get("type")
+
+                # Count user/assistant messages
+                if rec_type in ("user", "assistant"):
+                    message_count += 1
+
+                # Extract tool usage from assistant messages
+                if rec_type == "assistant":
+                    msg = record.get("message", {})
+                    content = msg.get("content", [])
+
+                    if isinstance(content, list):
+                        for block in content:
+                            if not isinstance(block, dict):
+                                continue
+                            if block.get("type") != "tool_use":
+                                continue
+
+                            tool_name = block.get("name", "")
+                            tool_calls[tool_name] = tool_calls.get(tool_name, 0) + 1
+
+                            inp = block.get("input", {})
+                            if tool_name == "Skill":
+                                skill = inp.get("skill", "unknown")
+                                skills_used[skill] = skills_used.get(skill, 0) + 1
+                            elif tool_name == "Task":
+                                agent_type = inp.get("subagent_type", "unknown")
+                                subagents_used[agent_type] = subagents_used.get(agent_type, 0) + 1
+
+                    # Extract usage/token data
+                    usage = msg.get("usage", {})
+                    if usage:
+                        inp_tok = usage.get("input_tokens", 0)
+                        out_tok = usage.get("output_tokens", 0)
+                        cr = usage.get("cache_read_input_tokens", 0)
+                        cc = usage.get("cache_creation_input_tokens", 0)
+                        total_input += inp_tok
+                        total_output += out_tok
+                        total_cache_read += cr
+                        total_cache_create += cc
+                        api_calls += 1
+
+                        # Model usage: count all input types + output
+                        model = msg.get("model", "unknown")
+                        model_usage[model] = model_usage.get(model, 0) + inp_tok + cr + cc + out_tok
+
+    except (PermissionError, OSError):
+        return None
+
+    if message_count == 0:
+        return None
+
+    # Calculate duration
+    duration_minutes = 0
+    if first_ts and last_ts:
+        delta = (last_ts - first_ts).total_seconds()
+        duration_minutes = max(0, delta / 60)
+
+    # Full input = uncached + cache reads + cache creation
+    total_full_input = total_input + total_cache_read + total_cache_create
+
+    # Cache hit rate
+    cache_hit_rate = 0.0
+    if total_full_input > 0:
+        cache_hit_rate = total_cache_read / total_full_input
+
+    return {
+        "version": version,
+        "duration_minutes": duration_minutes,
+        "total_input_tokens": total_full_input,
+        "total_output_tokens": total_output,
+        "cache_hit_rate": cache_hit_rate,
+        "model_usage": model_usage,
+        "skills_used": skills_used,
+        "subagents_used": subagents_used,
+        "tool_calls": tool_calls,
+        "message_count": message_count,
+        "api_calls": api_calls,
+        "first_ts": first_ts.isoformat() if first_ts else None,
+    }
+
+
+def _normalize_model_name(model_id):
+    """Collapse model IDs like 'claude-sonnet-4-6' into 'sonnet'.
+
+    Returns None for synthetic/internal model IDs that should be skipped.
+    """
+    if not model_id or model_id.startswith("<"):
+        return None
+    m = model_id.lower()
+    if "opus" in m:
+        return "opus"
+    if "sonnet" in m:
+        return "sonnet"
+    if "haiku" in m:
+        return "haiku"
+    return model_id
+
+
+def _load_overhead_snapshots():
+    """Load any saved token-optimizer snapshots for overhead trajectory.
+
+    Returns snapshots sorted chronologically by timestamp.
+    """
+    snapshots = []
+    if not SNAPSHOT_DIR.exists():
+        return snapshots
+    for sf in sorted(SNAPSHOT_DIR.glob("snapshot_*.json")):
+        try:
+            with open(sf, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            snapshots.append({
+                "label": data.get("label", sf.stem),
+                "timestamp": data.get("timestamp", ""),
+                "total": data.get("totals", {}).get("estimated_total", 0),
+            })
+        except (json.JSONDecodeError, PermissionError, OSError):
+            continue
+    # Sort by timestamp so trajectory reads chronologically
+    snapshots.sort(key=lambda s: s["timestamp"])
+    return snapshots
+
+
+# ========== SQLite Trends DB ==========
+# Pure Python, no Claude API. Runs standalone via `measure.py collect`.
+
+import sqlite3
+
+TRENDS_DB = SNAPSHOT_DIR / "trends.db"
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS session_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    jsonl_path TEXT UNIQUE,
+    date TEXT NOT NULL,
+    project TEXT,
+    duration_minutes REAL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    message_count INTEGER,
+    api_calls INTEGER,
+    cache_hit_rate REAL,
+    skills_json TEXT,
+    subagents_json TEXT,
+    tool_calls_json TEXT,
+    model_usage_json TEXT,
+    version TEXT,
+    collected_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS daily_stats (
+    date TEXT PRIMARY KEY,
+    session_count INTEGER,
+    total_input INTEGER,
+    total_output INTEGER,
+    total_duration REAL,
+    avg_cache_hit REAL
+);
+
+CREATE TABLE IF NOT EXISTS skill_daily (
+    date TEXT,
+    skill TEXT,
+    session_count INTEGER,
+    invocations INTEGER,
+    PRIMARY KEY (date, skill)
+);
+
+CREATE TABLE IF NOT EXISTS model_daily (
+    date TEXT,
+    model TEXT,
+    total_tokens INTEGER,
+    PRIMARY KEY (date, model)
+);
+
+CREATE TABLE IF NOT EXISTS subagent_daily (
+    date TEXT,
+    agent_type TEXT,
+    spawn_count INTEGER,
+    PRIMARY KEY (date, agent_type)
+);
+"""
+
+
+def _init_trends_db():
+    """Initialize the trends SQLite DB. Returns a connection."""
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(TRENDS_DB))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.executescript(_SCHEMA)
+    return conn
+
+
+def _is_file_collected(conn, jsonl_path):
+    """Check if a JSONL file has already been collected."""
+    cur = conn.execute(
+        "SELECT 1 FROM session_log WHERE jsonl_path = ?",
+        (str(jsonl_path),),
+    )
+    return cur.fetchone() is not None
+
+
+def collect_sessions(days=90, quiet=False):
+    """Parse new JSONL files and insert into SQLite. Zero token cost.
+
+    Skips files already collected. Safe to run repeatedly.
+    """
+    conn = _init_trends_db()
+    files = _find_all_jsonl_files(days)
+    if not files:
+        if not quiet:
+            print(f"No session logs found in the last {days} days.")
+        conn.close()
+        return 0
+
+    new_count = 0
+    for filepath, mtime, project_name in files:
+        if _is_file_collected(conn, filepath):
+            continue
+
+        parsed = _parse_session_jsonl(filepath)
+        if not parsed:
+            continue
+
+        # Scan subagent JSONL files for additional skills and agent types
+        for sub_jf in _find_subagent_jsonl_files(filepath):
+            sub_skills, sub_agents = _extract_skills_and_agents_from_subagent(sub_jf)
+            for sk, cnt in sub_skills.items():
+                parsed["skills_used"][sk] = parsed["skills_used"].get(sk, 0) + cnt
+            for ag, cnt in sub_agents.items():
+                parsed["subagents_used"][ag] = parsed["subagents_used"].get(ag, 0) + cnt
+
+        date = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+        skills_used = parsed["skills_used"]
+        subagents_used = parsed["subagents_used"]
+
+        # Insert session_log
+        conn.execute(
+            """INSERT OR IGNORE INTO session_log
+               (jsonl_path, date, project, duration_minutes, input_tokens,
+                output_tokens, message_count, api_calls, cache_hit_rate,
+                skills_json, subagents_json, tool_calls_json, model_usage_json,
+                version, collected_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(filepath), date, project_name,
+                parsed["duration_minutes"],
+                parsed["total_input_tokens"],
+                parsed["total_output_tokens"],
+                parsed["message_count"],
+                parsed.get("api_calls", 0),
+                parsed["cache_hit_rate"],
+                json.dumps(skills_used),
+                json.dumps(subagents_used),
+                json.dumps(parsed["tool_calls"]),
+                json.dumps(parsed["model_usage"]),
+                parsed["version"],
+                datetime.now().isoformat(),
+            ),
+        )
+
+        # Upsert daily_stats
+        conn.execute(
+            """INSERT INTO daily_stats (date, session_count, total_input, total_output, total_duration, avg_cache_hit)
+               VALUES (?, 1, ?, ?, ?, ?)
+               ON CONFLICT(date) DO UPDATE SET
+                 session_count = session_count + 1,
+                 total_input = total_input + excluded.total_input,
+                 total_output = total_output + excluded.total_output,
+                 total_duration = total_duration + excluded.total_duration,
+                 avg_cache_hit = (avg_cache_hit * session_count + excluded.avg_cache_hit) / (session_count + 1)""",
+            (date, parsed["total_input_tokens"], parsed["total_output_tokens"],
+             parsed["duration_minutes"], parsed["cache_hit_rate"]),
+        )
+
+        # Upsert skill_daily (session-level: count each skill once per session)
+        for skill, invocations in skills_used.items():
+            conn.execute(
+                """INSERT INTO skill_daily (date, skill, session_count, invocations)
+                   VALUES (?, ?, 1, ?)
+                   ON CONFLICT(date, skill) DO UPDATE SET
+                     session_count = session_count + 1,
+                     invocations = invocations + excluded.invocations""",
+                (date, skill, invocations),
+            )
+
+        # Upsert model_daily
+        for model_id, tokens in parsed["model_usage"].items():
+            normalized = _normalize_model_name(model_id)
+            if normalized is None:
+                continue
+            conn.execute(
+                """INSERT INTO model_daily (date, model, total_tokens)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(date, model) DO UPDATE SET
+                     total_tokens = total_tokens + excluded.total_tokens""",
+                (date, normalized, tokens),
+            )
+
+        # Upsert subagent_daily
+        for agent_type, count in subagents_used.items():
+            conn.execute(
+                """INSERT INTO subagent_daily (date, agent_type, spawn_count)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(date, agent_type) DO UPDATE SET
+                     spawn_count = spawn_count + excluded.spawn_count""",
+                (date, agent_type, count),
+            )
+
+        new_count += 1
+
+    conn.commit()
+    conn.close()
+
+    if not quiet:
+        total = conn_total_sessions() if TRENDS_DB.exists() else new_count
+        print(f"[Token Optimizer] Collected {new_count} new sessions. Total in DB: {total}")
+    return new_count
+
+
+def conn_total_sessions():
+    """Quick count of total sessions in the DB."""
+    try:
+        conn = sqlite3.connect(str(TRENDS_DB))
+        cur = conn.execute("SELECT COUNT(*) FROM session_log")
+        count = cur.fetchone()[0]
+        conn.close()
+        return count
+    except (sqlite3.Error, OSError):
+        return 0
+
+
+def _collect_trends_from_db(days=30):
+    """Query SQLite trends DB for aggregated usage data.
+
+    Returns same dict shape as _collect_trends_from_jsonl, or None if DB
+    doesn't exist or has no data for the requested period.
+    """
+    if not TRENDS_DB.exists():
+        return None
+
+    try:
+        conn = sqlite3.connect(str(TRENDS_DB))
+        conn.row_factory = sqlite3.Row
+        # Verify it's a valid DB before proceeding
+        conn.execute("SELECT 1 FROM session_log LIMIT 1")
+    except (sqlite3.Error, sqlite3.DatabaseError):
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None
+
+    try:
+        return _query_trends_db(conn, days)
+    except (sqlite3.Error, sqlite3.DatabaseError):
+        conn.close()
+        return None
+
+
+def _query_trends_db(conn, days):
+    """Internal: run all queries against the trends DB. Caller handles errors."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    # Basic stats
+    row = conn.execute(
+        """SELECT COUNT(*) as cnt,
+                  COALESCE(SUM(duration_minutes), 0) as total_dur,
+                  COALESCE(SUM(input_tokens), 0) as total_in,
+                  COALESCE(SUM(output_tokens), 0) as total_out
+           FROM session_log WHERE date >= ?""", (cutoff,)
+    ).fetchone()
+
+    session_count = row["cnt"]
+    if session_count == 0:
+        conn.close()
+        return None
+
+    total_duration = row["total_dur"]
+    total_input = row["total_in"]
+    total_output = row["total_out"]
+
+    # Skill usage
+    skill_rows = conn.execute(
+        """SELECT skill, SUM(session_count) as sess, SUM(invocations) as inv
+           FROM skill_daily WHERE date >= ? GROUP BY skill ORDER BY sess DESC""",
+        (cutoff,),
+    ).fetchall()
+    skill_sessions = {r["skill"]: r["sess"] for r in skill_rows}
+
+    # Model mix
+    model_rows = conn.execute(
+        """SELECT model, SUM(total_tokens) as tot
+           FROM model_daily WHERE date >= ? GROUP BY model ORDER BY tot DESC""",
+        (cutoff,),
+    ).fetchall()
+    model_mix = {r["model"]: r["tot"] for r in model_rows}
+
+    # Subagents
+    sub_rows = conn.execute(
+        """SELECT agent_type, SUM(spawn_count) as tot
+           FROM subagent_daily WHERE date >= ? GROUP BY agent_type ORDER BY tot DESC""",
+        (cutoff,),
+    ).fetchall()
+    subagents = {r["agent_type"]: r["tot"] for r in sub_rows}
+
+    # Tool calls (aggregate from session_log JSON)
+    total_tools = {}
+    tool_rows = conn.execute(
+        "SELECT tool_calls_json FROM session_log WHERE date >= ? AND tool_calls_json IS NOT NULL",
+        (cutoff,),
+    ).fetchall()
+    for tr in tool_rows:
+        try:
+            calls = json.loads(tr["tool_calls_json"])
+            for tool, count in calls.items():
+                total_tools[tool] = total_tools.get(tool, 0) + count
+        except (json.JSONDecodeError, TypeError):
+            pass
+    total_tools = dict(sorted(total_tools.items(), key=lambda x: -x[1]))
+
+    # Installed skills vs used
+    components = measure_components()
+    installed_skills = set(components.get("skills", {}).get("names", []))
+    used_skills = set(skill_sessions.keys())
+    never_used = installed_skills - used_skills
+    never_used_overhead = len(never_used) * TOKENS_PER_SKILL_APPROX
+
+    # Trajectory
+    snapshots = _load_overhead_snapshots()
+    current_total = calculate_totals(components).get("estimated_total", 0)
+
+    # Daily breakdown from session_log
+    daily = {}
+    session_rows = conn.execute(
+        """SELECT date, duration_minutes, input_tokens, output_tokens,
+                  message_count, api_calls, cache_hit_rate, skills_json,
+                  subagents_json
+           FROM session_log WHERE date >= ? ORDER BY date DESC""",
+        (cutoff,),
+    ).fetchall()
+    for sr in session_rows:
+        date = sr["date"]
+        if date not in daily:
+            daily[date] = {
+                "date": date,
+                "sessions": 0,
+                "total_input": 0,
+                "total_output": 0,
+                "skills_used": {},
+                "session_details": [],
+            }
+        d = daily[date]
+        d["sessions"] += 1
+        d["total_input"] += sr["input_tokens"] or 0
+        d["total_output"] += sr["output_tokens"] or 0
+
+        try:
+            skills = json.loads(sr["skills_json"]) if sr["skills_json"] else {}
+        except (json.JSONDecodeError, TypeError):
+            skills = {}
+        for skill, cnt in skills.items():
+            d["skills_used"][skill] = d["skills_used"].get(skill, 0) + cnt
+
+        try:
+            subagents = json.loads(sr["subagents_json"]) if sr["subagents_json"] else {}
+        except (json.JSONDecodeError, TypeError):
+            subagents = {}
+
+        d["session_details"].append({
+            "duration_minutes": round(sr["duration_minutes"] or 0, 1),
+            "input_tokens": sr["input_tokens"] or 0,
+            "output_tokens": sr["output_tokens"] or 0,
+            "message_count": sr["message_count"] or 0,
+            "api_calls": sr["api_calls"] or 0,
+            "skills": list(skills.keys()),
+            "subagents": list(subagents.keys()),
+            "cache_hit_rate": round(sr["cache_hit_rate"] or 0, 3),
+        })
+
+    daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
+
+    conn.close()
+
+    return {
+        "period_days": days,
+        "session_count": session_count,
+        "avg_duration_minutes": round(total_duration / session_count, 1) if session_count else 0,
+        "avg_input_tokens": round(total_input / session_count) if session_count else 0,
+        "avg_output_tokens": round(total_output / session_count) if session_count else 0,
+        "skills": {
+            "used": dict(sorted(skill_sessions.items(), key=lambda x: -x[1])),
+            "installed_count": len(installed_skills),
+            "never_used": sorted(never_used),
+            "never_used_overhead": never_used_overhead,
+        },
+        "subagents": subagents,
+        "model_mix": model_mix,
+        "tool_calls": total_tools,
+        "trajectory": {
+            "snapshots": snapshots,
+            "current_total": current_total,
+        },
+        "daily": daily_sorted,
+        "source": "sqlite",
+    }
+
+
+def _collect_trends_from_jsonl(days=30):
+    """Collect usage trends by parsing JSONL files directly (fallback).
+
+    Returns a dict with aggregated trends data, or None if no data found.
+    """
+    files = _find_all_jsonl_files(days)
+    if not files:
+        return None
+
+    sessions = []
+    for filepath, mtime, project_name in files:
+        parsed = _parse_session_jsonl(filepath)
+        if parsed:
+            # Scan subagent JSONL files for additional skills and agent types
+            for sub_jf in _find_subagent_jsonl_files(filepath):
+                sub_skills, sub_agents = _extract_skills_and_agents_from_subagent(sub_jf)
+                for sk, cnt in sub_skills.items():
+                    parsed["skills_used"][sk] = parsed["skills_used"].get(sk, 0) + cnt
+                for ag, cnt in sub_agents.items():
+                    parsed["subagents_used"][ag] = parsed["subagents_used"].get(ag, 0) + cnt
+            parsed["project"] = project_name
+            parsed["date"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+            sessions.append(parsed)
+
+    if not sessions:
+        return None
+
+    total_skills = {}
+    total_subagents = {}
+    total_tools = {}
+    total_model_tokens = {}
+    total_input = 0
+    total_output = 0
+    total_duration = 0
+    session_count = len(sessions)
+
+    for s in sessions:
+        total_input += s["total_input_tokens"]
+        total_output += s["total_output_tokens"]
+        total_duration += s["duration_minutes"]
+
+        for skill, count in s["skills_used"].items():
+            total_skills[skill] = total_skills.get(skill, 0) + count
+
+        for agent, count in s["subagents_used"].items():
+            total_subagents[agent] = total_subagents.get(agent, 0) + count
+
+        for tool, count in s["tool_calls"].items():
+            total_tools[tool] = total_tools.get(tool, 0) + count
+
+        for model, tokens in s["model_usage"].items():
+            normalized = _normalize_model_name(model)
+            if normalized is None:
+                continue
+            total_model_tokens[normalized] = total_model_tokens.get(normalized, 0) + tokens
+
+    skill_sessions = {}
+    for s in sessions:
+        for skill in s["skills_used"]:
+            skill_sessions[skill] = skill_sessions.get(skill, 0) + 1
+
+    components = measure_components()
+    installed_skills = set(components.get("skills", {}).get("names", []))
+    used_skills = set(total_skills.keys())
+    never_used = installed_skills - used_skills
+    never_used_overhead = len(never_used) * TOKENS_PER_SKILL_APPROX
+
+    snapshots = _load_overhead_snapshots()
+    current_total = calculate_totals(components).get("estimated_total", 0)
+
+    # Build daily breakdown
+    daily = {}
+    for s in sessions:
+        date = s["date"]
+        if date not in daily:
+            daily[date] = {
+                "date": date,
+                "sessions": 0,
+                "total_input": 0,
+                "total_output": 0,
+                "skills_used": {},
+                "session_details": [],
+            }
+        d = daily[date]
+        d["sessions"] += 1
+        d["total_input"] += s["total_input_tokens"]
+        d["total_output"] += s["total_output_tokens"]
+        for skill in s["skills_used"]:
+            d["skills_used"][skill] = d["skills_used"].get(skill, 0) + s["skills_used"][skill]
+        d["session_details"].append({
+            "duration_minutes": round(s["duration_minutes"], 1),
+            "input_tokens": s["total_input_tokens"],
+            "output_tokens": s["total_output_tokens"],
+            "message_count": s["message_count"],
+            "api_calls": s.get("api_calls", 0),
+            "skills": list(s["skills_used"].keys()),
+            "subagents": list(s["subagents_used"].keys()),
+            "cache_hit_rate": round(s["cache_hit_rate"], 3),
+        })
+
+    # Sort daily by date descending
+    daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
+
+    return {
+        "period_days": days,
+        "session_count": session_count,
+        "avg_duration_minutes": round(total_duration / session_count, 1) if session_count else 0,
+        "avg_input_tokens": round(total_input / session_count) if session_count else 0,
+        "avg_output_tokens": round(total_output / session_count) if session_count else 0,
+        "skills": {
+            "used": dict(sorted(skill_sessions.items(), key=lambda x: -x[1])),
+            "installed_count": len(installed_skills),
+            "never_used": sorted(never_used),
+            "never_used_overhead": never_used_overhead,
+        },
+        "subagents": dict(sorted(total_subagents.items(), key=lambda x: -x[1])),
+        "model_mix": total_model_tokens,
+        "tool_calls": dict(sorted(total_tools.items(), key=lambda x: -x[1])),
+        "trajectory": {
+            "snapshots": snapshots,
+            "current_total": current_total,
+        },
+        "daily": daily_sorted,
+    }
+
+
+def _collect_trends_data(days=30):
+    """Collect trends data, preferring SQLite DB when available.
+
+    Falls back to live JSONL parsing if DB doesn't exist or is empty.
+    """
+    # Try SQLite first (faster, accumulated data)
+    result = _collect_trends_from_db(days)
+    if result is not None:
+        return result
+    # Fall back to live JSONL parsing
+    return _collect_trends_from_jsonl(days)
+
+
+def usage_trends(days=30, as_json=False):
+    """Analyze usage trends across all Claude Code sessions."""
+    trends = _collect_trends_data(days)
+    if trends is None:
+        print(f"\nNo session logs found in the last {days} days.")
+        print(f"Looked in: {CLAUDE_DIR / 'projects' / '*' / '*.jsonl'}")
+        return
+
+    if as_json:
+        result = dict(trends)
+        result.pop("trajectory", None)
+        print(json.dumps(result, indent=2, default=str))
+        return
+
+    session_count = trends["session_count"]
+    avg_dur = trends["avg_duration_minutes"]
+    avg_in = trends["avg_input_tokens"]
+    avg_out = trends["avg_output_tokens"]
+
+    def _fmt_tokens(n):
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        if n >= 1_000:
+            return f"{n / 1_000:.0f}K"
+        return str(int(n))
+
+    print(f"\nUSAGE TRENDS (last {days} days)")
+    print("=" * 55)
+    print(f"\n  Sessions: {session_count} | Avg duration: {avg_dur:.0f} min | Avg tokens/session: {_fmt_tokens(avg_in)} in / {_fmt_tokens(avg_out)} out")
+
+    skill_sessions = trends["skills"]["used"]
+    installed_count = trends["skills"]["installed_count"]
+    never_used = trends["skills"]["never_used"]
+
+    print(f"\nSKILLS")
+    if skill_sessions:
+        print(f"  Used ({len(skill_sessions)} of {installed_count} installed):")
+        for skill, count in sorted(skill_sessions.items(), key=lambda x: -x[1])[:15]:
+            dots = "." * max(2, 30 - len(skill))
+            print(f"    {skill} {dots} {count} session{'s' if count != 1 else ''}")
+        if len(skill_sessions) > 15:
+            print(f"    ... and {len(skill_sessions) - 15} more")
+    else:
+        print(f"  No skill invocations found in {session_count} sessions.")
+
+    if never_used:
+        approx_overhead = len(never_used) * TOKENS_PER_SKILL_APPROX
+        print(f"\n  Never used (last {days} days):")
+        names = sorted(never_used)
+        line = "    "
+        for i, name in enumerate(names):
+            addition = name + (", " if i < len(names) - 1 else "")
+            if len(line) + len(addition) > 72:
+                print(line.rstrip(", "))
+                line = "    " + addition
+            else:
+                line += addition
+        if line.strip():
+            print(line.rstrip(", "))
+        print(f"    ({len(never_used)} skills, ~{approx_overhead:,} tokens overhead)")
+
+    total_subagents = trends["subagents"]
+    if total_subagents:
+        print(f"\nSUBAGENTS")
+        for agent, count in sorted(total_subagents.items(), key=lambda x: -x[1]):
+            dots = "." * max(2, 30 - len(agent))
+            print(f"  {agent} {dots} {count} spawned")
+
+    total_model_tokens = trends["model_mix"]
+    if total_model_tokens:
+        print(f"\nMODEL MIX")
+        grand_total = sum(total_model_tokens.values())
+        for model, tokens in sorted(total_model_tokens.items(), key=lambda x: -x[1]):
+            pct = tokens / grand_total * 100 if grand_total else 0
+            dots = "." * max(2, 26 - len(model))
+            print(f"  {model} {dots} {pct:.0f}% of tokens ({_fmt_tokens(tokens)})")
+
+    trajectory = trends.get("trajectory", {})
+    snapshots = trajectory.get("snapshots", [])
+    if snapshots:
+        print(f"\nOVERHEAD TRAJECTORY (from saved snapshots)")
+        for snap in snapshots:
+            ts = snap["timestamp"][:10] if snap["timestamp"] else "unknown"
+            label = snap["label"]
+            total = snap["total"]
+            print(f"  {ts}: {total:,} tokens ({label})")
+
+        current_total = trajectory.get("current_total", 0)
+        if snapshots and current_total:
+            latest = snapshots[-1]["total"]
+            drift = current_total - latest
+            if abs(drift) > 500:
+                direction = "+" if drift > 0 else ""
+                print(f"  Today:  {current_total:,} tokens (current)")
+                print(f"  Drift since last snapshot: {direction}{drift:,} tokens")
+
+    print()
+
+
+def _parse_elapsed_time(elapsed_str):
+    """Parse ps elapsed time format (dd-HH:MM:SS or HH:MM:SS or MM:SS) to seconds."""
+    elapsed_str = elapsed_str.strip()
+    days = 0
+    if "-" in elapsed_str:
+        parts = elapsed_str.split("-", 1)
+        days = int(parts[0])
+        elapsed_str = parts[1]
+
+    parts = elapsed_str.split(":")
+    if len(parts) == 3:
+        hours, minutes, seconds = int(parts[0]), int(parts[1]), int(parts[2])
+    elif len(parts) == 2:
+        hours = 0
+        minutes, seconds = int(parts[0]), int(parts[1])
+    else:
+        return 0
+
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def _format_elapsed(seconds):
+    """Format seconds into a human-readable elapsed string."""
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    hours = seconds // 3600
+    if hours < 24:
+        mins = (seconds % 3600) // 60
+        return f"{hours}h {mins}m"
+    d = hours // 24
+    h = hours % 24
+    return f"{d}d {h}h"
+
+
+def _find_session_version_for_pid(pid):
+    """Try to find the Claude Code version for a running process by matching its session JSONL.
+
+    We look for recently modified JSONL files and check if their sessionId
+    matches anything we can correlate to the PID. Falls back to reading the
+    version field from the most recent JSONL that started around the process
+    start time.
+    """
+    projects_base = CLAUDE_DIR / "projects"
+    if not projects_base.exists():
+        return None
+
+    # Get process start time for correlation
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        lstart_str = result.stdout.strip()
+        # Parse "Fri Feb 27 10:18:43 2026"
+        proc_start = datetime.strptime(lstart_str, "%c")
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return None
+
+    # Find JSONL files modified around the process start time
+    best_match = None
+    best_diff = float("inf")
+
+    for project_dir in projects_base.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for jf in project_dir.glob("*.jsonl"):
+            try:
+                mtime = jf.stat().st_mtime
+                file_time = datetime.fromtimestamp(mtime)
+                # Only consider files modified after process start
+                if file_time < proc_start:
+                    continue
+                # Read first few lines for version and timestamp
+                with open(jf, "r", encoding="utf-8", errors="replace") as f:
+                    for line_num, line in enumerate(f):
+                        if line_num > 5:
+                            break
+                        try:
+                            record = json.loads(line)
+                            ts_str = record.get("timestamp")
+                            if not ts_str:
+                                continue
+                            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                            diff = abs((ts - proc_start).total_seconds())
+                            if diff < best_diff:
+                                best_diff = diff
+                                v = record.get("version")
+                                if v:
+                                    best_match = v
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+            except (PermissionError, OSError):
+                continue
+
+    # Only return if we found a reasonable match (within 5 minutes of start)
+    if best_match and best_diff < 300:
+        return best_match
+    return best_match  # Return best guess even if not close
+
+
+def _collect_health_data():
+    """Collect session health data.
+
+    Returns a dict with health information, or None on unsupported platforms.
+    """
+    system = platform.system()
+    if system == "Windows":
+        return None
+
+    installed_version = None
+    try:
+        result = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            installed_version = result.stdout.strip().split()[0] if result.stdout.strip() else None
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+
+    running_sessions = []
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid,lstart,etime,command"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n")[1:]:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) < 8:
+                    continue
+                command = " ".join(parts[7:])
+                if command.strip() == "claude" or command.startswith("claude "):
+                    pid = int(parts[0])
+                    lstart = " ".join(parts[1:6])
+                    elapsed = parts[6]
+                    elapsed_seconds = _parse_elapsed_time(elapsed)
+
+                    running_sessions.append({
+                        "pid": pid,
+                        "started": lstart,
+                        "elapsed_seconds": elapsed_seconds,
+                        "elapsed_human": _format_elapsed(elapsed_seconds),
+                        "command": command,
+                    })
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+    for session in running_sessions:
+        session["version"] = _find_session_version_for_pid(session["pid"])
+
+    # Flag sessions
+    for s in running_sessions:
+        flags = []
+        if s["version"] and installed_version and s["version"] != installed_version:
+            flags.append("OUTDATED")
+        if s["elapsed_seconds"] > 172800:
+            flags.append("ZOMBIE")
+        elif s["elapsed_seconds"] > 86400:
+            flags.append("STALE")
+        s["flags"] = flags
+
+    automated = []
+    if system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["launchctl", "list"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split("\n"):
+                    if "claude" in line.lower() or "anthropic" in line.lower():
+                        automated.append(line.strip())
+        except (subprocess.SubprocessError, OSError):
+            pass
+
+    # Build recommendations
+    recommendations = []
+    outdated_count = sum(1 for s in running_sessions if "OUTDATED" in s.get("flags", []))
+    stale_count = sum(1 for s in running_sessions if any(f in s.get("flags", []) for f in ("STALE", "ZOMBIE")))
+
+    if outdated_count > 0 and installed_version:
+        recommendations.append(
+            f"{outdated_count} session{'s' if outdated_count != 1 else ''} running "
+            f"older version (installed: {installed_version}). "
+            f"Restart to get latest fixes: close and reopen these terminals."
+        )
+    if stale_count > 0:
+        recommendations.append(
+            f"{stale_count} session{'s' if stale_count != 1 else ''} running "
+            f"24+ hours. Check if still needed, long sessions accumulate context bloat."
+        )
+
+    return {
+        "installed_version": installed_version,
+        "running_sessions": running_sessions,
+        "automated": automated,
+        "recommendations": recommendations,
+    }
+
+
+def session_health():
+    """Check health of running Claude Code sessions."""
+    health = _collect_health_data()
+    if health is None:
+        print("\nSession health check is not supported on this platform.")
+        return
+
+    installed_version = health["installed_version"]
+    running_sessions = health["running_sessions"]
+    automated = health["automated"]
+    recommendations = health["recommendations"]
+
+    print(f"\nSESSION HEALTH CHECK")
+    print("=" * 55)
+
+    if installed_version:
+        print(f"\n  Installed version: {installed_version}")
+    else:
+        print(f"\n  Installed version: unknown (could not run 'claude --version')")
+
+    if not running_sessions:
+        print(f"\n  No running Claude Code CLI sessions found.")
+    else:
+        print(f"\nRUNNING SESSIONS ({len(running_sessions)})")
+
+        for s in running_sessions:
+            flags = s.get("flags", [])
+            version_str = s["version"] or "unknown"
+            flag_str = f"  {'  '.join(flags)}" if flags else ""
+            print(f"  PID {s['pid']:<7d} Started: {s['started']}  ({s['elapsed_human']} ago)")
+            print(f"             Version: {version_str}{flag_str}")
+
+        if recommendations:
+            print(f"\nRECOMMENDATIONS")
+            for rec in recommendations:
+                print(f"  - {rec}")
+
+    if automated:
+        print(f"\nAUTOMATED PROCESSES")
+        for proc in automated:
+            print(f"  {proc}")
+
+    print()
+
+
+# ========== Hook Management ==========
+
+SETTINGS_PATH = CLAUDE_DIR / "settings.json"
+MEASURE_PY_PATH = Path(__file__).resolve()
+HOOK_COMMAND = f"python3 {MEASURE_PY_PATH} collect --quiet"
+
+
+def _is_hook_installed(settings=None):
+    """Check if the SessionEnd measure.py collect hook is installed.
+
+    Returns True if any SessionEnd hook command contains 'measure.py collect'.
+    """
+    if settings is None:
+        if not SETTINGS_PATH.exists():
+            return False
+        try:
+            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+        except (json.JSONDecodeError, PermissionError, OSError):
+            return False
+
+    hooks = settings.get("hooks", {})
+    session_end = hooks.get("SessionEnd", [])
+    if not isinstance(session_end, list):
+        return False
+    for entry in session_end:
+        hook_list = entry.get("hooks", []) if isinstance(entry, dict) else []
+        for hook in hook_list:
+            cmd = hook.get("command", "") if isinstance(hook, dict) else ""
+            if "measure.py" in cmd and "collect" in cmd:
+                return True
+    return False
+
+
+def check_hook():
+    """Exit 0 if SessionEnd measure.py collect hook is installed, 1 if not."""
+    sys.exit(0 if _is_hook_installed() else 1)
+
+
+def _write_settings_atomic(settings_data):
+    """Write settings.json atomically using tempfile + os.replace()."""
+    import tempfile
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=str(SETTINGS_PATH.parent),
+        prefix=".settings-",
+        suffix=".json",
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(settings_data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp_path, str(SETTINGS_PATH))
+    except Exception:
+        # Clean up temp file on failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def setup_hook(dry_run=False):
+    """Install the SessionEnd hook for automatic usage collection."""
+    # Load existing settings
+    settings = {}
+    if SETTINGS_PATH.exists():
+        try:
+            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+        except (json.JSONDecodeError, PermissionError, OSError) as e:
+            print(f"[Error] Could not read {SETTINGS_PATH}: {e}")
+            sys.exit(1)
+
+    # Idempotency check
+    if _is_hook_installed(settings):
+        print("[Token Optimizer] SessionEnd hook already installed. Nothing to do.")
+        return
+
+    # Build the hook entry
+    new_hook = {"type": "command", "command": HOOK_COMMAND}
+
+    # Handle 4 scenarios
+    if "hooks" not in settings:
+        settings["hooks"] = {}
+
+    hooks = settings["hooks"]
+    if "SessionEnd" not in hooks:
+        hooks["SessionEnd"] = [{"hooks": [new_hook]}]
+    else:
+        session_end = hooks["SessionEnd"]
+        if isinstance(session_end, list) and len(session_end) > 0:
+            # Append to the first entry's hooks array
+            first_entry = session_end[0]
+            if isinstance(first_entry, dict):
+                if "hooks" not in first_entry:
+                    first_entry["hooks"] = []
+                first_entry["hooks"].append(new_hook)
+            else:
+                session_end.append({"hooks": [new_hook]})
+        else:
+            hooks["SessionEnd"] = [{"hooks": [new_hook]}]
+
+    if dry_run:
+        print("[Token Optimizer] Dry run. Proposed SessionEnd hooks:\n")
+        print(json.dumps(hooks.get("SessionEnd", []), indent=2))
+        print("\nNo changes written.")
+        return
+
+    # Backup settings.json
+    backup_dir = CLAUDE_DIR / "_backups" / "token-optimizer"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = backup_dir / f"settings.json.pre-hook-{ts}"
+    if SETTINGS_PATH.exists():
+        import shutil
+        shutil.copy2(str(SETTINGS_PATH), str(backup_path))
+
+    # Write atomically
+    try:
+        _write_settings_atomic(settings)
+        print(f"[Token Optimizer] SessionEnd hook installed.")
+        print(f"  Backup: {backup_path}")
+        print(f"  Hook: {HOOK_COMMAND}")
+    except PermissionError:
+        print(f"[Error] Permission denied writing {SETTINGS_PATH}.")
+        print(f"Add this manually to your settings.json hooks.SessionEnd:\n")
+        print(json.dumps({"type": "command", "command": HOOK_COMMAND}, indent=2))
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
 
@@ -1054,6 +2372,45 @@ if __name__ == "__main__":
             print("Usage: python3 measure.py dashboard --coord-path /tmp/token-optimizer-XXXXXXXXXX")
             sys.exit(1)
         generate_dashboard(cp)
+    elif args[0] == "collect":
+        days = 90
+        quiet = "--quiet" in args or "-q" in args
+        for i, a in enumerate(args):
+            if a == "--days" and i + 1 < len(args):
+                try:
+                    days = int(args[i + 1])
+                except ValueError:
+                    pass
+        collect_sessions(days=days, quiet=quiet)
+    elif args[0] == "health":
+        session_health()
+    elif args[0] == "check-hook":
+        check_hook()
+    elif args[0] == "setup-hook":
+        dry = "--dry-run" in args
+        setup_hook(dry_run=dry)
+    elif args[0] == "trends":
+        days = 30
+        output_json = False
+        i = 1
+        while i < len(args):
+            if args[i] == "--days" and i + 1 < len(args):
+                try:
+                    days = int(args[i + 1])
+                    if days < 1:
+                        print("[Error] --days must be a positive integer.")
+                        sys.exit(1)
+                except ValueError:
+                    print(f"[Error] Invalid --days value: {args[i + 1]}")
+                    sys.exit(1)
+                i += 2
+            elif args[i] == "--json":
+                output_json = True
+                i += 1
+            else:
+                print(f"[Error] Unknown flag: {args[i]}")
+                sys.exit(1)
+        usage_trends(days=days, as_json=output_json)
     else:
         print("Usage:")
         print("  python3 measure.py report              # Full report")
@@ -1061,3 +2418,12 @@ if __name__ == "__main__":
         print("  python3 measure.py snapshot after       # Save post-optimization snapshot")
         print("  python3 measure.py compare              # Compare before vs after")
         print("  python3 measure.py dashboard --coord-path PATH  # Interactive dashboard")
+        print("  python3 measure.py health               # Check running session health")
+        print("  python3 measure.py trends               # Usage trends (last 30 days)")
+        print("  python3 measure.py trends --days 7      # Usage trends (last 7 days)")
+        print("  python3 measure.py trends --json        # Machine-readable output")
+        print("  python3 measure.py collect              # Collect sessions into SQLite DB")
+        print("  python3 measure.py collect --quiet      # Silent mode (for hooks)")
+        print("  python3 measure.py check-hook           # Check if SessionEnd hook is installed")
+        print("  python3 measure.py setup-hook           # Install SessionEnd hook")
+        print("  python3 measure.py setup-hook --dry-run # Show what would be installed")

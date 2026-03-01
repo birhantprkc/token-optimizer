@@ -900,6 +900,364 @@ input:checked + .slider:before {
   line-height: 1.6;
 }
 
+/* ========== PANEL HIDDEN (Trends/Health) ========== */
+.layout.panel-hidden { grid-template-columns: 260px 1fr; }
+.layout.panel-hidden .config-col { display: none; }
+
+/* ========== NAV SEPARATOR ========== */
+.nav-separator {
+  height: 1px;
+  background: var(--c-border);
+  margin: var(--s-2) 0;
+}
+
+/* ========== STAT ROW (Trends hero) ========== */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s-3);
+}
+
+.stat-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  padding: var(--s-4);
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--c-accent-cyan), transparent);
+  opacity: 0.3;
+}
+
+.stat-card .stat-card-value {
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 36px;
+  color: var(--c-text-main);
+  margin-bottom: var(--s-1);
+}
+
+.stat-card .stat-card-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--c-text-dim);
+  font-family: var(--font-mono);
+}
+
+/* ========== SKILLS GAP (never-used tags) ========== */
+.skills-gap-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--s-2);
+}
+
+.skills-gap-tag {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--c-text-dim);
+  background: var(--c-surface-hover);
+  border: 1px solid var(--c-border);
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.skills-gap-tag:hover {
+  border-color: var(--c-accent-cyan);
+  color: var(--c-accent-cyan);
+  text-shadow: var(--glow-text);
+}
+
+/* ========== MODEL MIX BAR ========== */
+.model-bar {
+  display: flex;
+  height: 28px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.04);
+  margin-top: var(--s-2);
+}
+
+.model-segment {
+  height: 100%;
+  transition: width 0.5s ease;
+}
+
+.model-segment.opus { background: linear-gradient(90deg, #a78bfa, #7c3aed); }
+.model-segment.sonnet { background: linear-gradient(90deg, var(--c-accent-cyan), #0099cc); }
+.model-segment.haiku { background: linear-gradient(90deg, #34d399, #059669); }
+.model-segment.other { background: linear-gradient(90deg, #94a3b8, #64748b); }
+
+.model-legend {
+  display: flex;
+  gap: var(--s-4);
+  margin-top: var(--s-2);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--c-text-dim);
+}
+
+.model-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.model-legend-dot.opus { background: #a78bfa; }
+.model-legend-dot.sonnet { background: var(--c-accent-cyan); }
+.model-legend-dot.haiku { background: #34d399; }
+.model-legend-dot.other { background: #94a3b8; }
+
+/* ========== TRAJECTORY BARS ========== */
+.trajectory-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 80px;
+  margin-top: var(--s-2);
+}
+
+.trajectory-bar {
+  flex: 1;
+  background: linear-gradient(0deg, var(--c-accent-cyan), rgba(0,240,255,0.2));
+  border-radius: 3px 3px 0 0;
+  opacity: 0.6;
+  min-height: 4px;
+}
+
+.trajectory-bar:last-child {
+  opacity: 1;
+  box-shadow: 0 0 8px rgba(0,240,255,0.3);
+}
+
+.trajectory-label {
+  font-size: 11px;
+  color: var(--c-text-dim);
+  font-family: var(--font-mono);
+  margin-top: var(--s-1);
+  text-align: center;
+}
+
+/* ========== SESSION TABLE (Health) ========== */
+.session-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+.session-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--c-text-dim);
+  padding: var(--s-2);
+  border-bottom: 1px solid var(--c-border);
+  font-weight: 500;
+}
+
+.session-table td {
+  padding: var(--s-2);
+  border-bottom: 1px solid var(--c-border);
+  color: var(--c-text-main);
+}
+
+/* ========== FLAG BADGES ========== */
+.flag-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+
+.flag-badge.outdated {
+  color: #fb923c;
+  border: 1px solid #fb923c;
+  background: rgba(251,146,60,0.1);
+}
+
+.flag-badge.stale {
+  color: #fbbf24;
+  border: 1px solid #fbbf24;
+  background: rgba(251,191,36,0.1);
+}
+
+.flag-badge.zombie {
+  color: #f87171;
+  border: 1px solid #f87171;
+  background: rgba(248,113,113,0.1);
+}
+
+/* ========== VERSION HERO ========== */
+.version-hero {
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 48px;
+  color: var(--c-text-main);
+  text-shadow: 0 0 20px rgba(255,255,255,0.2);
+  margin-bottom: var(--s-2);
+}
+
+/* ========== RECOMMENDATION CALLOUT ========== */
+.rec-callout {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-left: 3px solid var(--c-accent-cyan);
+  border-radius: 8px;
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--c-text-dim);
+  line-height: 1.6;
+}
+
+/* ========== DATE PICKER (Trends) ========== */
+.date-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+
+.date-nav-btn {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  color: var(--c-text-dim);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.date-nav-btn:hover { border-color: var(--c-accent-cyan); color: var(--c-text-main); }
+.date-nav-btn.active { border-color: var(--c-accent-cyan); color: var(--c-accent-cyan); box-shadow: var(--glow-sm); }
+
+.date-picker-input {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  color: var(--c-text-main);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  outline: none;
+}
+
+.date-picker-input::-webkit-calendar-picker-indicator {
+  filter: invert(0.6);
+  cursor: pointer;
+}
+
+.date-picker-input:focus { border-color: var(--c-accent-cyan); }
+
+/* ========== SKILL DETAIL PANEL ========== */
+.skill-detail-row {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  margin-bottom: var(--s-1);
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.skill-detail-row:hover { border-color: rgba(0,240,255,0.3); }
+
+.skill-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px var(--s-3);
+  cursor: pointer;
+  gap: var(--s-2);
+}
+
+.skill-detail-header .skill-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--c-text-main);
+  flex: 1;
+}
+
+.skill-detail-header .skill-tokens {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--c-text-dim);
+  white-space: nowrap;
+}
+
+.skill-detail-header .expand-arrow {
+  color: var(--c-text-dim);
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.skill-detail-row.expanded .expand-arrow { transform: rotate(90deg); }
+
+.skill-detail-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+  border-top: 0px solid transparent;
+}
+
+.skill-detail-row.expanded .skill-detail-body {
+  border-top: 1px solid var(--c-border);
+}
+
+.skill-detail-content {
+  padding: var(--s-3);
+}
+
+.skill-detail-content .skill-desc {
+  font-size: 13px;
+  color: var(--c-text-dim);
+  margin-bottom: var(--s-2);
+  line-height: 1.5;
+}
+
+.skill-detail-content .skill-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.skill-file-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-text-dim);
+  background: rgba(255,255,255,0.04);
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--c-border);
+}
+
 /* ========== RESPONSIVE ========== */
 @media (max-width: 1024px) {
   .layout { grid-template-columns: 200px 1fr; }
@@ -915,6 +1273,7 @@ input:checked + .slider:before {
   }
   .main-col { padding: var(--s-3); }
   .dashboard-grid { grid-template-columns: 1fr; }
+  .stat-row { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -936,6 +1295,9 @@ window.__TOKEN_DATA__ = null;
         <a class="nav-item" data-view="medium">Medium <span class="nav-badge" id="badge-medium"></span></a>
         <a class="nav-item" data-view="deep">Deep <span class="nav-badge" id="badge-deep"></span></a>
         <a class="nav-item" data-view="habits">Habits <span class="nav-badge" id="badge-habits"></span></a>
+        <div class="nav-separator"></div>
+        <a class="nav-item" data-view="trends">Trends</a>
+        <a class="nav-item" data-view="health">Health</a>
       </div>
     </div>
     <div class="user-profile">workspace: <i id="nav-date"></i></div>
@@ -991,6 +1353,10 @@ window.__TOKEN_DATA__ = null;
     <div class="view" id="view-deep"></div>
     <!-- Habits View -->
     <div class="view" id="view-habits"></div>
+    <!-- Trends View -->
+    <div class="view" id="view-trends"></div>
+    <!-- Health View -->
+    <div class="view" id="view-health"></div>
   </main>
 
   <!-- RIGHT PANEL -->
@@ -1009,7 +1375,7 @@ window.__TOKEN_DATA__ = null;
     <button class="apply-btn" id="copy-btn" disabled>Copy Prompt</button>
 
     <div class="version-footer">
-      <div>token_optimizer v1.0</div>
+      <div>Built by <a href="https://linkedin.com/in/alexgreensh" target="_blank" rel="noopener" style="color:var(--c-accent-cyan);text-decoration:none;opacity:1;">Alex Greenshpun</a></div>
       <div class="social-icons">
         <a href="https://github.com/alexgreensh/token-optimizer" target="_blank" rel="noopener" title="GitHub" class="social-link">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
@@ -1193,6 +1559,8 @@ var DB = (function() {
     renderNav();
     renderOverview();
     renderSectionViews();
+    renderTrends();
+    renderHealth();
     updateRightPanel();
     bind();
   }
@@ -1395,6 +1763,323 @@ var DB = (function() {
     return [{ heading: 'Details', text: detail }];
   }
 
+  var analyticsViews = { trends: true, health: true };
+
+  function renderTrends() {
+    var el = document.getElementById('view-trends');
+    if (!el) return;
+    var t = data.trends;
+
+    var html = '<div class="section-header">' +
+      '<div class="label">Analytics</div>' +
+      '<h1>Usage Trends</h1>' +
+      '<p>How you use Claude Code across sessions.</p>' +
+      '</div>';
+
+    if (!t) {
+      html += '<div class="empty-state">No trends data available. Run: python3 measure.py collect && python3 measure.py dashboard --coord-path PATH</div>';
+      el.innerHTML = html;
+      return;
+    }
+
+    // Hero stat cards
+    html += '<div class="stat-row">' +
+      '<div class="stat-card"><div class="stat-card-value">' + t.session_count + '</div><div class="stat-card-label">Sessions (' + t.period_days + 'd)</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value">' + Math.round(t.avg_duration_minutes) + 'm</div><div class="stat-card-label">Avg Duration</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value">' + fn(t.avg_input_tokens + t.avg_output_tokens) + '</div><div class="stat-card-label">Avg Tokens/Session</div></div>' +
+      '</div>';
+
+    // Skills usage bar chart with clickable skill details
+    var skillsUsed = t.skills ? t.skills.used : {};
+    var skillEntries = [];
+    for (var sk in skillsUsed) { skillEntries.push([sk, skillsUsed[sk]]); }
+    skillEntries.sort(function(a, b) { return b[1] - a[1]; });
+    var topSkills = skillEntries.slice(0, 15);
+    var skillsDetail = (data.snapshot && data.snapshot.components && data.snapshot.components.skills_detail) || {};
+
+    if (topSkills.length > 0) {
+      var maxSkill = topSkills[0][1];
+      html += '<div class="card wide"><div class="card-header"><span>Skills Used</span><span class="label">' +
+        Object.keys(skillsUsed).length + ' of ' + (t.skills.installed_count || '?') + ' installed</span></div>' +
+        '<div class="chart-container">';
+      topSkills.forEach(function(entry) {
+        var w = Math.max(3, (entry[1] / maxSkill) * 100);
+        var sd = skillsDetail[entry[0]];
+        var tokLabel = sd ? ' (' + sd.frontmatter_tokens + ' tok)' : '';
+        html += '<div class="bar-row" data-skill-name="' + esc(entry[0]) + '" style="cursor:pointer;">' +
+          '<span class="bar-label" title="Click to see skill details">' + esc(entry[0].length > 16 ? entry[0].slice(0,15) + '\u2026' : entry[0]) + '</span>' +
+          '<div class="bar-track"><div class="bar-fill" style="width:' + w + '%"></div></div>' +
+          '<span class="bar-value">' + entry[1] + tokLabel + '</span></div>';
+      });
+      html += '</div></div>';
+    }
+
+    // Never-used skills with expandable detail
+    var neverUsed = t.skills ? t.skills.never_used : [];
+    if (neverUsed.length > 0) {
+      var overhead = t.skills.never_used_overhead || (neverUsed.length * 100);
+      html += '<div class="card wide"><div class="card-header"><span>Never Used (' + neverUsed.length + ' skills)</span><span class="label">~' + fn(overhead) + ' tokens wasted/session</span></div>' +
+        '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:var(--s-2);">' +
+        'Each unused skill loads ~100 tokens of frontmatter every session. Click a skill to see its details, or click "Quick Wins" to archive them.</p>';
+      neverUsed.forEach(function(name) {
+        var sd = skillsDetail[name];
+        html += '<div class="skill-detail-row" data-skill-expand="' + esc(name) + '">' +
+          '<div class="skill-detail-header">' +
+          '<span class="skill-name">' + esc(name) + '</span>' +
+          '<span class="skill-tokens">' + (sd ? sd.frontmatter_tokens + ' tok' : '~100 tok') + '</span>' +
+          '<span class="expand-arrow">\u25B6</span>' +
+          '</div>' +
+          '<div class="skill-detail-body"><div class="skill-detail-content">';
+        if (sd) {
+          if (sd.description) html += '<div class="skill-desc">' + esc(sd.description) + '</div>';
+          if (sd.files && sd.files.length > 0) {
+            html += '<div class="skill-files">';
+            sd.files.forEach(function(f) { html += '<span class="skill-file-tag">' + esc(f) + '</span>'; });
+            html += '</div>';
+          }
+        } else {
+          html += '<div class="skill-desc" style="font-style:italic;">No detail available</div>';
+        }
+        html += '</div></div></div>';
+      });
+      html += '<div style="margin-top:var(--s-2);"><span class="skills-gap-tag" data-nav-section="quick" style="cursor:pointer;">Go to Quick Wins to archive these \u2192</span></div>';
+      html += '</div>';
+    }
+
+    // Model mix stacked bar (only show if there's something meaningful to say)
+    var modelMix = t.model_mix || {};
+    var modelTotal = 0;
+    var modelOrder = ['opus', 'sonnet', 'haiku'];
+    var modelCount = 0;
+    for (var mk in modelMix) { modelTotal += modelMix[mk]; modelCount++; }
+
+    if (modelTotal > 0 && modelCount > 1) {
+      html += '<div class="card wide"><div class="card-header"><span>Model Mix</span><span class="label">Which models do the work</span></div>' +
+        '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:var(--s-2);">Haiku is 5x cheaper for data-gathering. If you see mostly Opus, consider defaulting agents to Sonnet/Haiku.</p>' +
+        '<div class="model-bar">';
+      modelOrder.forEach(function(m) {
+        var tokens = modelMix[m] || 0;
+        if (tokens > 0) {
+          var pct = (tokens / modelTotal * 100).toFixed(1);
+          html += '<div class="model-segment ' + m + '" style="width:' + pct + '%" title="' + m + ': ' + pct + '% (' + fn(tokens) + ' tokens)"></div>';
+        }
+      });
+      var otherTokens = 0;
+      for (var om in modelMix) { if (modelOrder.indexOf(om) === -1) otherTokens += modelMix[om]; }
+      if (otherTokens > 0) {
+        html += '<div class="model-segment other" style="width:' + (otherTokens/modelTotal*100).toFixed(1) + '%"></div>';
+      }
+      html += '</div><div class="model-legend">';
+      modelOrder.forEach(function(m) {
+        var tokens = modelMix[m] || 0;
+        if (tokens > 0) {
+          var pct = (tokens / modelTotal * 100).toFixed(0);
+          html += '<div class="model-legend-item"><div class="model-legend-dot ' + m + '"></div>' + m + ' ' + pct + '% (' + fn(tokens) + ')</div>';
+        }
+      });
+      if (otherTokens > 0) {
+        html += '<div class="model-legend-item"><div class="model-legend-dot other"></div>other ' + (otherTokens/modelTotal*100).toFixed(0) + '%</div>';
+      }
+      html += '</div></div>';
+    }
+
+    // Daily breakdown with date navigation
+    var daily = t.daily || [];
+    if (daily.length > 0) {
+      // Date nav: show 7 days by default, with picker to jump to a date
+      html += '<div class="card wide" id="daily-breakdown-card">' +
+        '<div class="card-header"><span>Daily Breakdown</span></div>' +
+        '<div class="date-nav">' +
+        '<button class="date-nav-btn active" data-range="7">7 days</button>' +
+        '<button class="date-nav-btn" data-range="14">14 days</button>' +
+        '<button class="date-nav-btn" data-range="30">30 days</button>' +
+        '<span style="color:var(--c-text-dim);font-size:12px;margin:0 4px;">|</span>' +
+        '<label style="font-size:12px;color:var(--c-text-dim);font-family:var(--font-mono);">Jump to:</label>' +
+        '<input type="date" class="date-picker-input" id="daily-date-picker" value="' + daily[0].date + '">' +
+        '</div>';
+      html += '<div id="daily-table-container">';
+      html += buildDailyTable(daily, 7, null);
+      html += '</div></div>';
+    }
+
+    el.innerHTML = html;
+
+    // Bind date range buttons + picker
+    if (daily.length > 0) {
+      var container = document.getElementById('daily-table-container');
+      var rangeBtns = document.querySelectorAll('.date-nav-btn[data-range]');
+      rangeBtns.forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          rangeBtns.forEach(function(b) { b.classList.remove('active'); });
+          this.classList.add('active');
+          var range = parseInt(this.getAttribute('data-range'), 10);
+          container.innerHTML = buildDailyTable(daily, range, null);
+        });
+      });
+      var picker = document.getElementById('daily-date-picker');
+      if (picker) {
+        picker.addEventListener('change', function() {
+          rangeBtns.forEach(function(b) { b.classList.remove('active'); });
+          container.innerHTML = buildDailyTable(daily, 7, this.value);
+        });
+      }
+    }
+
+    // Bind skill detail expand
+    el.querySelectorAll('[data-skill-expand]').forEach(function(row) {
+      row.querySelector('.skill-detail-header').addEventListener('click', function() {
+        var body = row.querySelector('.skill-detail-body');
+        var isOpen = row.classList.contains('expanded');
+        row.classList.toggle('expanded');
+        if (isOpen) {
+          body.style.maxHeight = '0';
+        } else {
+          body.style.maxHeight = body.scrollHeight + 'px';
+        }
+      });
+    });
+  }
+
+  function buildDailyTable(daily, range, jumpToDate) {
+    // Filter daily data based on range or jump-to date
+    var filtered;
+    if (jumpToDate) {
+      // Show 7 days starting from the selected date
+      var startDate = jumpToDate;
+      var endDate = new Date(jumpToDate);
+      endDate.setDate(endDate.getDate() - range + 1);
+      var endStr = endDate.toISOString().slice(0, 10);
+      filtered = daily.filter(function(d) { return d.date <= startDate && d.date >= endStr; });
+    } else {
+      filtered = daily.slice(0, range);
+    }
+
+    if (filtered.length === 0) {
+      return '<div class="empty-state">No sessions found for this period.</div>';
+    }
+
+    var html = '<table class="session-table"><thead><tr>' +
+      '<th>Date</th><th>Sessions</th><th>Input</th><th>Output</th><th>Skills Used</th><th>Subagents</th>' +
+      '</tr></thead><tbody>';
+    filtered.forEach(function(d) {
+      var skillNames = Object.keys(d.skills_used || {});
+      var skillStr = skillNames.length > 0 ? skillNames.slice(0, 3).join(', ') + (skillNames.length > 3 ? ' +' + (skillNames.length - 3) : '') : 'none';
+      // Collect unique subagent types across all sessions for this day
+      var dayAgents = {};
+      (d.session_details || []).forEach(function(sd) {
+        (sd.subagents || []).forEach(function(a) { dayAgents[a] = true; });
+      });
+      var agentNames = Object.keys(dayAgents);
+      var agentStr = agentNames.length > 0 ? agentNames.slice(0, 2).map(function(a) { return a.split(':').pop(); }).join(', ') + (agentNames.length > 2 ? ' +' + (agentNames.length - 2) : '') : '';
+      html += '<tr class="daily-row" data-date="' + d.date + '" style="cursor:pointer;">' +
+        '<td>' + d.date + '</td>' +
+        '<td>' + d.sessions + '</td>' +
+        '<td>' + fn(d.total_input) + '</td>' +
+        '<td>' + fn(d.total_output) + '</td>' +
+        '<td style="color:var(--c-text-dim);font-size:13px;">' + esc(skillStr) + '</td>' +
+        '<td style="color:var(--c-text-dim);font-size:12px;">' + esc(agentStr) + '</td>' +
+        '</tr>';
+      html += '<tr class="daily-detail" data-detail-date="' + d.date + '" style="display:none;">' +
+        '<td colspan="6" style="padding:0;">' +
+        '<div style="background:var(--c-surface-hover);padding:var(--s-2) var(--s-3);margin:2px 0;">' +
+        '<table class="session-table" style="margin:0;">' +
+        '<thead><tr><th>#</th><th>Duration</th><th>Input</th><th>Output</th><th>Messages</th><th>Cache Hit</th><th>Skills</th><th>Subagents</th></tr></thead><tbody>';
+      (d.session_details || []).forEach(function(sd, si) {
+        var sdSkills = (sd.skills || []).join(', ') || 'none';
+        var sdAgents = (sd.subagents || []).map(function(a) { return a.split(':').pop(); }).join(', ') || '';
+        html += '<tr>' +
+          '<td>' + (si + 1) + '</td>' +
+          '<td>' + Math.round(sd.duration_minutes) + 'm</td>' +
+          '<td>' + fn(sd.input_tokens) + '</td>' +
+          '<td>' + fn(sd.output_tokens) + '</td>' +
+          '<td>' + sd.message_count + '</td>' +
+          '<td>' + (sd.cache_hit_rate * 100).toFixed(0) + '%</td>' +
+          '<td style="color:var(--c-text-dim);font-size:12px;">' + esc(sdSkills.length > 30 ? sdSkills.slice(0,28) + '\u2026' : sdSkills) + '</td>' +
+          '<td style="color:var(--c-text-dim);font-size:12px;">' + esc(sdAgents.length > 25 ? sdAgents.slice(0,23) + '\u2026' : sdAgents) + '</td>' +
+          '</tr>';
+      });
+      html += '</tbody></table></div></td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div style="font-size:12px;color:var(--c-text-dim);font-family:var(--font-mono);margin-top:var(--s-2);">Click any row to expand per-session details.</div>';
+    return html;
+  }
+
+  function renderHealth() {
+    var el = document.getElementById('view-health');
+    if (!el) return;
+    var h = data.health;
+
+    var html = '<div class="section-header">' +
+      '<div class="label">Analytics</div>' +
+      '<h1>Session Health</h1>' +
+      '<p>Running sessions, version status, and automated processes.</p>' +
+      '</div>';
+
+    if (!h) {
+      html += '<div class="empty-state">No health data available. Run: python3 measure.py dashboard --coord-path PATH</div>';
+      el.innerHTML = html;
+      return;
+    }
+
+    // Version hero
+    html += '<div class="card wide"><div class="card-header"><span>Installed Version</span></div>' +
+      '<div class="version-hero">' + esc(h.installed_version || 'unknown') + '</div>' +
+      '<div class="label">Claude Code CLI</div></div>';
+
+    // Running sessions table
+    var sessions = h.running_sessions || [];
+    html += '<div class="card wide"><div class="card-header"><span>Running Sessions</span><span class="label">' + sessions.length + ' active</span></div>';
+
+    if (sessions.length === 0) {
+      html += '<div class="empty-state">No running Claude Code CLI sessions found.</div>';
+    } else {
+      html += '<table class="session-table"><thead><tr>' +
+        '<th>PID</th><th>Started</th><th>Elapsed</th><th>Version</th><th>Status</th>' +
+        '</tr></thead><tbody>';
+      sessions.forEach(function(s) {
+        var flagHtml = '';
+        var flags = s.flags || [];
+        flags.forEach(function(f) {
+          var cls = f.toLowerCase().replace('likely ', '');
+          flagHtml += '<span class="flag-badge ' + cls + '">' + esc(f) + '</span>';
+        });
+        if (flags.length === 0) flagHtml = '<span style="color:var(--c-accent-cyan);">OK</span>';
+        html += '<tr>' +
+          '<td>' + s.pid + '</td>' +
+          '<td>' + esc((s.started || '').slice(0, 20)) + '</td>' +
+          '<td>' + esc(s.elapsed_human || '?') + '</td>' +
+          '<td>' + esc(s.version || 'unknown') + '</td>' +
+          '<td>' + flagHtml + '</td>' +
+          '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+
+    // Automated processes
+    var automated = h.automated || [];
+    if (automated.length > 0) {
+      html += '<div class="card wide"><div class="card-header"><span>Automated Processes</span><span class="label">' + automated.length + ' found</span></div>';
+      automated.forEach(function(proc) {
+        html += '<div style="font-family:var(--font-mono);font-size:13px;color:var(--c-text-dim);padding:4px 0;border-bottom:1px solid var(--c-border);">' + esc(proc) + '</div>';
+      });
+      html += '</div>';
+    }
+
+    // Recommendations
+    var recs = h.recommendations || [];
+    if (recs.length > 0) {
+      html += '<div class="card wide"><div class="card-header"><span>Recommendations</span></div>';
+      recs.forEach(function(rec) {
+        html += '<div class="rec-callout">' + esc(rec) + '</div>';
+      });
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+  }
+
   function updateRightPanel() {
     var sel = items.filter(function(it) { return it.checked && it.section !== 'habits'; });
     var count = sel.length;
@@ -1487,6 +2172,13 @@ var DB = (function() {
         document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
         document.getElementById('view-' + v).classList.add('active');
         this.classList.add('active');
+        // Toggle panel visibility for analytics views
+        var layout = document.querySelector('.layout');
+        if (analyticsViews[v]) {
+          layout.classList.add('panel-hidden');
+        } else {
+          layout.classList.remove('panel-hidden');
+        }
         document.querySelector('.main-col').scrollTop = 0;
       });
     });
@@ -1565,13 +2257,39 @@ var DB = (function() {
         if (navItem) navItem.click();
         return;
       }
+
+      // Daily breakdown row expand/collapse
+      var dailyRow = e.target.closest('.daily-row[data-date]');
+      if (dailyRow) {
+        var date = dailyRow.getAttribute('data-date');
+        var detailRow = document.querySelector('[data-detail-date="' + date + '"]');
+        if (detailRow) {
+          detailRow.style.display = detailRow.style.display === 'none' ? '' : 'none';
+        }
+        return;
+      }
+
+      // Skills gap tag navigation (from Trends)
+      var gapTag = e.target.closest('.skills-gap-tag[data-nav-section]');
+      if (gapTag) {
+        e.preventDefault();
+        var gapSection = gapTag.getAttribute('data-nav-section');
+        var gapNav = document.querySelector('.nav-item[data-view="' + gapSection + '"]');
+        if (gapNav) gapNav.click();
+        return;
+      }
     });
 
     // Copy button
     document.getElementById('copy-btn').addEventListener('click', doCopy);
   }
 
-  function fn(n) { return n >= 1000 ? (n/1000).toFixed(1).replace(/\.0$/,'') + 'K' : String(n); }
+  function fn(n) {
+    if (n >= 1000000000) return (n/1000000000).toFixed(1).replace(/\.0$/,'') + 'B';
+    if (n >= 1000000) return (n/1000000).toFixed(1).replace(/\.0$/,'') + 'M';
+    if (n >= 1000) return (n/1000).toFixed(1).replace(/\.0$/,'') + 'K';
+    return String(n);
+  }
 
   return { init: init };
 })();
@@ -1595,7 +2313,29 @@ function getSampleData() {
         hooks: { configured: true, names: ['SessionStart','PreCompact'] },
         settings_env: { found: {} },
         settings_local: { exists: true },
-        skill_frontmatter_quality: { verbose_count: 12 }
+        skill_frontmatter_quality: { verbose_count: 12 },
+        skills_detail: {
+          'daily-standup': { name: 'daily-standup', frontmatter_tokens: 85, description_chars: 120, description: 'Coordinates daily standup workflow. Loads project context and blockers.', files: ['SKILL.md', 'references/', 'examples/'] },
+          'deploy-pipeline': { name: 'deploy-pipeline', frontmatter_tokens: 72, description_chars: 90, description: 'Automated deployment pipeline with rollback support.', files: ['SKILL.md'] },
+          'code-search': { name: 'code-search', frontmatter_tokens: 95, description_chars: 150, description: 'Semantic code search across repos. Indexes function signatures and docs.', files: ['SKILL.md', 'scripts/'] },
+          'token-optimizer': { name: 'token-optimizer', frontmatter_tokens: 110, description_chars: 180, description: 'Audits Claude Code setup for context window waste. 6 parallel agents scan everything.', files: ['SKILL.md', 'scripts/', 'assets/', 'references/', 'examples/'] },
+          'api-explorer': { name: 'api-explorer', frontmatter_tokens: 88, description_chars: 95, description: 'Interactive API documentation browser and tester.', files: ['SKILL.md', 'references/'] },
+          'idea-generator': { name: 'idea-generator', frontmatter_tokens: 92, description_chars: 110, description: 'Brainstorming facilitator with divergent/convergent phases.', files: ['SKILL.md'] },
+          'react-patterns': { name: 'react-patterns', frontmatter_tokens: 105, description_chars: 140, description: 'React component patterns and hooks best practices.', files: ['SKILL.md', 'references/'] },
+          'video-editor': { name: 'video-editor', frontmatter_tokens: 115, description_chars: 160, description: 'Video editing automation with ffmpeg and scene detection.', files: ['SKILL.md', 'references/'] },
+          'test-runner': { name: 'test-runner', frontmatter_tokens: 90, description_chars: 130, description: 'Parallel test execution with smart retry and flake detection.', files: ['SKILL.md'] },
+          'branch-cleanup': { name: 'branch-cleanup', frontmatter_tokens: 95, description_chars: 140, description: 'Guides branch completion: cleanup, squash, PR creation, merge strategy.', files: ['SKILL.md'] },
+          'python-codegen': { name: 'python-codegen', frontmatter_tokens: 105, description_chars: 135, description: 'Python code generation with type hints and docstring templates.', files: ['SKILL.md', 'references/'] },
+          'sql-builder': { name: 'sql-builder', frontmatter_tokens: 98, description_chars: 125, description: 'SQL query builder with schema-aware completion and optimization.', files: ['SKILL.md', 'references/'] },
+          'mcp-tools': { name: 'mcp-tools', frontmatter_tokens: 102, description_chars: 130, description: 'MCP server tool discovery and configuration assistant.', files: ['SKILL.md'] },
+          'config-validator': { name: 'config-validator', frontmatter_tokens: 100, description_chars: 128, description: 'Validate configuration files with schema checking and defaults.', files: ['SKILL.md', 'references/'] },
+          'lint-fixer': { name: 'lint-fixer', frontmatter_tokens: 96, description_chars: 120, description: 'Auto-fix linting errors across multiple file types.', files: ['SKILL.md'] },
+          'workflow-builder': { name: 'workflow-builder', frontmatter_tokens: 108, description_chars: 145, description: 'Build automation workflows with webhook triggers and scheduling.', files: ['SKILL.md', 'references/'] },
+          'repo-audit': { name: 'repo-audit', frontmatter_tokens: 88, description_chars: 110, description: 'Security and dependency audit for git repositories.', files: ['SKILL.md'] },
+          'architecture-review': { name: 'architecture-review', frontmatter_tokens: 92, description_chars: 115, description: 'Multi-perspective architecture review with trade-off analysis.', files: ['SKILL.md'] },
+          'error-handler': { name: 'error-handler', frontmatter_tokens: 85, description_chars: 105, description: 'Multi-layer validation to make runtime errors structurally impossible.', files: ['SKILL.md'] },
+          'user-research': { name: 'user-research', frontmatter_tokens: 95, description_chars: 125, description: 'User persona creation with behavioral analysis and interview guides.', files: ['SKILL.md', 'references/'] }
+        }
       },
       component_details: {
         claude_md: {
@@ -1785,6 +2525,57 @@ function getSampleData() {
       '- [ ] **Check /context before long tasks**: Knowing your fill level before a complex task helps you decide whether to /compact first.\n' +
       '  Prevents mid-task compaction that loses important context.\n' +
       '  Takes 2 seconds. Saves the 5-minute recovery from an unexpected compaction.\n',
+    trends: {
+      period_days: 30,
+      session_count: 70,
+      avg_duration_minutes: 185,
+      avg_input_tokens: 6000,
+      avg_output_tokens: 29000,
+      skills: {
+        used: { 'daily-standup': 28, 'deploy-pipeline': 25, 'code-search': 12, 'token-optimizer': 8, 'content-writer': 6, 'architecture-review': 5, 'idea-generator': 4, 'refactoring': 4, 'user-research': 3, 'screenshot': 3, 'error-handler': 2, 'diagram-gen': 2 },
+        installed_count: 42,
+        never_used: ['api-explorer', 'test-runner', 'branch-cleanup', 'python-codegen', 'sql-builder', 'mcp-tools', 'config-validator', 'lint-fixer', 'workflow-builder', 'video-editor', 'react-patterns', 'repo-audit'],
+        never_used_overhead: 1200
+      },
+      subagents: { 'Explore': 45, 'general-purpose': 32, 'Plan': 12 },
+      model_mix: { 'opus': 1200000, 'sonnet': 3400000, 'haiku': 800000 },
+      tool_calls: { 'Read': 450, 'Bash': 380, 'Edit': 220, 'Grep': 180, 'Glob': 150, 'Write': 90, 'Task': 85, 'WebSearch': 40 },
+      daily: [
+        { date: '2025-12-15', sessions: 4, total_input: 72000000, total_output: 120000, skills_used: { 'daily-standup': 1, 'token-optimizer': 1 }, session_details: [
+          { duration_minutes: 220, input_tokens: 24000000, output_tokens: 45000, message_count: 85, api_calls: 42, skills: ['daily-standup'], subagents: ['Explore', 'general-purpose'], cache_hit_rate: 0.94 },
+          { duration_minutes: 180, input_tokens: 18000000, output_tokens: 32000, message_count: 45, api_calls: 22, skills: ['token-optimizer'], subagents: ['Explore', 'Plan'], cache_hit_rate: 0.92 },
+          { duration_minutes: 90, input_tokens: 15000000, output_tokens: 23000, message_count: 28, api_calls: 14, skills: [], subagents: ['Explore'], cache_hit_rate: 0.95 },
+          { duration_minutes: 45, input_tokens: 15000000, output_tokens: 20000, message_count: 15, api_calls: 8, skills: [], subagents: [], cache_hit_rate: 0.93 }
+        ]},
+        { date: '2025-12-14', sessions: 3, total_input: 54000000, total_output: 95000, skills_used: { 'deploy-pipeline': 1, 'content-writer': 1 }, session_details: [
+          { duration_minutes: 190, input_tokens: 22000000, output_tokens: 40000, message_count: 72, api_calls: 36, skills: ['deploy-pipeline'], subagents: ['compound-engineering:review:security-sentinel'], cache_hit_rate: 0.93 },
+          { duration_minutes: 120, input_tokens: 17000000, output_tokens: 30000, message_count: 42, api_calls: 21, skills: ['content-writer'], subagents: ['general-purpose'], cache_hit_rate: 0.91 },
+          { duration_minutes: 60, input_tokens: 15000000, output_tokens: 25000, message_count: 20, api_calls: 10, skills: [], subagents: [], cache_hit_rate: 0.94 }
+        ]},
+        { date: '2025-12-13', sessions: 5, total_input: 90000000, total_output: 150000, skills_used: { 'daily-standup': 1, 'code-search': 2, 'diagram-gen': 1 }, session_details: [
+          { duration_minutes: 240, input_tokens: 28000000, output_tokens: 48000, message_count: 95, api_calls: 48, skills: ['daily-standup'], subagents: ['Explore', 'general-purpose', 'Plan'], cache_hit_rate: 0.94 },
+          { duration_minutes: 120, input_tokens: 16000000, output_tokens: 28000, message_count: 35, api_calls: 18, skills: ['code-search'], subagents: ['Explore'], cache_hit_rate: 0.92 },
+          { duration_minutes: 90, input_tokens: 16000000, output_tokens: 25000, message_count: 25, api_calls: 13, skills: ['code-search'], subagents: [], cache_hit_rate: 0.93 },
+          { duration_minutes: 150, input_tokens: 15000000, output_tokens: 27000, message_count: 38, api_calls: 19, skills: ['diagram-gen'], subagents: ['general-purpose'], cache_hit_rate: 0.91 },
+          { duration_minutes: 30, input_tokens: 15000000, output_tokens: 22000, message_count: 12, api_calls: 6, skills: [], subagents: [], cache_hit_rate: 0.95 }
+        ]}
+      ]
+    },
+    health: {
+      installed_version: '1.0.20',
+      running_sessions: [
+        { pid: 12345, started: 'Wed Dec 12 10:18:43 2025', elapsed_seconds: 180000, elapsed_human: '2d 8h', version: '1.0.19', command: 'claude', flags: ['OUTDATED', 'ZOMBIE'] },
+        { pid: 67890, started: 'Thu Dec 13 14:10:59 2025', elapsed_seconds: 95000, elapsed_human: '1d 2h', version: '1.0.20', command: 'claude', flags: ['STALE'] }
+      ],
+      automated: [
+        '-\t0\tcom.anthropic.claudefordesktop.ShipIt',
+        '5477\t0\tapplication.com.anthropic.claudefordesktop.411520036'
+      ],
+      recommendations: [
+        '1 session running older version (installed: 1.0.20). Restart to get latest fixes.',
+        '2 sessions running 24+ hours. Check if still needed, long sessions accumulate context bloat.'
+      ]
+    },
     generated_at: new Date().toISOString()
   };
 }

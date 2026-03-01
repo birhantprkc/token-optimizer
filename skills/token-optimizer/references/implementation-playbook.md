@@ -96,13 +96,23 @@ Estimated savings: ~X tokens
 
 ## 4F: Hooks Configuration
 
-If no hooks exist, offer to create starter hooks config from `examples/hooks-starter.json`.
+### SessionEnd (measure.py collect)
 
-**Why hooks matter**:
-- **PreCompact**: Guides what Claude preserves during context compaction (prevents loss of critical context)
-- **PostToolUse**: Triggers auto-formatters, saving output tokens on style explanations
+Handled in Phase 0 setup. If the user skipped it there, offer again here:
 
-Show the JSON template, explain each hook, and ask user before creating.
+```bash
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py check-hook
+```
+
+If not installed, run `setup-hook --dry-run` to show the proposed change, then `setup-hook` after confirmation. The hook runs `measure.py collect --quiet` once per session close (~1 second, zero background processes).
+
+### PreCompact
+
+Guides what Claude preserves during context compaction (prevents loss of critical context). Offer `examples/hooks-starter.json` template for the PreCompact hook.
+
+### PostToolUse
+
+Triggers auto-formatters on file writes, saving output tokens on style explanations. Show the JSON template, explain the hook, and ask user before creating.
 
 ---
 
