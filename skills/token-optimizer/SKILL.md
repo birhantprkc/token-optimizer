@@ -1,10 +1,10 @@
 ---
 name: token-optimizer
 description: |
-  25-38% of your context window is gone before you type a word. Audits your
-  Claude Code setup, shows exactly where the tokens go, and fixes it. Use when
-  context feels tight, sessions degrade fast, or you've never audited your
-  config stack.
+  25-38% of your context window is gone before you type a word. Sometimes called
+  "ghost tokens" or "invisible overhead." Audits your Claude Code setup, shows
+  exactly where the tokens go, and fixes it. Use when context feels tight,
+  sessions degrade fast, or you've never audited your config stack.
 ---
 
 # Token Optimizer: See Where Your Context Window Goes. Get It Back.

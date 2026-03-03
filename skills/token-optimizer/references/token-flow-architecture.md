@@ -18,6 +18,13 @@ MESSAGE SEND
 | - Built-in tools (18+)       ~12,000 tokens         |
 |   Read, Write, Edit, Bash, Grep, Glob, Task, etc.  |
 |   (Source: /context output, Claude Code v2.1.59)     |
+|                                                     |
+| NOTE: The "system prompt" is often reported as      |
+| ~3,000 tokens. But built-in tool definitions        |
+| (~12,000 tokens) load alongside it every message.   |
+| The real fixed floor is ~15,000, not ~3,000.        |
+| Posts quoting the base prompt alone understate       |
+| overhead by 5x.                                     |
 +-----------------------------------------------------+
     |
 +-----------------------------------------------------+
@@ -27,6 +34,7 @@ MESSAGE SEND
 | - ToolSearch tool def           ~500 tokens          |
 | - Deferred tool names           ~15 tokens each     |
 | - Full definitions load on use only                  |
+| - Auto-triggers when MCP tools exceed 10% of context |
 | - 85% reduction vs pre-Tool-Search (Anthropic data) |
 |                                                     |
 | WITHOUT Tool Search (old versions, <10K threshold): |
@@ -224,6 +232,8 @@ Subagent receives:
     TOTAL: ~30,000+ tokens BEFORE doing any work
 ```
 
+**Anthropic's own data**: Agent teams use approximately 7x more tokens than standard sessions (source: code.claude.com/docs/en/costs). Subagents automatically load "CLAUDE.md, MCP servers, and skills" (direct quote from Anthropic docs), confirming full system prompt inheritance.
+
 **Implication**: If you dispatch 5 subagents in a single session:
 - Each inherits ~30K tokens
 - 5 x 30K = 150K tokens just for setup
@@ -320,6 +330,8 @@ Continue until /clear or session end
 ---
 
 ## Real Cost: Context Budget, Not Dollars
+
+**Official Anthropic data** (code.claude.com/docs/en/costs): Average cost is ~$6/dev/day ($100-200/mo with Sonnet 4.6). Background token usage (hooks, auto-memory) typically under $0.04/session.
 
 Most Claude Code users are on Max subscriptions ($100-200/month), not per-token API pricing. The real cost of overhead is not dollars. It is context budget:
 
@@ -555,5 +567,9 @@ See `optimization-checklist.md` items 23-30 for what each does and how the optim
 ## Further Reading
 
 - **Official Docs**: https://docs.anthropic.com (prompt caching, context windows)
+- **Official Costs**: https://code.claude.com/docs/en/costs ($6/dev/day average, 7x agent multiplier, background overhead data)
 - **Tool Search**: Default since Jan 2026 (deferred tool loading, 85% MCP reduction)
+- **Piebald-AI/claude-code-system-prompts** (3.9K stars): Most comprehensive open-source tracking of Claude Code's actual prompt content. 110+ prompt strings tracked. Useful for verifying system prompt sizes and tool definition token counts.
 - **Community**: r/ClaudeAI, r/anthropic (optimization tips)
+- **Reddit validation**: r/ClaudeAI thread confirming "65K tokens with all features enabled, ~12K with every feature disabled" (corroborates our 15K-43K range)
+- **Taras Tsugrii analysis**: "Claude Code uses 3x more tokens than Codex" (competitive context for token efficiency)

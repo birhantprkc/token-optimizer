@@ -37,7 +37,7 @@ Default to haiku. Upgrade only if task requires it.
 ---
 
 ### 3. CLAUDE.md Consolidation
-**Target**: Slim to <800 tokens (~50-60 lines)
+**Target**: Slim to <800 tokens (~50-60 lines). Anthropic recommends CLAUDE.md under ~500 lines (code.claude.com/docs/en/costs). That official guidance is the minimum bar. Our <800 token target is the optimized ceiling.
 
 **Actions**:
 - [ ] Remove content that belongs in skills/commands (workflows, detailed configs)
@@ -389,6 +389,7 @@ Also track with `/cost` at end of each session and `npx ccusage@latest daily` fo
 └─ Message + history:           Variable
 ```
 
+**Irreducible floor**: ~15K tokens even with zero config (no CLAUDE.md, no skills, no MCP). This is core system + built-in tools alone.
 **Baseline (well-optimized)**: ~21K tokens first message
 **Power user (unoptimized)**: ~43K tokens first message
 **Note**: Pre-Tool-Search (2025), unoptimized setups reached 40-80K+
