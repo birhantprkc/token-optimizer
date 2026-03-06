@@ -9,7 +9,7 @@
   <a href="https://github.com/alexgreensh/token-optimizer/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/token-optimizer" alt="GitHub Stars"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/commits/main"><img src="https://img.shields.io/github/last-commit/alexgreensh/token-optimizer" alt="Last Commit"></a>
   <img src="https://img.shields.io/badge/python-3.8+-blue" alt="Python 3.8+">
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Platform">
 </p>
 
 <p align="center"><strong>Run <code>/context</code> on a fresh Claude Code session. See how much is already gone.<br>Find the ghost tokens, the invisible overhead, the context window tax. Get it back.</strong></p>
