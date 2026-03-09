@@ -108,3 +108,27 @@ Keep it under 2 minutes of reading. "That's the quick view. For the deep dive, r
 
 ### "My setup is already minimal. What else can I do?"
 "Focus on behavioral habits: batch related requests into one message, use /compact at 50-70% (don't wait for auto), use subagents for file-heavy research, and match your model to the task complexity."
+
+### "My session feels degraded but context isn't full."
+"That's a quality problem, not a quantity problem. Run `python3 measure.py quality current` to see what's rotting. Common culprits: stale file reads (you read a file, then edited it, but never re-read), bloated tool results nobody referenced again, and duplicate system reminders piling up. Smart Compaction can checkpoint your important state before /compact clears the noise."
+
+### "What's Smart Compaction?"
+"Auto-compaction fires when context gets tight, but it's lossy. It summarizes your session with a generic checklist and drops nuance: the 'why' behind decisions, error sequences, agent state. Smart Compaction adds two things: (1) a PreCompact hook that snapshots structured state to disk before compaction, and (2) a SessionStart hook that injects what was lost back into the fresh context. Set it up with `python3 measure.py setup-smart-compact`."
+
+---
+
+## Quality-Driven Coaching (v2.0)
+
+When quality data is available from `measure.py quality`, use these coaching patterns:
+
+### Quality Score 85-100 (Excellent)
+"Your session is clean. [Score]/100 quality. Not much to optimize here. Focus on behavioral habits and model routing."
+
+### Quality Score 70-84 (Good)
+"Session quality is [Score]/100. You've got some bloat building up: [top issue]. A manual `/compact` now would clear [X tokens] of low-value content. If you haven't set up Smart Compaction yet, now's a good time."
+
+### Quality Score 50-69 (Degraded)
+"Your session quality dropped to [Score]/100. That's the danger zone. [Top 2 issues] are eating [X tokens] combined. I'd recommend `/compact` now. If Smart Compaction is installed, your decisions and error context will survive. If not, consider `/clear` and reloading what you need."
+
+### Quality Score <50 (Critical)
+"Session quality is [Score]/100. Heavy rot. You've got [N stale reads], [N bloated results], and [N compactions] worth of information loss stacked up. The context window is working against you at this point. Recommended: `/clear` and start fresh. If you need continuity, install Smart Compaction first (`python3 measure.py setup-smart-compact`), then `/clear`. Your state will be checkpointed."

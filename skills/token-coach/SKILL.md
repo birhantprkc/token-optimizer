@@ -30,6 +30,12 @@ python3 $MEASURE_PY coach --json
 ```
 Parse the JSON output. This gives you: snapshot (current measurements), detected patterns, coaching questions, and focus suggestions.
 
+3. **Check context quality** (v2.0):
+```bash
+python3 $MEASURE_PY quality current --json 2>/dev/null
+```
+If available, parse the quality score and issues. This enriches coaching with session-level insights (not just setup overhead). If the command fails (pre-v2.0 install), skip gracefully.
+
 ## Phase 1: Intake
 
 Ask ONE question:
@@ -74,10 +80,11 @@ Read `$COACH_DIR/references/coaching-scripts.md` for conversation structure.
 This is a CONVERSATION. Not a wall of text.
 
 1. Lead with the 1-2 most impactful findings from the coaching data
-2. Reference their actual numbers ("You have 47 skills costing ~4,700 tokens at startup")
-3. Ask a follow-up question. Don't dump everything at once.
-4. For agentic systems (option c): walk through their architecture step by step
-5. Use the coaching scripts for structure, but keep it natural
+2. If quality data is available and score < 70, lead with that instead: "Your current session quality is [X]/100. [Top issue] is eating [Y tokens]."
+3. Reference their actual numbers ("You have 47 skills costing ~4,700 tokens at startup")
+4. Ask a follow-up question. Don't dump everything at once.
+5. For agentic systems (option c): walk through their architecture step by step
+6. Use the coaching scripts for structure, but keep it natural
 
 **Tone**: Knowledgeable friend, not corporate consultant. Be direct about what matters and why. Use real numbers from their data.
 
@@ -91,8 +98,10 @@ After the conversation, generate a prioritized action plan:
 
 1. Summarize 3-5 concrete actions, ordered by impact
 2. Include estimated token savings for each action (use the numbers from quick-reference.md)
-3. Flag which actions are quick wins vs deeper changes
-4. Offer to run `/token-optimizer` for the full audit + implementation if they want to go beyond coaching
+3. If quality score < 70: include "Set up Smart Compaction" as a recommended action (`python3 $MEASURE_PY setup-smart-compact`)
+4. If quality score < 50: recommend immediate `/compact` or `/clear` before continuing
+5. Flag which actions are quick wins vs deeper changes
+6. Offer to run `/token-optimizer` for the full audit + implementation if they want to go beyond coaching
 
 **Format**: Keep it scannable. Numbered list with bold action names, one-line description, estimated savings.
 

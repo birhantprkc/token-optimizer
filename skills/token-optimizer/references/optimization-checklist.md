@@ -421,9 +421,53 @@ See `examples/hooks-starter.json` for a ready-to-use template.
 
 ---
 
+### 21. Smart Compaction (v2.0)
+**Target**: Preserve decisions, context, and state across compaction events
+
+**What it does**: Captures structured session state before compaction fires, then restores the critical pieces after compaction completes. Decisions, error-fix sequences, agent state, and modified files survive the lossy compaction process.
+
+**Actions**:
+- [ ] Install Smart Compaction hooks: `python3 $MEASURE_PY setup-smart-compact --dry-run` (preview first)
+- [ ] Run `python3 $MEASURE_PY setup-smart-compact` to install
+- [ ] Generate project-specific Compact Instructions: `python3 $MEASURE_PY compact-instructions`
+- [ ] Add the generated instructions to `.claude/settings.json` under `compactInstructions`
+
+**What the hooks do**:
+- **PreCompact**: Captures session state (decisions, files, errors, agent state) to a markdown checkpoint
+- **SessionStart** (after compact): Injects the checkpoint back as context, filling gaps left by compaction
+- **Stop/SessionEnd**: Saves a checkpoint when the session ends, enabling continuity in the next session
+
+**Checkpoints stored in**: `~/.claude/token-optimizer/checkpoints/` (auto-cleaned, last 50 or 7 days)
+
+**Expected impact**: Preserves 3-10 key decisions per compaction. Prevents "what were we doing?" restart loops after compaction. Enables session continuity across /clear and session death.
+
+---
+
+### 22. Context Quality Monitoring (v2.0)
+**Target**: Measure content quality, not just quantity
+
+**What it does**: Analyzes your session JSONL and scores how useful your context content is. A session at 60% with clean, relevant content performs differently from 60% stuffed with stale reads and duplicate injections.
+
+**Actions**:
+- [ ] Run `python3 $MEASURE_PY quality` on your current or recent session
+- [ ] Check your score: 85+ is excellent, 70-84 good, 50-69 degraded, <50 critical
+- [ ] Act on specific issues: stale reads, bloated results, duplicate reminders
+
+**Quality signals**:
+- Stale read ratio (files read then later edited, making the read content outdated)
+- Tool result bloat (large results never referenced again)
+- Duplicate content (repeated system reminders)
+- Compaction depth (each compaction = information loss)
+- Decision density (ratio of substantive to overhead exchanges)
+- Agent efficiency (dispatch cost vs useful result size)
+
+**Expected impact**: Quantifies when to /compact (score dropping) and validates that smart compaction is working (score improves post-compact).
+
+---
+
 ## MONITORING & MEASUREMENT
 
-### 21. Baseline Your Usage
+### 23. Baseline Your Usage
 
 ```bash
 # Measure current state
@@ -443,7 +487,7 @@ Also track with `/cost` at end of each session and `measure.py trends` for histo
 
 ---
 
-### 22. Regular Audits
+### 24. Regular Audits
 **Quarterly** (every 3 months):
 - [ ] Re-run `/token-optimizer` (skills accumulate, CLAUDE.md grows back)
 - [ ] Re-check MCP servers (you add new ones)
@@ -517,7 +561,7 @@ The config changes shrink your per-message overhead. The behavioral changes comp
 
 These are settings that affect token usage and context behavior. The optimizer audits current values and explains tradeoffs.
 
-### 23. MAX_THINKING_TOKENS (default: 10,000)
+### 25. MAX_THINKING_TOKENS (default: 10,000)
 **Target**: Understand thinking token budget
 
 **What it is**: Controls the maximum tokens Claude spends on extended thinking (chain-of-thought reasoning). Extended thinking makes Claude smarter on complex problems but uses expensive output tokens.
@@ -531,7 +575,7 @@ These are settings that affect token usage and context behavior. The optimizer a
 
 ---
 
-### 24. CLAUDE_CODE_MAX_OUTPUT_TOKENS (default: 16,384, max: 128,000)
+### 26. CLAUDE_CODE_MAX_OUTPUT_TOKENS (default: 16,384, max: 128,000)
 **Target**: Understand output token budget
 
 **What it is**: Maximum tokens Claude generates per response. If you hit truncation ("output was cut off"), this may need increasing. Higher values allow longer responses but increase cost.
@@ -545,7 +589,7 @@ These are settings that affect token usage and context behavior. The optimizer a
 
 ---
 
-### 25. MAX_MCP_OUTPUT_TOKENS (default: 25,000)
+### 27. MAX_MCP_OUTPUT_TOKENS (default: 25,000)
 **Target**: Understand MCP tool output limits
 
 **What it is**: Maximum tokens a single MCP tool call can return. Tools returning max-length output may be sending more data than needed.
@@ -558,7 +602,7 @@ These are settings that affect token usage and context behavior. The optimizer a
 
 ---
 
-### 26. BASH_MAX_OUTPUT_LENGTH (default: system)
+### 28. BASH_MAX_OUTPUT_LENGTH (default: system)
 **Target**: Control bash output token consumption
 
 **What it is**: Limits how much stdout/stderr from Bash tool calls gets captured into context. Verbose test runners or build logs can dump thousands of tokens.
@@ -571,7 +615,7 @@ These are settings that affect token usage and context behavior. The optimizer a
 
 ---
 
-### 27. ENABLE_TOOL_SEARCH (default: auto, active above threshold)
+### 29. ENABLE_TOOL_SEARCH (default: auto, active above threshold)
 **Target**: Verify Tool Search is active (85% MCP savings)
 
 **What it is**: Tool Search defers MCP tool definitions until actually needed. Instead of loading 300-850 tokens per tool upfront, only ~15 tokens per tool name is loaded. This is the single biggest MCP optimization.
@@ -585,7 +629,7 @@ These are settings that affect token usage and context behavior. The optimizer a
 
 ---
 
-### 28. CLAUDE_CODE_DISABLE_AUTO_MEMORY (default: not set)
+### 30. CLAUDE_CODE_DISABLE_AUTO_MEMORY (default: not set)
 **Target**: Audit auto-memory content quality, not the feature itself
 
 **What it is**: Auto-memory writes learnings to MEMORY.md automatically. This is a valuable feature. The optimization target is the CONTENT it produces, not the feature.
@@ -600,7 +644,7 @@ These are settings that affect token usage and context behavior. The optimizer a
 
 ---
 
-### 29. CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING (default: not set)
+### 31. CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING (default: not set)
 **Target**: Understand what adaptive thinking does
 
 **What it is**: When set, disables Claude's ability to automatically adjust thinking depth based on task complexity. Normally Claude uses more thinking for hard problems and less for simple ones.
@@ -613,7 +657,7 @@ These are settings that affect token usage and context behavior. The optimizer a
 
 ---
 
-### 30. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (default: ~83%)
+### 32. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (default: ~83%)
 **Target**: Control when auto-compaction triggers
 
 **What it is**: Auto-compact triggers when context reaches this percentage of the window. The system default (~83%) is reasonable but power users who manage /compact manually may want to adjust or disable entirely.

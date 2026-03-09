@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-1.2.0-green" alt="Version 1.2.0"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-2.0.0-green" alt="Version 2.0.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/alexgreensh/token-optimizer" alt="License"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/token-optimizer" alt="GitHub Stars"></a>
@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Platform">
 </p>
 
-<p align="center"><strong>Run <code>/context</code> on a fresh Claude Code session. See how much is already gone.<br>Find the ghost tokens, the invisible overhead, the context window tax. Get it back.</strong></p>
+<p align="center"><strong>Audit your setup. Protect your sessions. Measure what matters.<br>Find the ghost tokens. Score your context quality. Survive compaction.</strong></p>
 
 ![Token Optimizer in action](skills/token-optimizer/assets/hero-terminal.svg)
 
@@ -445,6 +445,79 @@ python3 $MEASURE_PY coach --focus skills   # Focus on skill patterns
 python3 $MEASURE_PY coach --focus agentic  # Focus on multi-agent patterns
 ```
 
+## v2.0: Active Session Intelligence
+
+v1.x audits your setup. v2.0 protects your sessions.
+
+### Smart Compaction
+
+Auto-compaction fires when context gets tight, but it's lossy. It drops the "why" behind decisions, error sequences, and agent state. Smart Compaction adds structured checkpoints before compaction and restores what was lost afterward.
+
+```bash
+# Install the hook system (PreCompact + SessionStart + Stop + SessionEnd)
+python3 $MEASURE_PY setup-smart-compact --dry-run   # preview
+python3 $MEASURE_PY setup-smart-compact              # install
+python3 $MEASURE_PY setup-smart-compact --status     # check
+python3 $MEASURE_PY setup-smart-compact --uninstall  # remove
+```
+
+What gets captured: decisions and reasoning, modified files (beyond Claude's 5-file rehydration), error-fix sequences, open questions, agent dispatch state, and the continuation point. All stored as plain markdown in `~/.claude/token-optimizer/checkpoints/`.
+
+Generate project-specific compaction instructions:
+
+```bash
+python3 $MEASURE_PY compact-instructions
+# Add the output to your project .claude/settings.json compactInstructions field
+```
+
+### Context Quality Analyzer
+
+Every tool measures how full your context is. This measures how useful the content is.
+
+```bash
+python3 $MEASURE_PY quality current
+```
+
+```
+Context Quality Report
+========================================
+Content quality:     74/100 (Good)
+Messages analyzed:   156
+Decisions captured:  8
+
+Issues found:
+   23 stale file reads    (14,000 tokens est.)  files edited since reading
+    3 bloated results     ( 8,000 tokens est.)  tool outputs never referenced again
+    4 duplicate reminders ( 2,000 tokens est.)  repeated system-reminder injections
+
+Signal-to-noise:
+  Decision density:  0.34 (34% substantive)
+  Agent efficiency:  82%
+
+Recommendation:
+  /compact would free ~24,000 tokens of low-value content
+  Smart Compact checkpoint would preserve 8 decisions
+```
+
+Six weighted signals: stale reads (25%), bloated results (25%), duplicates (15%), compaction depth (15%), decision density (10%), agent efficiency (10%). Score ranges from 0-100. Quality data appears in the dashboard Health tab as an interactive gauge.
+
+### Session Continuity
+
+When sessions end (normally, via /clear, or crash), state is checkpointed automatically. New sessions in the same project can pick up where you left off:
+
+- **Same session (post-compact)**: Full context recovery injected automatically
+- **New session (related work)**: Checkpoint injected if first message has >30% keyword overlap
+- **New session (unrelated)**: One-line pointer to available checkpoint
+
+All thresholds configurable via environment variables:
+
+| Variable | Default | What It Controls |
+|----------|---------|-----------------|
+| `TOKEN_OPTIMIZER_CHECKPOINT_TTL` | 300 (5 min) | Max age for post-compact restore |
+| `TOKEN_OPTIMIZER_CHECKPOINT_FILES` | 10 | Max checkpoint files kept |
+| `TOKEN_OPTIMIZER_CHECKPOINT_RETENTION_DAYS` | 7 | Days before old checkpoints are cleaned |
+| `TOKEN_OPTIMIZER_RELEVANCE_THRESHOLD` | 0.3 | Keyword overlap for new-session restore |
+
 ## vs Alternatives
 
 | Tool | What It Does | Limitation |
@@ -458,9 +531,9 @@ python3 $MEASURE_PY coach --focus agentic  # Focus on multi-agent patterns
 
 ```
 skills/token-optimizer/
-  SKILL.md                             Orchestrator
+  SKILL.md                             Orchestrator (phases 0-5 + v2.0 actions)
   assets/
-    dashboard.html                     Interactive dashboard (optimization + analytics)
+    dashboard.html                     Interactive dashboard (optimization + analytics + quality gauge)
     dashboard-overview.png             Dashboard screenshot
     logo.svg                           Animated ASCII logo
     hero-terminal.svg                  Terminal demo
@@ -469,15 +542,25 @@ skills/token-optimizer/
     user-profiles.svg                  Context usage by setup type
   references/
     agent-prompts.md                   8 agent prompt templates
-    implementation-playbook.md         Fix implementation details (4A-4L)
-    optimization-checklist.md          30 optimization techniques
+    implementation-playbook.md         Fix implementation details (4A-4N)
+    optimization-checklist.md          32 optimization techniques
     token-flow-architecture.md         How Claude Code loads tokens
+    roadmap.md                         v2.1-v2.2 planned features
   examples/
     claude-md-optimized.md             Optimized CLAUDE.md template
     permissions-deny-template.json     permissions.deny starter
-    hooks-starter.json                 Hook configuration example
+    hooks-starter.json                 Hook configuration (v2.0: smart compact + analytics)
   scripts/
-    measure.py                         Measurement, trends, health & collection tool
+    measure.py                         Measurement, quality, smart compact, trends, health & collection
+skills/token-coach/
+  SKILL.md                             Coaching orchestrator (quality-aware)
+  references/
+    coaching-scripts.md                Conversation flows + quality-driven coaching
+    coach-patterns.md                  Anti-patterns and fix patterns
+    agentic-systems.md                 Multi-agent architecture coaching
+    quick-reference.md                 Hard numbers and baselines
+  examples/
+    coaching-session-*.md              Few-shot coaching examples
 install.sh                             One-command installer
 ```
 

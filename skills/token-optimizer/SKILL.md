@@ -142,6 +142,36 @@ python3 $MEASURE_PY setup-daemon --dry-run
 
    If not macOS, skip silently. The file:// URL and `--serve` flag still work on all platforms.
 
+7. **Check Smart Compaction hooks** (v2.0, first-time setup, skips silently if already installed):
+```bash
+python3 $MEASURE_PY setup-smart-compact --status
+```
+   - If all 4 hooks installed: skip entirely.
+   - If partially or not installed: explain and offer to install:
+
+   ```
+   [Token Optimizer] New in v2.0: Smart Compaction
+
+   Auto-compaction destroys working memory. Smart Compaction captures your
+   session state (decisions, modified files, errors, agent state) BEFORE
+   compaction fires, then restores it afterward.
+
+   What this does:
+   - Before compaction: saves a structured checkpoint of your session state
+   - After compaction: injects recovered context so you don't lose your place
+   - On session end: captures state for potential pickup in next session
+   - All checkpoints stored locally (~/.claude/token-optimizer/checkpoints/)
+
+   Remove anytime: python3 measure.py setup-smart-compact --uninstall
+   ```
+
+   Ask user:
+   1. Install it (run `measure.py setup-smart-compact --dry-run` first, then confirm and run `measure.py setup-smart-compact`)
+   2. Show me the JSON first (run `measure.py setup-smart-compact --dry-run` and stop)
+   3. Skip for now
+
+   If skipped, note it and continue. The audit still works without it.
+
 Output: `[Token Optimizer Initialized] Backup: $BACKUP_DIR | Coordination: $COORD_PATH`
 
 ---
@@ -254,9 +284,76 @@ For headless/remote servers, the user can run `python3 $MEASURE_PY dashboard --c
 
 Read `references/implementation-playbook.md` for detailed steps.
 
-Available actions: 4A (CLAUDE.md), 4B (MEMORY.md), 4C (Skills), 4D (File Exclusion), 4E (MCP), 4F (Hooks), 4G (Cache Structure), 4H (Rules Cleanup), 4I (Settings Tuning), 4J (Skill Description Tightening), 4K (Compact Instructions Setup), 4L (Model Routing Setup).
+Available actions: 4A (CLAUDE.md), 4B (MEMORY.md), 4C (Skills), 4D (File Exclusion), 4E (MCP), 4F (Hooks), 4G (Cache Structure), 4H (Rules Cleanup), 4I (Settings Tuning), 4J (Skill Description Tightening), 4K (Compact Instructions Setup), 4L (Model Routing Setup), 4M (Smart Compaction Setup), 4N (Context Quality Check).
 
 Templates in `examples/`. Always backup before changes. Present diffs for approval.
+
+### 4M: Smart Compaction Setup
+
+Protects session state across compaction events. Three components:
+
+1. **Install hooks** (PreCompact + SessionStart + Stop + SessionEnd):
+```bash
+# Preview what will change
+python3 $MEASURE_PY setup-smart-compact --dry-run
+
+# Install all hooks
+python3 $MEASURE_PY setup-smart-compact
+
+# Check current status
+python3 $MEASURE_PY setup-smart-compact --status
+```
+
+Show the user the dry-run diff first. Explain:
+- **PreCompact**: Captures decisions, modified files, errors, agent state to a checkpoint file before compaction runs
+- **SessionStart** (matcher: compact): Injects recovered context after compaction completes
+- **Stop**: Captures checkpoint when session ends normally
+- **SessionEnd**: Captures checkpoint on /clear or session death
+
+All hooks call `measure.py` directly (pure Python, no shell scripts). Composes safely with any existing hooks the user already has.
+
+2. **Generate Compact Instructions** (project-specific compaction guidance):
+```bash
+python3 $MEASURE_PY compact-instructions
+```
+
+This analyzes the user's CLAUDE.md, recent sessions, and project structure to generate tailored instructions that tell Claude what to prioritize during compaction. The user adds these to their project-level `.claude/settings.json` under `compactInstructions`.
+
+3. **Verify installation**:
+```bash
+python3 $MEASURE_PY setup-smart-compact --status
+```
+
+Should show all 4 hooks as installed. Test by running `/compact` manually and checking that a checkpoint file appears in `~/.claude/token-optimizer/checkpoints/`.
+
+**Configurable via environment variables:**
+- `TOKEN_OPTIMIZER_CHECKPOINT_FILES`: Max checkpoint files kept (default: 10)
+- `TOKEN_OPTIMIZER_CHECKPOINT_TTL`: Seconds before checkpoint expires for restore (default: 300)
+- `TOKEN_OPTIMIZER_CHECKPOINT_RETENTION_DAYS`: Days to keep old checkpoints (default: 7)
+- `TOKEN_OPTIMIZER_RELEVANCE_THRESHOLD`: Keyword overlap for new-session restore (default: 0.3)
+
+### 4N: Context Quality Check
+
+Analyzes current session for content quality (not just quantity):
+```bash
+python3 $MEASURE_PY quality current
+```
+
+Shows a composite score (0-100) based on:
+- **Stale reads** (25%): Files read then later edited (re-read would be fresher)
+- **Bloated results** (25%): Large tool outputs never referenced again
+- **Duplicates** (15%): Repeated system reminders or injected content
+- **Compaction depth** (15%): Number of compactions (each = information loss)
+- **Decision density** (10%): Ratio of substantive exchanges to overhead
+- **Agent efficiency** (10%): Dispatch cost vs useful result size
+
+Score ranges:
+- 85-100: Excellent, clean session
+- 70-84: Good, some bloat, smart compaction would help
+- 50-69: Degraded, significant waste, `/compact` with checkpoint recommended
+- <50: Critical, heavy rot, consider `/clear` with checkpoint
+
+Present the score and top issues. Recommend specific actions based on the findings.
 
 ---
 
@@ -269,6 +366,15 @@ Beyond the core `report`/`snapshot`/`compare`/`dashboard` commands, the measurem
 - **`measure.py trends [--days N] [--json]`**: Scans all JSONL session logs across projects. Shows which skills you actually use, subagent patterns, model mix, and cross-references against installed skills to surface unused ones. Default: last 30 days.
 - **`measure.py health`**: Detects running Claude Code sessions, checks their version against installed, flags stale/zombie processes, and shows automated Claude-related processes.
 - Both `trends` and `health` data appear as interactive tabs in the dashboard (standalone or full audit).
+
+### v2.0 Commands
+
+- **`measure.py quality [session-id|current]`**: Analyzes session content quality. Scores stale reads, bloated results, duplicates, compaction depth, decision density, agent efficiency. Returns composite 0-100 score with actionable breakdown.
+- **`measure.py setup-smart-compact [--dry-run] [--status] [--uninstall]`**: Installs/manages the Smart Compaction hook system (PreCompact capture + SessionStart restore + Stop/SessionEnd checkpoints). Use `--dry-run` to preview, `--status` to check, `--uninstall` to remove.
+- **`measure.py compact-capture`**: Called by PreCompact/Stop/SessionEnd hooks. Parses JSONL transcript, extracts decisions/files/errors/agent state, writes checkpoint to `~/.claude/token-optimizer/checkpoints/`. Not intended for direct user invocation.
+- **`measure.py compact-restore`**: Called by SessionStart hook (matcher: compact). Reads most recent checkpoint and injects recovered context. Not intended for direct user invocation.
+- **`measure.py compact-instructions [--json]`**: Generates project-specific Compact Instructions based on CLAUDE.md and session patterns. Output is text the user adds to their `.claude/settings.json` compactInstructions field.
+- **`measure.py list-checkpoints [--cwd PATH] [--max-age MINUTES]`**: Lists session checkpoints with age, trigger type, and quality scores. Useful for debugging the smart compact system.
 
 ---
 

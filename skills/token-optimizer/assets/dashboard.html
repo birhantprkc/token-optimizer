@@ -2293,6 +2293,59 @@ var DB = (function() {
       html += '</div>';
     }
 
+    // Context Quality Gauge (v2.0)
+    var q = data.quality;
+    if (q && typeof q.score === 'number') {
+      var qs = q.score;
+      var qColor = qs >= 85 ? 'var(--c-accent-cyan)' : qs >= 70 ? '#4ecdc4' : qs >= 50 ? '#ff9f43' : '#ff6b6b';
+      var qBand = qs >= 85 ? 'Excellent' : qs >= 70 ? 'Good' : qs >= 50 ? 'Degraded' : 'Critical';
+      html += '<div class="card wide"><div class="card-header"><span>Context Quality</span><span class="label">v2.0</span></div>' +
+        '<div style="text-align:center;padding:var(--s-3) 0;">' +
+        '<div style="font-size:56px;font-weight:700;font-family:var(--font-mono);color:' + qColor + ';text-shadow:0 0 15px ' + qColor + ';">' + qs + '</div>' +
+        '<div class="label" style="font-size:16px;color:' + qColor + ';">' + qBand + '</div>' +
+        '</div>';
+
+      // Breakdown bars
+      var bd = q.breakdown || {};
+      var signals = [
+        { key: 'stale_reads', label: 'Stale Reads', icon: '\uD83D\uDCC4' },
+        { key: 'bloated_results', label: 'Bloated Results', icon: '\uD83D\uDCE6' },
+        { key: 'duplicates', label: 'Duplicates', icon: '\uD83D\uDD04' },
+        { key: 'compaction_depth', label: 'Compactions', icon: '\uD83D\uDDDC' },
+        { key: 'decision_density', label: 'Decision Density', icon: '\uD83C\uDFAF' },
+        { key: 'agent_efficiency', label: 'Agent Efficiency', icon: '\u2699\uFE0F' }
+      ];
+      html += '<div style="padding:0 var(--s-3) var(--s-3);">';
+      signals.forEach(function(sig) {
+        var d = bd[sig.key];
+        if (!d) return;
+        var sigScore = typeof d.score === 'number' ? d.score : 100;
+        var barColor = sigScore >= 85 ? 'var(--c-accent-cyan)' : sigScore >= 70 ? '#4ecdc4' : sigScore >= 50 ? '#ff9f43' : '#ff6b6b';
+        var detail = '';
+        if (d.count !== undefined) detail = d.count + ' found';
+        else if (d.compactions !== undefined) detail = d.compactions + ' compaction' + (d.compactions !== 1 ? 's' : '');
+        else if (d.ratio !== undefined) detail = d.ratio;
+        else if (d.detail) detail = d.detail;
+        html += '<div style="display:flex;align-items:center;gap:var(--s-2);margin-bottom:6px;font-size:13px;">' +
+          '<span style="width:140px;color:var(--c-text-dim);">' + sig.icon + ' ' + sig.label + '</span>' +
+          '<div style="flex:1;height:8px;background:var(--c-surface);border-radius:4px;overflow:hidden;">' +
+          '<div style="width:' + sigScore + '%;height:100%;background:' + barColor + ';border-radius:4px;transition:width 0.3s;"></div>' +
+          '</div>' +
+          '<span style="width:80px;text-align:right;font-family:var(--font-mono);color:var(--c-text-dim);">' + esc(String(detail)) + '</span>' +
+          '</div>';
+      });
+
+      // Waste estimate
+      var waste = bd.total_estimated_waste_tokens;
+      if (waste && waste > 0) {
+        html += '<div style="margin-top:var(--s-2);padding:var(--s-2);background:var(--c-surface);border-radius:8px;font-size:13px;color:var(--c-text-dim);">' +
+          '<strong style="color:' + qColor + ';">' + waste.toLocaleString() + ' tokens</strong> of estimated waste. ' +
+          (qs < 70 ? 'Consider <code>/compact</code> to reclaim.' : 'Minor bloat, manageable.') +
+          '</div>';
+      }
+      html += '</div></div>';
+    }
+
     // Recommendations
     var recs = h.recommendations || [];
     if (recs.length > 0) {
