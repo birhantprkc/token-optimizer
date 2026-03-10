@@ -1299,6 +1299,9 @@ def generate_dashboard(coord_path):
     print("  Analyzing context quality...")
     quality = _collect_quality_for_dashboard()
 
+    # Collect hook installation status for dashboard toggles
+    hook_status = _collect_hook_status_for_dashboard()
+
     # Assemble data
     data = {
         "snapshot": snapshot,
@@ -1308,6 +1311,7 @@ def generate_dashboard(coord_path):
         "health": health,
         "coach": coach,
         "quality": quality,
+        "hooks": hook_status,
         "generated_at": datetime.now().isoformat(),
     }
 
@@ -1333,6 +1337,37 @@ def generate_dashboard(coord_path):
     _open_in_browser(out_path)
     print(f"  Opened in browser.")
     return str(out_path)
+
+
+def _collect_hook_status_for_dashboard():
+    """Collect hook installation status for dashboard toggle panel."""
+    settings, _ = _read_settings_json()
+
+    # Check each hook type
+    session_end_installed = _is_hook_installed(settings)
+    smart_compact_status = _is_smart_compact_installed(settings)
+
+    # Build measure.py path for commands
+    mp = str(Path(__file__).resolve())
+
+    return {
+        "session_end": {
+            "installed": session_end_installed,
+            "label": "Session Tracking",
+            "description": "Collects usage data after each session. Powers Trends and Health tabs.",
+            "install_cmd": f"python3 '{mp}' setup-hook",
+            "uninstall_cmd": f"python3 '{mp}' setup-hook --uninstall",
+        },
+        "smart_compact": {
+            "installed": all(smart_compact_status.values()),
+            "partial": any(smart_compact_status.values()) and not all(smart_compact_status.values()),
+            "detail": smart_compact_status,
+            "label": "Smart Compaction",
+            "description": "Captures session state before compaction, restores it after. Protects your working memory.",
+            "install_cmd": f"python3 '{mp}' setup-smart-compact",
+            "uninstall_cmd": f"python3 '{mp}' setup-smart-compact --uninstall",
+        },
+    }
 
 
 def generate_standalone_dashboard(days=30, quiet=False):
@@ -1394,6 +1429,9 @@ def generate_standalone_dashboard(days=30, quiet=False):
         print("  Analyzing context quality...")
     quality = _collect_quality_for_dashboard()
 
+    # Collect hook installation status for dashboard toggles
+    hook_status = _collect_hook_status_for_dashboard()
+
     data = {
         "snapshot": snapshot,
         "audit": {},
@@ -1402,6 +1440,7 @@ def generate_standalone_dashboard(days=30, quiet=False):
         "health": health,
         "coach": coach,
         "quality": quality,
+        "hooks": hook_status,
         "standalone": True,
         "auto_plan": True,
         "generated_at": datetime.now().isoformat(),

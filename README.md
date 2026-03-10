@@ -91,6 +91,19 @@ Then start Claude Code and run:
 /token-optimizer
 ```
 
+## Enable Session Tracking
+
+The optimizer can track your usage over time: which skills you use, how context fills up, model costs. This powers the Trends and Health tabs in your dashboard.
+
+```bash
+python3 $MEASURE_PY setup-hook --dry-run   # preview the change
+python3 $MEASURE_PY setup-hook             # install it
+```
+
+This adds a SessionEnd hook that silently collects usage stats after each session (~2 seconds, all data local). The dashboard auto-refreshes with your latest data.
+
+Already ran `/token-optimizer` and skipped this step? Just run the command above. Remove anytime: `python3 $MEASURE_PY setup-hook --uninstall`
+
 ## The Problem
 
 Every message you send to Claude Code re-sends everything: system prompt, tool definitions, MCP servers, skills, commands, CLAUDE.md, MEMORY.md, and system reminders. The API is stateless. No memory between messages. The full stack, replayed every time. These are the ghost tokens: invisible overhead that eats your context window before you type a word.
@@ -266,12 +279,12 @@ The path depends on how you installed. Set it once:
 
 ```bash
 # Auto-detect (works for both plugin and script/manual installs):
-if [ -f ~/.claude/skills/token-optimizer/scripts/measure.py ]; then
-  MEASURE_PY=~/.claude/skills/token-optimizer/scripts/measure.py
-else
-  MEASURE_PY=$(find ~/.claude/plugins/cache -path "*/token-optimizer/scripts/measure.py" 2>/dev/null | head -1)
-fi
-[ -z "$MEASURE_PY" ] || [ ! -f "$MEASURE_PY" ] && { echo "measure.py not found. Is Token Optimizer installed?"; exit 1; }
+MEASURE_PY=""
+for f in ~/.claude/skills/token-optimizer/scripts/measure.py \
+         ~/.claude/plugins/cache/*/token-optimizer/*/skills/token-optimizer/scripts/measure.py; do
+  [ -f "$f" ] && MEASURE_PY="$f" && break
+done
+[ -z "$MEASURE_PY" ] && { echo "measure.py not found. Is Token Optimizer installed?"; exit 1; }
 ```
 
 ```bash
@@ -291,6 +304,8 @@ The optimizer doesn't just audit your config once. It tracks how you actually us
 Two commands power this: `trends` for usage patterns and `health` for session hygiene. Both work from the CLI and appear as interactive tabs in the persistent dashboard (auto-refreshed after every session) and in the full audit dashboard.
 
 ### Automatic Collection
+
+See [Enable Session Tracking](#enable-session-tracking) above for quick setup.
 
 Add a SessionEnd hook and usage data collects itself. The setup command auto-detects measure.py's path regardless of install method:
 

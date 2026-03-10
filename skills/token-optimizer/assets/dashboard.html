@@ -1293,6 +1293,21 @@ input:checked + .slider:before {
   .dashboard-grid { grid-template-columns: 1fr; }
   .stat-row { grid-template-columns: 1fr; }
 }
+/* ========== HOOK TOGGLES ========== */
+.hook-toggle { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
+.hook-toggle input { opacity: 0; width: 0; height: 0; }
+.hook-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--c-border); border-radius: 24px; transition: 0.3s; }
+.hook-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background: var(--c-text-dim); border-radius: 50%; transition: 0.3s; }
+.hook-toggle input:checked + .hook-slider { background: var(--c-accent-cyan); }
+.hook-toggle input:checked + .hook-slider:before { transform: translateX(20px); background: var(--c-bg); }
+.hook-row { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3); border-bottom: 1px solid var(--c-border); }
+.hook-row:last-child { border-bottom: none; }
+.hook-info { flex: 1; }
+.hook-label { font-weight: 500; font-size: 15px; }
+.hook-desc { font-size: 13px; color: var(--c-text-dim); margin-top: 2px; }
+.hook-cmd-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--c-accent-cyan); color: var(--c-bg); padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; }
+.hook-cmd-toast.visible { opacity: 1; }
+.hook-partial { font-size: 12px; color: #ff9f43; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -1317,6 +1332,7 @@ window.__TOKEN_DATA__ = null;
         <a class="nav-item" data-view="trends">Trends</a>
         <a class="nav-item" data-view="health">Health</a>
         <a class="nav-item" data-view="coach">Coach</a>
+        <a class="nav-item" data-view="hooks">Hooks</a>
       </div>
     </div>
     <div class="user-profile">workspace: <i id="nav-date"></i></div>
@@ -1378,6 +1394,8 @@ window.__TOKEN_DATA__ = null;
     <div class="view" id="view-health"></div>
     <!-- Coach View -->
     <div class="view" id="view-coach"></div>
+    <!-- Hooks View -->
+    <div class="view" id="view-hooks"></div>
 
     <div class="main-footer">
       <span>Built by <a href="https://linkedin.com/in/alexgreensh" target="_blank" rel="noopener">Alex Greenshpun</a></span>
@@ -1612,6 +1630,7 @@ var DB = (function() {
     renderTrends();
     renderHealth();
     renderCoach();
+    renderHooks();
     updateRightPanel();
     bind();
 
@@ -2446,6 +2465,94 @@ var DB = (function() {
       '</div></div>';
 
     el.innerHTML = html;
+  }
+
+  function renderHooks() {
+    var el = document.getElementById('view-hooks');
+    if (!el) return;
+    var h = data.hooks;
+
+    var html = '<div class="section-header">' +
+      '<div class="label">Configuration</div>' +
+      '<h1>Hooks</h1>' +
+      '<p>Toggle features on and off. Click a toggle to copy the install or uninstall command.</p>' +
+      '</div>';
+
+    if (!h) {
+      html += '<div class="empty-state">Hook status not available. Regenerate dashboard: python3 measure.py dashboard</div>';
+      el.innerHTML = html;
+      return;
+    }
+
+    html += '<div class="card wide"><div class="card-header"><span>Installed Hooks</span></div>';
+
+    var hookKeys = ['session_end', 'smart_compact'];
+    hookKeys.forEach(function(key) {
+      var hook = h[key];
+      if (!hook) return;
+      var checked = hook.installed ? 'checked' : '';
+      var cmd = hook.installed ? hook.uninstall_cmd : hook.install_cmd;
+      html += '<div class="hook-row">' +
+        '<label class="hook-toggle">' +
+        '<input type="checkbox" ' + checked + ' data-hook="' + key + '" data-install="' + esc(hook.install_cmd) + '" data-uninstall="' + esc(hook.uninstall_cmd) + '">' +
+        '<span class="hook-slider"></span>' +
+        '</label>' +
+        '<div class="hook-info">' +
+        '<div class="hook-label">' + esc(hook.label) + '</div>' +
+        '<div class="hook-desc">' + esc(hook.description) + '</div>';
+      if (hook.partial) {
+        html += '<div class="hook-partial">Partially installed. Click to complete setup.</div>';
+      }
+      html += '</div></div>';
+    });
+
+    html += '</div>';
+
+    // How it works card
+    html += '<div class="card wide"><div class="card-header"><span>How It Works</span></div>' +
+      '<div style="padding:var(--s-3);color:var(--c-text-dim);font-size:14px;line-height:1.6;">' +
+      'Toggles copy the install or uninstall command to your clipboard. ' +
+      'Paste it into your terminal to apply. The dashboard is a static file and cannot modify your settings directly.' +
+      '<br><br>After running the command, regenerate the dashboard to update the toggle state: ' +
+      '<code style="background:var(--c-bg);padding:2px 6px;border-radius:4px;font-size:13px;">python3 measure.py dashboard</code>' +
+      '</div></div>';
+
+    el.innerHTML = html;
+
+    // Bind toggle clicks
+    el.querySelectorAll('.hook-toggle input').forEach(function(input) {
+      input.addEventListener('change', function(e) {
+        var isNowChecked = e.target.checked;
+        var cmd = isNowChecked ? e.target.dataset.install : e.target.dataset.uninstall;
+        copyHookCmd(cmd);
+        // Revert visual state (actual state only changes after running the command)
+        setTimeout(function() { e.target.checked = !isNowChecked; }, 1500);
+      });
+    });
+  }
+
+  function copyHookCmd(cmd) {
+    var toast = document.getElementById('hook-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'hook-toast';
+      toast.className = 'hook-cmd-toast';
+      document.body.appendChild(toast);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(cmd).then(function() {
+        toast.textContent = 'Command copied! Paste in terminal to apply.';
+        toast.classList.add('visible');
+        setTimeout(function() { toast.classList.remove('visible'); }, 2500);
+      });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = cmd; ta.style.cssText = 'position:fixed;left:-9999px';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); toast.textContent = 'Command copied! Paste in terminal to apply.'; toast.classList.add('visible'); setTimeout(function() { toast.classList.remove('visible'); }, 2500); }
+      catch(e) { toast.textContent = 'Copy failed. See console.'; console.log('Run this command:', cmd); toast.classList.add('visible'); setTimeout(function() { toast.classList.remove('visible'); }, 3000); }
+      document.body.removeChild(ta);
+    }
   }
 
   function updateRightPanel() {
