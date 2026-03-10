@@ -134,6 +134,25 @@ Every compaction event invalidates the prompt cache. Post-compaction, ALL contex
 
 **Expected savings**: 1-3 cache rebuilds avoided per long session = $2-15 in API costs
 
+**Compaction Timing Guide**:
+
+Compaction timing matters as much as frequency. Compact at *phase boundaries*, not mid-task:
+
+| When to compact | Why |
+|-----------------|-----|
+| After research/exploration, before execution | Bulky context served its purpose; the plan is the output |
+| After debugging, before next feature | Debug traces and hypothesis state pollute unrelated work |
+| After a failed approach, before retrying | Dead-end reasoning wastes context on the retry |
+| After completing a milestone (commit/merge) | Natural checkpoint; fresh context for fresh work |
+
+| When NOT to compact | Why |
+|---------------------|-----|
+| Mid-implementation | Losing file paths and partial state is costly to rebuild |
+| Mid-debugging | Losing hypothesis state forces re-investigation |
+| During multi-step operations | Breaks continuity across related steps |
+
+Rule of thumb: if you just *produced* something (a plan, a commit, a diagnosis), compact. If you're *in the middle* of producing something, hold.
+
 ---
 
 ## MODEL ROUTING STRATEGY (Highest-ROI Behavioral Change)

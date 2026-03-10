@@ -2445,6 +2445,24 @@ var DB = (function() {
       html += '</div>';
     }
 
+    // Compaction timing guide
+    var cg = c.compaction_guide;
+    if (cg) {
+      html += '<div class="card wide"><div class="card-header"><span>When to Compact</span><span class="label">Timing Guide</span></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s-3);padding:var(--s-3);">' +
+        '<div>' +
+        '<div style="font-weight:500;color:var(--c-accent-cyan);margin-bottom:var(--s-2);">Compact after</div>';
+      (cg.compact_after || []).forEach(function(item) {
+        html += '<div style="font-size:14px;color:var(--c-text-dim);padding:4px 0;">\u2705 ' + esc(item) + '</div>';
+      });
+      html += '</div><div>' +
+        '<div style="font-weight:500;color:#ff6b6b;margin-bottom:var(--s-2);">Avoid during</div>';
+      (cg.avoid_during || []).forEach(function(item) {
+        html += '<div style="font-size:14px;color:var(--c-text-dim);padding:4px 0;">\u274C ' + esc(item) + '</div>';
+      });
+      html += '</div></div></div>';
+    }
+
     // Coaching questions
     var questions = c.questions || [];
     if (questions.length > 0) {

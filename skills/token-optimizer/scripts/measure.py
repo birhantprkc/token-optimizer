@@ -2122,6 +2122,27 @@ def generate_coach_data(focus=None, components=None, trends=None):
         "focus_area": focus,
     }
 
+    # Add compaction timing guide when relevant
+    has_compaction_patterns = (
+        claude_tokens > 5000
+        or any(p["name"] in ("50-Skill Trap", "Skill Sprawl", "Heavy CLAUDE.md", "CLAUDE.md Novel", "Oversized MEMORY.md")
+               for p in patterns_bad)
+    )
+    if has_compaction_patterns:
+        result["compaction_guide"] = {
+            "compact_after": [
+                "Research/exploration phase",
+                "Debugging session",
+                "Failed approach",
+                "Completing a milestone (commit/merge)",
+            ],
+            "avoid_during": [
+                "Mid-implementation",
+                "Mid-debugging",
+                "Multi-step operations",
+            ],
+        }
+
     return result
 
 
@@ -4404,6 +4425,18 @@ def quality_analyzer(session_id=None, as_json=False):
             print(f"    triggering compaction, preserving your cache prefix.")
         print(f"    To reduce compactions: keep context lean, use Smart Compaction to")
         print(f"    preserve state when compaction does fire.")
+
+    # Phase-boundary compaction timing guide
+    if compactions > 0 or (total_waste > 5000 and score < 80):
+        print()
+        print(f"  When to compact (timing matters for cache preservation):")
+        print(f"    After research/exploration, before execution  -- bulky context, plan is the output")
+        print(f"    After debugging, before next feature           -- debug traces pollute unrelated work")
+        print(f"    After a failed approach, before retrying        -- clear dead-end reasoning")
+        print(f"    After completing a milestone (commit/merge)     -- natural checkpoint, fresh start")
+        print(f"    NOT mid-implementation                          -- losing file paths and partial state is costly")
+        print(f"    NOT mid-debugging                               -- losing hypothesis state forces re-investigation")
+        print(f"    NOT during multi-step operations                -- breaks continuity across related steps")
     print()
 
     return result
