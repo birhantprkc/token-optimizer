@@ -5513,19 +5513,23 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False):
     Skips analysis if cache is younger than throttle_seconds.
     Returns the quality score, or None if skipped/failed.
     """
-    # Throttle: skip if cache is recent enough
+    # Throttle: skip if cache is recent enough AND still on same session
     if QUALITY_CACHE_PATH.exists():
         try:
             age = time.time() - QUALITY_CACHE_PATH.stat().st_mtime
             if age < throttle_seconds:
-                if not quiet:
-                    # Still read and return cached score for warn check
-                    try:
-                        cached = json.loads(QUALITY_CACHE_PATH.read_text(encoding="utf-8"))
-                        return cached.get("score")
-                    except (json.JSONDecodeError, OSError):
-                        pass
-                return None
+                # Check for session boundary before honoring throttle
+                current_fp = _find_current_session_jsonl()
+                try:
+                    cached = json.loads(QUALITY_CACHE_PATH.read_text(encoding="utf-8"))
+                    if str(current_fp) == cached.get("session_file"):
+                        # Same session - throttle is valid
+                        if not quiet:
+                            return cached.get("score")
+                        return None
+                    # Different session - fall through to fresh analysis
+                except (json.JSONDecodeError, OSError):
+                    pass
         except OSError:
             pass
 
@@ -5545,6 +5549,7 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False):
     result["compactions"] = quality_data["compactions"]
     result["turns"] = len([m for m in quality_data["messages"] if m[1] == "user"])
     result["timestamp"] = datetime.now(timezone.utc).isoformat()
+    result["session_file"] = str(filepath)
 
     # Write cache atomically
     QUALITY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
