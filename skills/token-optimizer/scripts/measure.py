@@ -1525,23 +1525,23 @@ def generate_auto_recommendations(components, trends=None, days=30):
         if key.startswith("claude_md") and components[key].get("exists"):
             claude_tokens += components[key].get("tokens", 0)
             claude_lines += components[key].get("lines", 0)
-    if claude_tokens > 1200:
+    if claude_tokens > 6000:
         quick.append(
-            f"**Slim CLAUDE.md ({claude_tokens:,} tokens, target ~800)**: "
+            f"**Slim CLAUDE.md ({claude_tokens:,} tokens, target ~4,500 / ~300 lines)**: "
             f"Everything in CLAUDE.md loads every single message you send. "
-            f"This is prime real estate, only the most critical instructions belong here.\n"
+            f"Anthropic recommends under ~500 lines. The aggressive optimization target is ~300 lines (~4,500 tokens).\n"
             f"  Move to skills (loaded on-demand, ~100 tokens in menu): workflow guides, coding standards, "
             f"deployment procedures, detailed templates. "
             f"Move to reference files (zero cost until read): API docs, config examples, architecture notes. "
             f"Keep in CLAUDE.md: identity/personality, critical behavioral rules, key file paths, "
             f"and short pointers to skills and references. "
             f"Don't delete content, reorganize it. A 2-line pointer to a skill costs 100x less than "
-            f"50 lines of inline instructions. ~{claude_tokens - 800:,} tokens recoverable."
+            f"the same content inline. ~{claude_tokens - 4500:,} tokens recoverable."
         )
-    elif claude_tokens > 800:
+    elif claude_tokens > 5000:
         medium.append(
             f"**Consider slimming CLAUDE.md ({claude_tokens:,} tokens)**: "
-            f"Your CLAUDE.md is above the ~800 token target but not critically large. "
+            f"Your CLAUDE.md is above the ~4,500 token (~300 line) optimized target but not critically large. "
             f"Review for any sections that could become skills or reference files. "
             f"Focus on content that's only relevant for specific workflows."
         )
@@ -1895,29 +1895,29 @@ def generate_coach_data(focus=None, components=None, trends=None):
     for key in components:
         if key.startswith("claude_md") and components[key].get("exists"):
             claude_tokens += components[key].get("tokens", 0)
-    if claude_tokens > 1500:
+    if claude_tokens > 6000:
         patterns_bad.append({
             "name": "CLAUDE.md Novel",
             "severity": "high",
-            "detail": f"CLAUDE.md chain totals {claude_tokens:,} tokens (target: <800)",
+            "detail": f"CLAUDE.md chain totals {claude_tokens:,} tokens (target: ~4,500 / ~300 lines)",
             "fix": "Move workflows to skills, standards to reference files",
-            "savings": f"~{claude_tokens - 800:,} tokens per message",
+            "savings": f"~{claude_tokens - 4500:,} tokens per message",
         })
         score -= 15
         questions.append("Which CLAUDE.md sections do you reference most? Could any become skills?")
-    elif claude_tokens > 800:
+    elif claude_tokens > 5000:
         patterns_bad.append({
             "name": "Heavy CLAUDE.md",
             "severity": "medium",
-            "detail": f"CLAUDE.md at {claude_tokens:,} tokens (target: <800)",
+            "detail": f"CLAUDE.md at {claude_tokens:,} tokens (target: ~4,500 / ~300 lines)",
             "fix": "Review for content that could move to skills",
-            "savings": f"~{claude_tokens - 800:,} tokens per message",
+            "savings": f"~{claude_tokens - 4500:,} tokens per message",
         })
         score -= 8
     elif claude_tokens > 0:
         patterns_good.append({
             "name": "Lean CLAUDE.md",
-            "detail": f"{claude_tokens:,} tokens (under 800 target)",
+            "detail": f"{claude_tokens:,} tokens (under ~4,500 target)",
         })
 
     # Check MEMORY.md

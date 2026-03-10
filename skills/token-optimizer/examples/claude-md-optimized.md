@@ -2,7 +2,7 @@
 #
 # This example shows how to structure CLAUDE.md for prompt caching.
 # Static content FIRST (cacheable), volatile content LAST.
-# Target: <800 tokens (~50-60 lines)
+# Anthropic guidance: under ~500 lines. Aggressive target: ~300 lines (~4,500 tokens).
 
 # ============================================================
 # STATIC (rarely changes, cached by prompt caching)

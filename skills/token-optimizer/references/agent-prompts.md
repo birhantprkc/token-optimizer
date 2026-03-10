@@ -328,6 +328,9 @@ Output file: {COORD_PATH}/audit/advanced.md
    - Check permissions.deny in ~/.claude/settings.json (global)
    - Check permissions.deny in .claude/settings.json (project)
    - If no Read() deny rules found: flag as HIGH PRIORITY
+   - If a `.claudeignore` file exists: flag as DEPRECATED. `.claudeignore` is no longer
+     supported. Recommend migrating patterns to `permissions.deny` rules in settings.json.
+     Never recommend creating a `.claudeignore` file.
 
 4. Token monitoring:
    - Check if SessionEnd hook is installed for `measure.py collect` (the skill's own analytics)

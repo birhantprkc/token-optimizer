@@ -63,10 +63,11 @@ MESSAGE SEND
 | PHASE 4: User Configuration (VARIABLE)             |
 |----------------------------------------------------|
 | ALWAYS LOADED (every message):                      |
-| - ~/.claude/CLAUDE.md          ~800-2,000 tokens    |
-| - ~/.claude/projects/.../      ~600-1,400 tokens    |
-|   MEMORY.md                                         |
-| - [repo]/CLAUDE.md             ~10-500 tokens       |
+| - ~/.claude/CLAUDE.md          ~2,000-5,000 tokens  |
+|   (target: ~4,500 / ~300 lines)                     |
+| - ~/.claude/projects/.../      ~1,500-3,000 tokens  |
+|   MEMORY.md (200-line auto-load cap)                |
+| - [repo]/CLAUDE.md             ~10-1,500 tokens     |
 |                                                     |
 | ** OPTIMIZATION TARGET: These load EVERY message    |
 +-----------------------------------------------------+
@@ -98,18 +99,18 @@ RESPONSE GENERATED
 
 ## Token Budget Breakdown (Typical Setup)
 
-### Well-Optimized Setup (~20K baseline, Tool Search active)
+### Well-Optimized Setup (~23K baseline, Tool Search active)
 ```
 Core system + tools: 15,000 tokens
 MCP (ToolSearch +      1,000 tokens  (500 base + ~30 tools x 15)
   deferred names):
 Skills (20):           2,000 tokens
 Commands (10):           500 tokens
-CLAUDE.md:               800 tokens
-MEMORY.md:               400 tokens
+CLAUDE.md:             2,500 tokens  (~170 lines, well under 300-line target)
+MEMORY.md:             1,500 tokens  (~100 lines, well under 200-line cap)
 System reminders:      1,000 tokens
 ---------------------------------
-BASELINE:            ~20,700 tokens (10% of 200K)
+BASELINE:            ~23,500 tokens (12% of 200K)
 ```
 
 ### Unaudited Setup (~43K consumed, Tool Search active)
@@ -127,8 +128,8 @@ CONSUMED:            ~43,000 tokens (22% of 200K)
 = UNAVAILABLE:       ~76,000 tokens (38% of 200K)
 ```
 
-**Difference**: ~22,300 tokens consumed per message = 2.1x overhead vs optimized
-**Total unavailable difference**: ~56,000 tokens (38% vs 10% for optimized with autocompact off)
+**Difference**: ~19,500 tokens consumed per message = 1.8x overhead vs optimized
+**Total unavailable difference**: ~52,500 tokens (38% vs 15% for optimized with autocompact off)
 **Note**: Pre-Tool-Search (2025), MCP alone could add 40-80K tokens. Tool Search (default since Jan 2026) reduced this by ~85%. This "unaudited" baseline is a power user who has been adding to their config for 3+ months without auditing. The autocompact buffer (33K) is reserved on every fresh session when autocompact is enabled (the default).
 
 ---
@@ -139,8 +140,8 @@ CONSUMED:            ~43,000 tokens (22% of 200K)
 
 | Component | Control Level | Optimization Method |
 |-----------|---------------|---------------------|
-| **CLAUDE.md** | Full | Slim to <800 tokens. Move content to skills. Apply tiered architecture. |
-| **MEMORY.md** | Full | Remove duplication with CLAUDE.md. Condense verbose sections. |
+| **CLAUDE.md** | Full | Slim to ~4,500 tokens (~300 lines). Move content to skills. Apply tiered architecture. |
+| **MEMORY.md** | Full | Stay under 200-line auto-load cap (~3,000 tokens). Remove duplication with CLAUDE.md. |
 | **Project CLAUDE.md** | Full | Keep project-specific only. No duplication with global. |
 
 ### MEDIUM IMPACT (Menu Overhead)
@@ -416,13 +417,13 @@ See `optimization-checklist.md` for the full Model Routing Strategy section with
 | Component | Unaudited Typical | Optimized Target | Savings | Impact x Effort |
 |-----------|-------------------|------------------|---------|-----------------|
 | MCP tools | 9,000 tokens | 6,000 tokens | -3,000 | HIGH x MEDIUM |
-| CLAUDE.md | 3,500 tokens | 800 tokens | -2,700 | HIGH x LOW |
+| CLAUDE.md | 3,500 tokens | 2,500 tokens (~170 lines) | -1,000 | HIGH x LOW |
 | Skills (60 -> 30) | 6,000 tokens | 3,000 tokens | -3,000 | MEDIUM x MEDIUM |
-| MEMORY.md | 3,500 tokens | 1,000 tokens | -2,500 | HIGH x LOW |
+| MEMORY.md | 3,500 tokens | 2,000 tokens (~130 lines) | -1,500 | HIGH x LOW |
 | System reminders | 3,000 tokens | 1,000 tokens | -2,000 | MEDIUM x LOW |
 | Commands (60 -> 25) | 3,000 tokens | 1,200 tokens | -1,800 | LOW x LOW |
 
-**Start here**: CLAUDE.md + MEMORY.md (30 min effort, ~5,200 token savings)
+**Start here**: CLAUDE.md + MEMORY.md (30 min effort, ~2,500 token savings)
 
 ---
 
@@ -449,30 +450,30 @@ Core system + tools: 15,000 tokens (fixed)
 MCP tools:            6,000 tokens (pruned unused servers)
 Skills (~30):         3,000 tokens (archived 30)
 Commands (~25):       1,200 tokens (archived 35)
-CLAUDE.md:              800 tokens (progressive disclosure)
-MEMORY.md:            1,000 tokens (dedup'd with CLAUDE.md)
+CLAUDE.md:            2,500 tokens (~170 lines, under 300-line target)
+MEMORY.md:            2,000 tokens (~130 lines, under 200-line cap)
 System reminders:     1,000 tokens (permissions.deny)
 ---------------------------------
-CONSUMED:           ~28,000 tokens (14% of 200K)
+CONSUMED:           ~30,700 tokens (15% of 200K)
 + Autocompact buffer: 33,000 tokens (16.5%, reserved)
-= UNAVAILABLE:      ~61,000 tokens (30% of 200K)
+= UNAVAILABLE:      ~63,700 tokens (32% of 200K)
 
-CONFIG SAVINGS: ~15,000 tokens/msg (35% reduction in consumed overhead)
-CONTEXT RECOVERED: 38% -> 30% unavailable (8% of window freed)
+CONFIG SAVINGS: ~12,300 tokens/msg (29% reduction in consumed overhead)
+CONTEXT RECOVERED: 38% -> 32% unavailable (6% of window freed)
 ```
 
-**At 100 messages/day, that's 1.5M tokens of overhead saved daily.**
+**At 100 messages/day, that's 1.2M tokens of overhead saved daily.**
 
 **With autocompact OFF** (advanced users who manage /compact manually):
 ```
-CONSUMED:           ~28,000 tokens (14% of 200K)
+CONSUMED:           ~30,700 tokens (15% of 200K)
 + No buffer:               0 tokens
-= UNAVAILABLE:      ~28,000 tokens (14% of 200K)
+= UNAVAILABLE:      ~30,700 tokens (15% of 200K)
 
-TOTAL RECOVERY vs unoptimized with buffer: 38% -> 14% = 24% of context freed
+TOTAL RECOVERY vs unoptimized with buffer: 38% -> 15% = 23% of context freed
 ```
 
-Prompt caching means the dollar savings are modest (cached tokens cost 10% of base). But the context window space savings are real: you hit compaction later, quality stays higher longer, and each subagent inherits 15,000 fewer tokens of overhead.
+Prompt caching means the dollar savings are modest (cached tokens cost 10% of base). But the context window space savings are real: you hit compaction later, quality stays higher longer, and each subagent inherits ~12,000 fewer tokens of overhead.
 
 **Plus behavioral changes** (compound across every message):
 - Agent model selection (haiku for data): 50-75% savings on automation

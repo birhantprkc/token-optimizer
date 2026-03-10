@@ -28,7 +28,7 @@ Comprehensive checklist of ALL optimization techniques.
 ---
 
 ### 3. CLAUDE.md Consolidation
-**Target**: Slim to <800 tokens (~50-60 lines). Anthropic recommends CLAUDE.md under ~500 lines (code.claude.com/docs/en/costs). That official guidance is the minimum bar. Our <800 token target is the optimized ceiling.
+**Target**: Under ~300 lines (~4,500 tokens). Anthropic recommends CLAUDE.md under ~500 lines (code.claude.com/docs/en/costs). The aggressive optimization target is ~300 lines (~4,500 tokens at ~15 tokens/line for prose).
 
 **Actions**:
 - [ ] Remove content that belongs in skills/commands (workflows, detailed configs)
@@ -38,11 +38,11 @@ Comprehensive checklist of ALL optimization techniques.
 - [ ] Apply tiered architecture (see below)
 
 **Tiered Architecture Pattern**:
-- **Tier 1 (always loaded, <800 tokens)**: Identity, critical rules, key paths, personality ONE-LINER
+- **Tier 1 (always loaded, ~300 lines / ~4,500 tokens)**: Identity, critical rules, key paths, personality ONE-LINER
 - **Tier 2 (skill/command, loaded on-demand)**: Workflows, domain docs, tool configs
 - **Tier 3 (file reference, explicit only)**: Full guides, templates, detailed standards
 
-**Expected savings**: 400-700 tokens/msg
+**Expected savings**: 1,000-3,000+ tokens/msg (depends on starting size)
 
 ---
 
@@ -405,8 +405,8 @@ See `examples/claude-md-optimized.md` for the pattern.
 **Target**: Different configs for different projects
 
 **Pattern**:
-- Global `~/.claude/CLAUDE.md`: Identity, personality, core rules (~500 tokens)
-- Project `[repo]/CLAUDE.md`: Project-specific context, tech stack, conventions (~300 tokens)
+- Global `~/.claude/CLAUDE.md`: Identity, personality, core rules (~2,000-3,000 tokens, under 200 lines)
+- Project `[repo]/CLAUDE.md`: Project-specific context, tech stack, conventions (~1,000-1,500 tokens, under 100 lines)
 
 **Why**: Global CLAUDE.md loads for ALL projects. Project CLAUDE.md loads only in that directory. Keep global minimal.
 
@@ -508,9 +508,9 @@ Also track with `/cost` at end of each session and `measure.py trends` for histo
 ├─ MCP server instructions:    ~50-100 tokens per server
 ├─ Skills frontmatter:          ~100 tokens x skill count
 ├─ Commands frontmatter:        ~50 tokens x command count
-├─ CLAUDE.md (global):          Variable (target: <800)
-├─ Project CLAUDE.md:           Variable (target: <300)
-├─ MEMORY.md:                   Variable (target: <600)
+├─ CLAUDE.md (global):          Variable (target: ~4,500 tokens / ~300 lines)
+├─ Project CLAUDE.md:           Variable (target: <300 tokens)
+├─ MEMORY.md:                   Variable (200-line auto-load cap, ~3,000 tokens)
 ├─ System reminders:            ~2,000 tokens (auto-injected, variable)
 └─ Message + history:           Variable
 ```
@@ -537,15 +537,15 @@ Also track with `/cost` at end of each session and `measure.py trends` for histo
 - **= Total unavailable: ~76,000 tokens (38% of 200K)**
 
 **Config changes** (what the optimizer implements):
-1. CLAUDE.md: 3,500 -> 800 tokens (progressive disclosure)
-2. MEMORY.md: 3,500 -> 1,000 tokens (dedup with CLAUDE.md)
+1. CLAUDE.md: 3,500 -> 2,500 tokens (progressive disclosure, under 300-line target)
+2. MEMORY.md: 3,500 -> 2,000 tokens (dedup with CLAUDE.md, under 200-line cap)
 3. Skills: 60 -> 30 (30 archived, ~3,000 tokens saved)
 4. Commands: 60 -> 25 (35 archived, ~1,800 tokens saved)
 5. MCP: pruned unused servers (~3,000 tokens saved)
 6. permissions.deny rules added (~2,000 tokens saved from file exclusion)
-- **Config savings: ~15,000 tokens/msg (35% reduction in consumed overhead)**
-- **After consumed: ~28,000 tokens/msg (14% of 200K)**
-- **After unavailable (with buffer): ~61,000 tokens (30% of 200K)**
+- **Config savings: ~12,300 tokens/msg (29% reduction in consumed overhead)**
+- **After consumed: ~30,700 tokens/msg (15% of 200K)**
+- **After unavailable (with buffer): ~63,700 tokens (32% of 200K)**
 
 **Behavioral changes** (what the optimizer teaches):
 - Agent model selection (haiku for data): 50-75% on automation
