@@ -5504,7 +5504,32 @@ def setup_smart_compact(dry_run=False, uninstall=False, status_only=False):
 
 
 QUALITY_CACHE_DIR = CLAUDE_DIR / "token-optimizer"
-QUALITY_CACHE_PATH = QUALITY_CACHE_DIR / "quality-cache.json"
+QUALITY_CACHE_PATH = QUALITY_CACHE_DIR / "quality-cache.json"  # legacy global fallback
+
+
+def _quality_cache_path_for(filepath=None):
+    """Return per-session cache path if filepath given, else global fallback."""
+    if filepath:
+        uuid = Path(filepath).stem  # e.g. "abc123" from "abc123.jsonl"
+        return QUALITY_CACHE_DIR / f"quality-cache-{uuid}.json"
+    return QUALITY_CACHE_PATH
+
+
+def _write_quality_cache(cache_path, result):
+    """Atomically write result dict to cache_path. Returns True on success."""
+    QUALITY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=str(QUALITY_CACHE_DIR), suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            json.dump(result, f)
+        os.replace(tmp_path, str(cache_path))
+        return True
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        return False
 
 
 def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_jsonl=None):
@@ -5522,21 +5547,21 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
     else:
         filepath = _find_current_session_jsonl()
 
-    # Throttle: skip if cache is recent enough AND still on same session
-    if QUALITY_CACHE_PATH.exists():
+    # Per-session cache: each session has its own file to avoid cross-session pollution
+    cache_path = _quality_cache_path_for(filepath)
+
+    # Throttle: skip if per-session cache is recent enough
+    if cache_path.exists():
         try:
-            age = time.time() - QUALITY_CACHE_PATH.stat().st_mtime
+            age = time.time() - cache_path.stat().st_mtime
             if age < throttle_seconds:
-                try:
-                    cached = json.loads(QUALITY_CACHE_PATH.read_text(encoding="utf-8"))
-                    if str(filepath) == cached.get("session_file"):
-                        # Same session - throttle is valid
-                        if not quiet:
-                            return cached.get("score")
-                        return None
-                    # Different session - fall through to fresh analysis
-                except (json.JSONDecodeError, OSError):
-                    pass
+                if not quiet:
+                    try:
+                        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                        return cached.get("score")
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                return None
         except OSError:
             pass
 
@@ -5558,17 +5583,7 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "session_file": str(filepath),
         }
-        QUALITY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        try:
-            fd, tmp_path = tempfile.mkstemp(dir=str(QUALITY_CACHE_DIR), suffix=".json")
-            with os.fdopen(fd, "w") as f:
-                json.dump(result, f)
-            os.replace(tmp_path, str(QUALITY_CACHE_PATH))
-        except OSError:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        _write_quality_cache(cache_path, result)
         return 100
 
     result = compute_quality_score(quality_data)
@@ -5579,18 +5594,7 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
     result["timestamp"] = datetime.now(timezone.utc).isoformat()
     result["session_file"] = str(filepath)
 
-    # Write cache atomically
-    QUALITY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        fd, tmp_path = tempfile.mkstemp(dir=str(QUALITY_CACHE_DIR), suffix=".json")
-        with os.fdopen(fd, "w") as f:
-            json.dump(result, f)
-        os.replace(tmp_path, str(QUALITY_CACHE_PATH))
-    except OSError:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    if not _write_quality_cache(cache_path, result):
         return None
 
     return result.get("score")
