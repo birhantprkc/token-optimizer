@@ -52,6 +52,8 @@ DASHBOARD_PATH = SNAPSHOT_DIR / "dashboard.html"
 
 # Tokens per skill frontmatter (loaded at startup)
 TOKENS_PER_SKILL_APPROX = 100
+# Tool definition wrapper overhead per skill (boilerplate Claude adds around each skill entry)
+SKILL_WRAPPER_OVERHEAD = 35
 # Tokens per command frontmatter (loaded at startup)
 TOKENS_PER_COMMAND_APPROX = 50
 # Tokens per MCP deferred tool name in Tool Search menu
@@ -82,7 +84,7 @@ def estimate_tokens_from_frontmatter(filepath):
             end = content.find("---", 3)
             if end > 0:
                 frontmatter = content[3:end]
-                return max(int(len(frontmatter) / CHARS_PER_TOKEN), 20)
+                return max(int(len(frontmatter) / CHARS_PER_TOKEN) + SKILL_WRAPPER_OVERHEAD, 50)
         # No frontmatter found, use rough estimate
         return TOKENS_PER_SKILL_APPROX
     except (FileNotFoundError, PermissionError, OSError):
@@ -112,7 +114,8 @@ def cwd_to_project_dir_name():
     e.g., /Users/alex/myproject -> -Users-alex-myproject
     """
     cwd = str(Path.cwd())
-    return "-" + cwd.replace("/", "-").lstrip("-")
+    # Claude Code normalizes underscores to hyphens in project dir names
+    return "-" + cwd.replace("/", "-").replace("_", "-").lstrip("-")
 
 
 def find_projects_dir():
@@ -485,7 +488,7 @@ def measure_components():
                 fm_tokens = estimate_tokens_from_frontmatter(skill_md)
                 skill_tokens += fm_tokens
                 desc_len = _get_frontmatter_description_length(skill_md)
-                if desc_len > 200:
+                if desc_len > 120:
                     verbose_skills.append({
                         "name": item.name,
                         "description_chars": desc_len,
@@ -918,7 +921,7 @@ def print_snapshot_summary(snapshot):
     verbose_count = quality.get("verbose_count", 0)
     if verbose_count > 0:
         names = [s["name"] for s in quality.get("verbose_skills", [])]
-        print(f"  Verbose skill descriptions (>200 chars): {verbose_count} ({', '.join(names[:5])}{'...' if verbose_count > 5 else ''})")
+        print(f"  Verbose skill descriptions (>120 chars): {verbose_count} ({', '.join(names[:5])}{'...' if verbose_count > 5 else ''})")
 
 
 def compare_snapshots():
@@ -1845,17 +1848,20 @@ def generate_auto_recommendations(components, trends=None, days=30):
         )
 
     # --- Rule 3: Unused skills (requires trends data) ---
+    # Use actual measured avg if available, else fallback to constant
+    _si = components.get("skills", {})
+    _actual_avg = _si.get("tokens", 0) // max(_si.get("count", 1), 1) if _si.get("count", 0) > 0 else TOKENS_PER_SKILL_APPROX
     if trends:
         never_used = trends.get("skills", {}).get("never_used", [])
         installed_count = trends.get("skills", {}).get("installed_count", 0)
         if len(never_used) >= 5:
-            overhead = len(never_used) * TOKENS_PER_SKILL_APPROX
+            overhead = len(never_used) * _actual_avg
             skill_list = ", ".join(sorted(never_used)[:15])
             if len(never_used) > 15:
                 skill_list += f", ... and {len(never_used) - 15} more"
             quick.append(
                 f"**Archive {len(never_used)} unused skills ({len(never_used)} of {installed_count} never used in {days} days)**: "
-                f"Each installed skill costs ~100 tokens in the startup menu, every session, whether you use it or not. "
+                f"Each installed skill costs ~{_actual_avg} tokens in the startup menu, every session, whether you use it or not. "
                 f"These {len(never_used)} skills cost ~{overhead:,} tokens/session for zero benefit.\n"
                 f"  Skills: {skill_list}\n"
                 f"  Archive by moving to ~/.claude/_backups/skills-archived-$(date +%Y%m%d)/ (NOT inside skills/). "
@@ -1867,13 +1873,69 @@ def generate_auto_recommendations(components, trends=None, days=30):
                 f"~{overhead:,} tokens recoverable."
             )
         elif len(never_used) >= 2:
-            overhead = len(never_used) * TOKENS_PER_SKILL_APPROX
+            overhead = len(never_used) * _actual_avg
             skill_list = ", ".join(sorted(never_used))
             medium.append(
                 f"**Review {len(never_used)} unused skills**: "
                 f"These skills haven't been invoked in {days} days: {skill_list}. "
                 f"Consider archiving to ~/.claude/skills/_archived/. ~{overhead:,} tokens recoverable."
             )
+
+    # --- Rule 3a: Skills audit fallback (no trends data) ---
+    skill_info = components.get("skills", {})
+    skill_count = skill_info.get("count", 0)
+    skill_tokens = skill_info.get("tokens", 0)
+    avg_per_skill = skill_tokens // max(skill_count, 1)
+    if not trends and skill_count > 10:
+        est_archive = skill_count - 10
+        est_savings = est_archive * avg_per_skill
+        medium.append(
+            f"**Review {skill_count} skills ({skill_tokens:,} tokens, no usage data)**: "
+            f"You have {skill_count} skills but no session data to determine which are unused. "
+            f"Each skill costs ~{avg_per_skill} tokens at startup whether you use it or not.\n"
+            f"  Install the SessionEnd hook (`python3 measure.py setup-hook`) to enable usage-based "
+            f"recommendations. Meanwhile, manually review: do you use all {skill_count} regularly? "
+            f"Archiving {est_archive} would free ~{est_savings:,} tokens/session. "
+            f"~{est_savings:,} tokens recoverable."
+        )
+
+    # --- Rule 3b: Aggregate skill token budget ---
+    if skill_tokens > 2500:
+        totals = calculate_totals(components)
+        ctrl = totals.get("controllable_tokens", 1)
+        pct_of_ctrl = skill_tokens / max(ctrl, 1) * 100
+        bucket = quick if skill_tokens > 4000 else medium
+        bucket.append(
+            f"**Skills consume {skill_tokens:,} tokens/session ({pct_of_ctrl:.0f}% of controllable overhead)**: "
+            f"{skill_count} skills at ~{avg_per_skill} tokens each. This loads every session whether "
+            f"you invoke these skills or not.\n"
+            f"  Review your skill inventory. Archive unused skills to ~/.claude/_backups/skills-archived/. "
+            f"Tighten verbose descriptions (target: 80 chars). "
+            f"Even trimming {skill_count // 3} skills saves ~{(skill_count // 3) * avg_per_skill:,} tokens. "
+            f"~{(skill_count // 3) * avg_per_skill:,} tokens recoverable."
+        )
+
+    # --- Rule 0: Startup overhead as % of context window ---
+    totals_r0 = calculate_totals(components)
+    total_overhead = totals_r0.get("estimated_total", 0)
+    context_window = detect_context_window()
+    overhead_pct = total_overhead / max(context_window, 1) * 100
+    controllable_r0 = totals_r0.get("controllable_tokens", 0)
+    target_tokens = context_window // 10
+    if overhead_pct > 15:
+        quick.append(
+            f"**Startup overhead is {overhead_pct:.1f}% of context window ({total_overhead:,} of {context_window:,} tokens)**: "
+            f"Every message re-sends {total_overhead:,} tokens before your actual conversation. "
+            f"Of that, {controllable_r0:,} tokens are controllable.\n"
+            f"  Target: under 10% ({target_tokens:,} tokens). "
+            f"~{total_overhead - target_tokens:,} tokens recoverable."
+        )
+    elif overhead_pct > 10:
+        medium.append(
+            f"**Startup overhead at {overhead_pct:.1f}% of context ({total_overhead:,} tokens)**: "
+            f"Consider trimming controllable overhead ({controllable_r0:,} tokens) to get under 10%. "
+            f"~{total_overhead - target_tokens:,} tokens recoverable."
+        )
 
     # --- Rule 4: Missing file exclusion rules ---
     exclusion = components.get("file_exclusion", {})
@@ -1894,17 +1956,27 @@ def generate_auto_recommendations(components, trends=None, days=30):
     # --- Rule 5: Verbose skill descriptions ---
     quality = components.get("skill_frontmatter_quality", {})
     verbose = quality.get("verbose_skills", [])
-    if len(verbose) >= 3:
-        names = [s["name"] for s in verbose[:10]]
+    very_verbose = [s for s in verbose if s.get("description_chars", 0) > 200]
+    moderate_verbose = [s for s in verbose if 120 < s.get("description_chars", 0) <= 200]
+    if very_verbose:
+        names = [s["name"] for s in very_verbose[:10]]
+        est_waste = sum(int((s["description_chars"] - 80) / CHARS_PER_TOKEN) for s in very_verbose)
+        quick.append(
+            f"**Tighten {len(very_verbose)} bloated skill descriptions (>200 chars)**: "
+            f"{', '.join(names)}{'...' if len(very_verbose) > 10 else ''}. "
+            f"Target: under 80 characters. The description field loads every session.\n"
+            f"  Move detailed usage instructions into the SKILL.md body (loaded only when invoked). "
+            f"~{est_waste:,} tokens recoverable."
+        )
+    if moderate_verbose:
+        names = [s["name"] for s in moderate_verbose[:10]]
+        est_waste = sum(int((s["description_chars"] - 80) / CHARS_PER_TOKEN) for s in moderate_verbose)
         medium.append(
-            f"**Tighten {len(verbose)} verbose skill descriptions**: "
-            f"These skills have descriptions over 200 characters in their SKILL.md frontmatter: "
-            f"{', '.join(names)}{'...' if len(verbose) > 10 else ''}. "
+            f"**Tighten {len(moderate_verbose)} verbose skill descriptions (120-200 chars, target 80)**: "
+            f"{', '.join(names)}{'...' if len(moderate_verbose) > 10 else ''}. "
             f"The description field loads every session as part of the skill menu.\n"
             f"  Tighten each to under 80 characters while keeping the core trigger phrase. "
-            f"The description helps Claude decide when to suggest the skill, so keep it specific: "
-            f"'Build client audit sites with editorial design' is better than a full paragraph. "
-            f"Move detailed usage instructions into the SKILL.md body (loaded only when invoked)."
+            f"~{est_waste:,} tokens recoverable."
         )
 
     # --- Rule 6: High command count ---

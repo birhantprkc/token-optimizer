@@ -1572,7 +1572,9 @@ function getComponentDetails(data) {
     {
       key: 'memory_md', name: 'MEMORY.md',
       tokens: c.memory_md ? c.memory_md.tokens : 0,
-      sub: (c.memory_md ? c.memory_md.lines : '?') + ' lines loaded every session',
+      sub: (c.memory_md && c.memory_md.exists !== false)
+        ? c.memory_md.lines + ' lines loaded every session'
+        : 'Not configured. Auto-memory is off or no project match.',
       what: 'Auto-memory file loaded into every conversation context. Contains accumulated patterns, decisions, and system notes. Lines after 200 are truncated but still counted.',
       top: [], issues: [],
       related: [
@@ -1748,13 +1750,15 @@ var DB = (function() {
     vals.push(c.core_system ? c.core_system.tokens : 0);
     var maxV = Math.max.apply(null, vals) || 1;
     var barLabels = ['CLAUDE.md', 'MEMORY.md', 'Skills', 'Commands', 'MCP Tools', 'Core System'];
+    var memoryExists = c.memory_md && c.memory_md.exists !== false;
     var barsHtml = vals.map(function(v, i) {
       var w = Math.max(3, (v / maxV) * 100);
       var fixedClass = i === vals.length - 1 ? ' fixed' : '';
+      var valText = (i === 1 && !memoryExists) ? '—' : fn(v) + ' tok';
       return '<div class="bar-row">' +
         '<span class="bar-label">' + barLabels[i] + '</span>' +
         '<div class="bar-track"><div class="bar-fill' + fixedClass + '" style="width:' + w + '%"></div></div>' +
-        '<span class="bar-value">' + fn(v) + ' tok</span>' +
+        '<span class="bar-value">' + valText + '</span>' +
         '</div>';
     }).join('');
     document.getElementById('chart-bars').innerHTML = barsHtml;
@@ -1775,9 +1779,9 @@ var DB = (function() {
       document.getElementById('potential-desc').textContent =
         fn(ctrl) + ' of your ' + fn(total) + ' tokens are things you can change. Run /token-optimizer for a full audit with specific savings estimates.';
     } else {
-      document.getElementById('stat-potential').innerHTML = '0 <span class="mini-label">tokens recoverable</span>';
+      document.getElementById('stat-potential').innerHTML = fn(ctrl) + ' <span class="mini-label">controllable tokens</span>';
       document.getElementById('potential-desc').textContent =
-        'Your setup looks clean. No optimizations identified.';
+        fn(ctrl) + ' of your ' + fn(total) + ' tokens are controllable. No specific token-saving optimizations identified, but check the behavioral recommendations below.';
     }
 
     // Component cards (expandable)
@@ -1788,7 +1792,7 @@ var DB = (function() {
         '<div class="component-card-header">' +
         '<span class="cc-name">' + esc(comp.name) + '</span>' +
         '<span class="cc-right">' +
-        '<span class="cc-tokens">' + fn(comp.tokens) + ' tokens</span>' +
+        '<span class="cc-tokens">' + (comp.key === 'memory_md' && comp.tokens === 0 && c.memory_md && c.memory_md.exists === false ? '—' : fn(comp.tokens) + ' tokens') + '</span>' +
         '<span class="chevron">&#9662;</span></span></div>' +
         '<div class="component-card-sub">' + esc(comp.sub) + '</div>' +
         '<div class="component-card-detail" id="comp-detail-' + ci + '">' +
