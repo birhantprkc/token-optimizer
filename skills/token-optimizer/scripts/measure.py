@@ -5,10 +5,14 @@ Captures real token counts from Claude Code session logs + file-level estimates.
 Used by Token Optimizer skill in Phase 0 (before) and Phase 5 (after).
 
 Usage:
+    python3 measure.py quick              # Quick scan: overhead + degradation risk + top offenders
+    python3 measure.py quick --json       # Machine-readable quick scan
+    python3 measure.py doctor             # Health check: verify all components
+    python3 measure.py drift              # Drift report: compare against last snapshot
+    python3 measure.py report             # Full standalone report
     python3 measure.py snapshot before    # Save pre-optimization snapshot
     python3 measure.py snapshot after     # Save post-optimization snapshot
     python3 measure.py compare            # Compare before vs after
-    python3 measure.py report             # Full standalone report
     python3 measure.py dashboard                         # Standalone dashboard (Trends + Health)
     python3 measure.py dashboard --coord-path /tmp/...   # Full dashboard (after audit)
     python3 measure.py dashboard --serve [--port 9000]   # Serve over HTTP (headless)
@@ -22,6 +26,9 @@ Usage:
     python3 measure.py coach --focus skills # Focus on skill optimization
     python3 measure.py collect             # Collect sessions into SQLite DB
     python3 measure.py collect --quiet     # Silent mode (for SessionEnd hook)
+
+    Global flags:
+    --context-size N                      # Override context window (e.g., 1000000)
 
 Snapshots are saved to SNAPSHOT_DIR (default: ~/.claude/_backups/token-optimizer/)
 
@@ -64,6 +71,13 @@ TOKENS_PER_EAGER_TOOL = 150
 AVG_TOOLS_PER_SERVER = 10
 # Overhead per CLAUDE.md file injection (XML wrapper + headers + disclaimer)
 CLAUDE_MD_INJECTION_OVERHEAD = 75
+
+
+def _fmt_context_window(size):
+    """Format context window size for display (e.g., '200K', '1M')."""
+    if size >= 1_000_000:
+        return f"{size / 1_000_000:.0f}M" if size % 1_000_000 == 0 else f"{size / 1_000_000:.1f}M"
+    return f"{size // 1000}K"
 
 
 def estimate_tokens_from_file(filepath):
@@ -850,17 +864,592 @@ def calculate_totals(components):
     }
 
 
+def _is_1m_model(model_str):
+    """Check if a model string indicates a 1M-context-eligible model.
+
+    Since March 2026, all Claude models on Max/Team/Enterprise plans have 1M.
+    Rather than hardcoding model names (which change constantly), we assume
+    1M for any non-haiku Claude model string. Haiku stays at 200K.
+    Users can always override with TOKEN_OPTIMIZER_CONTEXT_SIZE or --context-size.
+    """
+    m = model_str.lower().strip()
+    if not m:
+        return False
+    # Direct 1M indicators
+    if "1m" in m or "1000k" in m:
+        return True
+    # Haiku models explicitly stay at 200K
+    if "haiku" in m:
+        return False
+    # Any other Claude model string (opus, sonnet, or future models) -> assume 1M eligible
+    # This covers: 'opus', 'sonnet', 'claude-opus-4-6', 'claude-sonnet-4-6', etc.
+    # Users on non-Max plans who actually have 200K can set TOKEN_OPTIMIZER_CONTEXT_SIZE=200000
+    return True
+
+
 def detect_context_window():
-    """Detect context window size. 200K default, 1M for eligible setups."""
+    """Detect context window size. 200K default, 1M for eligible setups.
+
+    Detection order:
+      1. CLAUDE_CODE_DISABLE_1M_CONTEXT=1 -> 200K
+      2. TOKEN_OPTIMIZER_CONTEXT_SIZE env var -> explicit override
+      3. --context-size CLI flag (set via _cli_context_size) -> override
+      4. CLAUDE_MODEL / ANTHROPIC_MODEL env var -> 1M if eligible
+      5. config.json or settings.json model field -> 1M if eligible
+      6. Fallback: 200K
+    """
     if os.environ.get("CLAUDE_CODE_DISABLE_1M_CONTEXT") == "1":
-        return 200_000
+        return 200_000, "env: CLAUDE_CODE_DISABLE_1M_CONTEXT"
     raw = os.environ.get("TOKEN_OPTIMIZER_CONTEXT_SIZE", "").strip()
     if raw:
         try:
-            return int(raw)
+            return int(raw), "env: TOKEN_OPTIMIZER_CONTEXT_SIZE"
         except ValueError:
             pass
-    return 200_000
+    # CLI override (set by --context-size flag)
+    if _cli_context_size:
+        return _cli_context_size, "cli: --context-size"
+    # Detect from model string in environment
+    model = os.environ.get("CLAUDE_MODEL", "").lower()
+    if not model:
+        model = os.environ.get("ANTHROPIC_MODEL", "").lower()
+    if model:
+        if _is_1m_model(model):
+            return 1_000_000, f"model: {model} (1M eligible)"
+    # Check config files for model preference
+    for cfg_name in ("config.json", "settings.json"):
+        cfg_path = CLAUDE_DIR / cfg_name
+        if cfg_path.exists():
+            try:
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                m = (cfg.get("model") or cfg.get("primaryModel") or "").lower()
+                if m and _is_1m_model(m):
+                    return 1_000_000, f"{cfg_name.split('.')[0]}: {m} (1M eligible)"
+            except (json.JSONDecodeError, PermissionError, OSError):
+                pass
+    return 200_000, "default (set TOKEN_OPTIMIZER_CONTEXT_SIZE for override)"
+
+
+# CLI override for context size (set by --context-size flag parsing)
+_cli_context_size = None
+
+
+# MRCR degradation curve (fill percentage -> estimated quality score)
+# Published data points: 93% at 256K, 76% at 1M (Anthropic MRCR v2 benchmarks)
+# Intermediate values are interpolated estimates, not measured data
+_MRCR_CURVE = [
+    (0.0, 98),   # Near-empty: peak performance
+    (0.10, 96),  # 100K filled: minimal degradation
+    (0.25, 93),  # 250K filled: published 256K MRCR
+    (0.50, 88),  # 500K filled: "lost in the middle" begins
+    (0.60, 84),  # 600K: noticeable degradation
+    (0.70, 80),  # 700K: auto-compact zone
+    (0.80, 78),  # 800K: significant quality drop
+    (0.90, 77),  # 900K: severe
+    (1.00, 76),  # 1M filled: published 1M MRCR
+]
+
+
+def _estimate_quality_from_fill(fill_pct):
+    """Estimate quality score (0-100) from context fill percentage using MRCR curve."""
+    fill = max(0.0, min(1.0, fill_pct))
+    # Linear interpolation between curve points
+    for i in range(len(_MRCR_CURVE) - 1):
+        f0, q0 = _MRCR_CURVE[i]
+        f1, q1 = _MRCR_CURVE[i + 1]
+        if f0 <= fill <= f1:
+            t = (fill - f0) / (f1 - f0) if f1 > f0 else 0
+            return round(q0 + t * (q1 - q0))
+    return _MRCR_CURVE[-1][1]
+
+
+def _degradation_band(fill_pct):
+    """Return degradation band name and color code from fill percentage."""
+    if fill_pct < 0.50:
+        return "PEAK ZONE", "green"
+    elif fill_pct < 0.70:
+        return "DEGRADATION STARTING", "yellow"
+    elif fill_pct < 0.80:
+        return "QUALITY DROPPING", "orange"
+    else:
+        return "SEVERE", "red"
+
+
+def _estimate_messages_until_compact(ctx_window, overhead, avg_msg_tokens=5000):
+    """Estimate how many messages fit before auto-compact fires (~80% fill)."""
+    compact_threshold = int(ctx_window * 0.80)
+    usable = max(0, compact_threshold - overhead)
+    return max(0, usable // avg_msg_tokens)
+
+
+def _auto_snapshot(components, totals, ctx_window):
+    """Save an auto-snapshot for drift detection. Silent, never fails."""
+    try:
+        snap_dir = SNAPSHOT_DIR / "auto-snapshots"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        snap = {
+            "timestamp": datetime.now().isoformat(),
+            "context_window": ctx_window,
+            "total_overhead": totals["estimated_total"],
+            "controllable_tokens": totals["controllable_tokens"],
+            "fixed_tokens": totals["fixed_tokens"],
+            "skill_count": components.get("skills", {}).get("count", 0),
+            "skill_tokens": components.get("skills", {}).get("tokens", 0),
+            "mcp_server_count": components.get("mcp_servers", {}).get("count", 0),
+            "mcp_tokens": components.get("mcp_servers", {}).get("tokens", 0),
+            "claude_md_tokens": sum(
+                components[k].get("tokens", 0)
+                for k in components if k.startswith("claude_md") and components[k].get("exists")
+            ),
+            "memory_md_tokens": components.get("memory_md", {}).get("tokens", 0),
+            "memory_md_lines": components.get("memory_md", {}).get("lines", 0),
+        }
+        # Keep last 30 snapshots
+        existing = sorted(snap_dir.glob("snap_*.json"))
+        if len(existing) >= 30:
+            for old in existing[:-29]:
+                old.unlink()
+        fname = f"snap_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        fd = os.open(str(snap_dir / fname), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(snap, f, indent=2)
+    except OSError:
+        pass
+
+
+def quick_scan(as_json=False):
+    """Fast overview: overhead, degradation risk, top offenders, coaching insight."""
+    components = measure_components()
+    totals = calculate_totals(components)
+    ctx_window, ctx_source = detect_context_window()
+    ctx_label = _fmt_context_window(ctx_window)
+
+    overhead = totals["estimated_total"]
+    overhead_pct = overhead / ctx_window * 100
+
+    # Degradation calculations
+    peak_limit = int(ctx_window * 0.50)  # 50% = peak quality zone boundary
+    usable_before_degradation = max(0, peak_limit - overhead)
+    msgs_before_compact = _estimate_messages_until_compact(ctx_window, overhead)
+
+    # Current session fill estimate (overhead only, no session data)
+    fill_pct = overhead / ctx_window
+    quality_est = _estimate_quality_from_fill(fill_pct)
+    band_name, band_color = _degradation_band(fill_pct)
+
+    # Top offenders
+    offenders = []
+    skills = components.get("skills", {})
+    if skills.get("count", 0) > 0:
+        offenders.append(("skills", skills.get("count", 0), skills.get("tokens", 0),
+                         f"{skills.get('count', 0)} skills loaded"))
+    mcp = components.get("mcp_servers", {})
+    if mcp.get("count", 0) > 0:
+        eager = mcp.get("eager_tool_count", 0)
+        detail = f"{mcp.get('count', 0)} MCP servers"
+        if eager > 0:
+            detail += f" ({eager} with eager-loaded tools)"
+        offenders.append(("mcp", mcp.get("count", 0), mcp.get("tokens", 0), detail))
+    claude_md_tokens = sum(
+        components[k].get("tokens", 0)
+        for k in components if k.startswith("claude_md") and components[k].get("exists")
+    )
+    claude_md_lines = sum(
+        components[k].get("lines", 0)
+        for k in components if k.startswith("claude_md") and components[k].get("exists")
+    )
+    if claude_md_tokens > 0:
+        offenders.append(("claude_md", claude_md_lines, claude_md_tokens,
+                         f"CLAUDE.md ({claude_md_lines} lines)"))
+    mem = components.get("memory_md", {})
+    if mem.get("tokens", 0) > 0:
+        offenders.append(("memory_md", mem.get("lines", 0), mem.get("tokens", 0),
+                         f"MEMORY.md ({mem.get('lines', 0)} lines)"))
+
+    # Sort by tokens descending, top 3
+    offenders.sort(key=lambda x: -x[2])
+    top_offenders = offenders[:3]
+
+    # Quick win: check for unused skills via trends
+    quick_win = None
+    try:
+        trends = _collect_trends_data(days=30)
+        if trends:
+            never_used = trends.get("skills", {}).get("never_used", [])
+            if len(never_used) >= 3:
+                avg_per_skill = skills.get("tokens", 0) // max(skills.get("count", 1), 1)
+                savings = len(never_used) * avg_per_skill
+                quick_win = {
+                    "action": f"Archive {len(never_used)} unused skills",
+                    "savings": savings,
+                    "detail": f"save ~{savings:,} tokens/session",
+                    "extend": f"Extends peak quality zone by ~{savings:,} tokens",
+                }
+    except Exception:
+        pass
+
+    # If no trends-based win, suggest CLAUDE.md trimming
+    if not quick_win and claude_md_tokens > 5000:
+        savings = claude_md_tokens - 4500
+        quick_win = {
+            "action": f"Slim CLAUDE.md from {claude_md_lines} lines to ~300",
+            "savings": savings,
+            "detail": f"save ~{savings:,} tokens/session",
+            "extend": f"Extends peak quality zone by ~{savings:,} tokens",
+        }
+
+    # Coaching insight
+    coaching = None
+    if ctx_window >= 500_000:
+        coaching = (
+            "At 1M, Sonnet 4.6 outperforms Opus on multi-hop reasoning\n"
+            "  (GraphWalks: 73.8 vs 38.7). Consider Sonnet for long code sessions."
+        )
+
+    # Auto-save snapshot for drift detection
+    _auto_snapshot(components, totals, ctx_window)
+
+    if as_json:
+        result = {
+            "context_window": ctx_window,
+            "context_source": ctx_source,
+            "overhead_tokens": overhead,
+            "overhead_pct": round(overhead_pct, 1),
+            "usable_before_degradation": usable_before_degradation,
+            "messages_before_compact": msgs_before_compact,
+            "fill_pct": round(fill_pct * 100, 1),
+            "quality_estimate": quality_est,
+            "degradation_band": band_name,
+            "top_offenders": [
+                {"name": o[0], "count": o[1], "tokens": o[2], "detail": o[3]}
+                for o in top_offenders
+            ],
+            "quick_win": quick_win,
+            "coaching": coaching,
+        }
+        print(json.dumps(result, indent=2))
+        return result
+
+    # Pretty print
+    print(f"\nTOKEN OPTIMIZER: QUICK SCAN")
+    print(f"{'=' * 40}")
+    print(f"  Context window:      {ctx_window:,} tokens ({ctx_label}, {ctx_source})")
+    print(f"  Startup overhead:    {overhead:,} tokens ({overhead_pct:.1f}%)")
+    print(f"  Usable before degradation: ~{usable_before_degradation:,} (50% fill = peak quality zone)")
+    print(f"  Messages before auto-compact: ~{msgs_before_compact} at typical message size")
+
+    print(f"\n  DEGRADATION RISK")
+    print(f"    Current startup fill:  {fill_pct * 100:.0f}% ({overhead:,}) -- {band_name}")
+    print(f"    Quality estimate:      ~{quality_est}/100 (MRCR-based at this fill level)")
+    next_danger = int(ctx_window * 0.50)
+    print(f"    Next danger zone:      {next_danger:,} (50%, \"lost in the middle\" begins)")
+    compact_at = int(ctx_window * 0.80)
+    print(f"    Auto-compact fires at: ~{compact_at:,} (60-70% of context LOST per compaction)")
+
+    if top_offenders:
+        print(f"\n  TOP OFFENDERS")
+        for i, (_, count, tokens, detail) in enumerate(top_offenders, 1):
+            print(f"    {i}. {detail}: {tokens:,} tokens")
+
+    if quick_win:
+        print(f"\n  #1 QUICK WIN")
+        print(f"    {quick_win['action']} -> {quick_win['detail']}")
+        print(f"    {quick_win['extend']}")
+
+    if coaching:
+        print(f"\n  COACHING INSIGHT")
+        print(f"    {coaching}")
+
+    print(f"\n  Full audit + fixes: /token-optimizer")
+    print(f"  Health check: python3 $MEASURE_PY doctor")
+    print()
+
+
+def doctor(as_json=False):
+    """Health check: verify all Token Optimizer components are installed and working."""
+    checks = []
+    score = 0
+    total = 0
+
+    # 1. Install mode
+    total += 1
+    plugin_cache = CLAUDE_DIR / "plugins" / "cache"
+    is_plugin = False
+    if plugin_cache.exists():
+        import glob as globmod
+        for _ in globmod.glob(str(plugin_cache / "*" / "token-optimizer" / "*")):
+            is_plugin = True
+            break
+    skill_link = CLAUDE_DIR / "skills" / "token-optimizer"
+    is_skill = skill_link.exists()
+    if is_plugin:
+        checks.append(("OK", "Install", "plugin mode"))
+        score += 1
+    elif is_skill:
+        checks.append(("OK", "Install", "skill mode (symlink)"))
+        score += 1
+    else:
+        checks.append(("!!", "Install", "not detected (run install.sh)"))
+
+    # 2. Python version
+    total += 1
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    if sys.version_info >= (3, 8):
+        checks.append(("OK", f"Python {py_ver}", ">= 3.8"))
+        score += 1
+    else:
+        checks.append(("!!", f"Python {py_ver}", "requires >= 3.8"))
+
+    # 3. Context window detection
+    total += 1
+    ctx_window, ctx_source = detect_context_window()
+    ctx_label = _fmt_context_window(ctx_window)
+    checks.append(("OK", f"Context window", f"{ctx_label} detected ({ctx_source})"))
+    score += 1
+
+    # 4. SessionEnd hook
+    total += 1
+    settings, _ = _read_settings_json()
+    if _is_hook_installed(settings):
+        checks.append(("OK", "SessionEnd hook", "active"))
+        score += 1
+    else:
+        checks.append(("!!", "SessionEnd hook", "missing (fix: python3 measure.py setup-hook)"))
+
+    # 5. Smart Compaction
+    total += 1
+    sc_status = _is_smart_compact_installed(settings)
+    sc_count = sum(1 for v in sc_status.values() if v)
+    if sc_count == 4:
+        checks.append(("OK", "Smart Compaction", "4/4 hooks active"))
+        score += 1
+    elif sc_count > 0:
+        missing = [e for e, v in sc_status.items() if not v]
+        checks.append(("!!", "Smart Compaction", f"{sc_count}/4 hooks (missing: {', '.join(missing)})"))
+    else:
+        checks.append(("!!", "Smart Compaction", "not installed (fix: python3 measure.py setup-smart-compact)"))
+
+    # 6. Quality bar
+    total += 1
+    qb = _is_quality_bar_installed(settings)
+    if qb["statusline"] and qb["hook"]:
+        checks.append(("OK", "Quality bar", "status line + hook active"))
+        score += 1
+    else:
+        missing = []
+        if not qb["statusline"]:
+            missing.append("status line")
+        if not qb["hook"]:
+            missing.append("cache hook")
+        checks.append(("!!", "Quality bar", f"missing: {', '.join(missing)} (fix: python3 measure.py setup-quality-bar)"))
+
+    # 7. Trends DB
+    total += 1
+    if TRENDS_DB.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(TRENDS_DB))
+            count = conn.execute("SELECT COUNT(*) FROM session_log").fetchone()[0]
+            conn.close()
+            mtime = TRENDS_DB.stat().st_mtime
+            age_hours = (time.time() - mtime) / 3600
+            if age_hours < 1:
+                age_str = f"{int(age_hours * 60)}m ago"
+            else:
+                age_str = f"{int(age_hours)}h ago"
+            checks.append(("OK", "Trends DB", f"{count} sessions, last collected {age_str}"))
+            score += 1
+        except Exception:
+            checks.append(("!!", "Trends DB", "exists but unreadable"))
+    else:
+        checks.append(("!!", "Trends DB", "not found (fix: python3 measure.py collect)"))
+
+    # 8. Dashboard freshness
+    total += 1
+    if DASHBOARD_PATH.exists():
+        mtime = DASHBOARD_PATH.stat().st_mtime
+        age_hours = (time.time() - mtime) / 3600
+        if age_hours < 1:
+            age_str = f"{int(age_hours * 60)}m ago"
+        else:
+            age_str = f"{int(age_hours)}h ago"
+        checks.append(("OK", "Dashboard", f"fresh ({age_str})"))
+        score += 1
+    else:
+        checks.append(("!!", "Dashboard", "not generated (fix: python3 measure.py dashboard)"))
+
+    # 9. Broken symlinks
+    total += 1
+    broken = []
+    skills_dir = CLAUDE_DIR / "skills"
+    if skills_dir.exists():
+        for item in skills_dir.iterdir():
+            if item.is_symlink() and not item.resolve().exists():
+                broken.append(item.name)
+    if not broken:
+        checks.append(("OK", "Symlinks", "no broken symlinks"))
+        score += 1
+    else:
+        checks.append(("!!", "Symlinks", f"{len(broken)} broken: {', '.join(broken[:5])}"))
+
+    # 10. Duplicate installs
+    total += 1
+    has_plugin = is_plugin
+    has_skill = is_skill and not is_plugin
+    if has_plugin and is_skill:
+        checks.append(("!!", "Duplicate installs", "both plugin and skill detected (pick one)"))
+    else:
+        checks.append(("OK", "No duplicate installs", ""))
+        score += 1
+
+    if as_json:
+        result = {
+            "score": score,
+            "total": total,
+            "checks": [{"status": s, "name": n, "detail": d} for s, n, d in checks],
+        }
+        print(json.dumps(result, indent=2))
+        return result
+
+    # Pretty print
+    print(f"\nTOKEN OPTIMIZER DOCTOR")
+    print(f"{'=' * 40}")
+    for status, name, detail in checks:
+        icon = "[OK]" if status == "OK" else "[!!]"
+        detail_str = f"  {detail}" if detail else ""
+        print(f"  {icon:5s} {name}: {detail_str}")
+
+    print(f"\n  Score: {score}/{total}")
+    # Show fix command for first failing check
+    for status, name, detail in checks:
+        if status == "!!" and "fix:" in detail:
+            fix_cmd = detail.split("fix: ")[1].rstrip(")")
+            print(f"  Fix: {fix_cmd}")
+            break
+    print()
+
+
+def drift_check(as_json=False):
+    """Compare current state against most recent auto-snapshot for drift detection."""
+    snap_dir = SNAPSHOT_DIR / "auto-snapshots"
+    if not snap_dir.exists():
+        if as_json:
+            print(json.dumps({"error": "No snapshots found. Run 'quick' first to create a baseline."}))
+        else:
+            print("\n  No snapshots found. Run 'python3 measure.py quick' first to create a baseline.")
+        return
+
+    snaps = sorted(snap_dir.glob("snap_*.json"), key=lambda f: f.stat().st_mtime)
+    if not snaps:
+        if as_json:
+            print(json.dumps({"error": "No snapshots found. Run 'quick' first to create a baseline."}))
+        else:
+            print("\n  No snapshots found. Run 'python3 measure.py quick' first to create a baseline.")
+        return
+
+    # Load most recent snapshot (baseline)
+    baseline_path = snaps[-1]
+    try:
+        with open(baseline_path, "r", encoding="utf-8") as f:
+            baseline = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        print("[Error] Could not read baseline snapshot.")
+        return
+
+    # Measure current
+    components = measure_components()
+    totals = calculate_totals(components)
+    ctx_window = detect_context_window()[0]
+
+    current = {
+        "total_overhead": totals["estimated_total"],
+        "skill_count": components.get("skills", {}).get("count", 0),
+        "skill_tokens": components.get("skills", {}).get("tokens", 0),
+        "mcp_server_count": components.get("mcp_servers", {}).get("count", 0),
+        "mcp_tokens": components.get("mcp_servers", {}).get("tokens", 0),
+        "claude_md_tokens": sum(
+            components[k].get("tokens", 0)
+            for k in components if k.startswith("claude_md") and components[k].get("exists")
+        ),
+        "memory_md_tokens": components.get("memory_md", {}).get("tokens", 0),
+    }
+
+    # Calculate deltas
+    b_overhead = baseline.get("total_overhead", 0)
+    c_overhead = current["total_overhead"]
+    delta_overhead = c_overhead - b_overhead
+    delta_pct = (delta_overhead / b_overhead * 100) if b_overhead > 0 else 0
+
+    b_skills = baseline.get("skill_count", 0)
+    c_skills = current["skill_count"]
+    b_skill_tok = baseline.get("skill_tokens", 0)
+    c_skill_tok = current["skill_tokens"]
+
+    b_claude = baseline.get("claude_md_tokens", 0)
+    c_claude = current["claude_md_tokens"]
+
+    b_mcp = baseline.get("mcp_server_count", 0)
+    c_mcp = current["mcp_server_count"]
+    b_mcp_tok = baseline.get("mcp_tokens", 0)
+    c_mcp_tok = current["mcp_tokens"]
+
+    # Baseline date
+    base_ts = baseline.get("timestamp", "")
+    try:
+        base_dt = datetime.fromisoformat(base_ts)
+        days_ago = (datetime.now() - base_dt).days
+        date_str = f"{base_ts[:10]}, {days_ago} day{'s' if days_ago != 1 else ''} ago"
+    except (ValueError, TypeError):
+        date_str = base_ts[:10] if base_ts else "unknown"
+
+    # Impact on degradation
+    peak_zone = int(ctx_window * 0.50)
+    b_peak_usable = max(0, peak_zone - b_overhead)
+    c_peak_usable = max(0, peak_zone - c_overhead)
+    peak_delta = c_peak_usable - b_peak_usable
+
+    if as_json:
+        result = {
+            "baseline_date": base_ts,
+            "baseline_overhead": b_overhead,
+            "current_overhead": c_overhead,
+            "delta_tokens": delta_overhead,
+            "delta_pct": round(delta_pct, 1),
+            "skills": {"before": b_skills, "after": c_skills, "delta_tokens": c_skill_tok - b_skill_tok},
+            "claude_md": {"before": b_claude, "after": c_claude, "delta_tokens": c_claude - b_claude},
+            "mcp": {"before": b_mcp, "after": c_mcp, "delta_tokens": c_mcp_tok - b_mcp_tok},
+            "peak_zone_impact": peak_delta,
+        }
+        print(json.dumps(result, indent=2))
+        return result
+
+    # Pretty print
+    print(f"\nDRIFT REPORT (vs {date_str})")
+    print(f"{'=' * 45}")
+    print(f"  Total overhead:     {b_overhead:,} -> {c_overhead:,}  ({delta_overhead:+,} tokens, {delta_pct:+.1f}%)")
+    if c_skills != b_skills or c_skill_tok != b_skill_tok:
+        print(f"    Skills:           {b_skills} -> {c_skills}  ({c_skill_tok - b_skill_tok:+,} tokens)")
+    if c_claude != b_claude:
+        delta_claude_pct = ((c_claude - b_claude) / b_claude * 100) if b_claude > 0 else 0
+        print(f"    CLAUDE.md:        {b_claude:,} -> {c_claude:,}  ({c_claude - b_claude:+,} tokens, {delta_claude_pct:+.0f}%)")
+    if c_mcp != b_mcp or c_mcp_tok != b_mcp_tok:
+        print(f"    MCP servers:      {b_mcp} -> {c_mcp}  ({c_mcp_tok - b_mcp_tok:+,} tokens)")
+
+    if abs(delta_overhead) > 500:
+        print(f"\n  Impact: Peak quality zone {'shrunk' if delta_overhead > 0 else 'grew'} by ~{abs(peak_delta):,} tokens.")
+        if delta_overhead > 0:
+            msgs_lost = abs(peak_delta) // 5000
+            if msgs_lost > 0:
+                print(f"          You'll hit degradation ~{msgs_lost} message{'s' if msgs_lost != 1 else ''} sooner per session.")
+    else:
+        print(f"\n  No significant drift. Your setup is stable.")
+
+    print(f"\n  Run /token-optimizer to fix.")
+    print()
+
+    # Auto-save new snapshot
+    _auto_snapshot(components, totals, ctx_window)
 
 
 def detect_calibration_gap(components, totals, baselines=None):
@@ -916,7 +1505,7 @@ def take_snapshot(label):
         "session_baselines": baselines,
         "totals": totals,
         "calibration": calibration,
-        "context_window": detect_context_window(),
+        "context_window": detect_context_window()[0],
     }
 
     filepath = SNAPSHOT_DIR / f"snapshot_{label}.json"
@@ -1002,8 +1591,8 @@ def print_snapshot_summary(snapshot):
 
     print(f"  {'=' * 53}")
     print(f"  {'ESTIMATED TOTAL':<35s} {t['estimated_total']:>6,} tokens")
-    ctx_window = detect_context_window()
-    ctx_label = f"{ctx_window // 1000}K"
+    ctx_window, ctx_source = detect_context_window()
+    ctx_label = _fmt_context_window(ctx_window)
     pct_of_ctx = t['estimated_total'] / ctx_window * 100
     print(f"  {'Context used before typing':<35s} {pct_of_ctx:>5.1f}% of {ctx_label} window")
 
@@ -1185,8 +1774,8 @@ def compare_snapshots():
 
     # Context budget impact (not dollar amounts)
     if total_saved > 0:
-        ctx_window = detect_context_window()
-        ctx_label = f"{ctx_window // 1000}K"
+        ctx_window = detect_context_window()[0]
+        ctx_label = _fmt_context_window(ctx_window)
         before_pct = (total_before + 15000) / ctx_window * 100
         after_pct = (total_after + 15000) / ctx_window * 100
         print(f"\n  Context budget: {before_pct:.1f}% -> {after_pct:.1f}% of {ctx_label} window")
@@ -1459,7 +2048,7 @@ def generate_dashboard(coord_path):
         "totals": totals,
         "session_baselines": baselines,
         "calibration": calibration,
-        "context_window": detect_context_window(),
+        "context_window": detect_context_window()[0],
     }
 
     # Read audit files
@@ -1829,7 +2418,7 @@ def generate_standalone_dashboard(days=30, quiet=False):
         "totals": totals,
         "session_baselines": baselines,
         "calibration": calibration,
-        "context_window": detect_context_window(),
+        "context_window": detect_context_window()[0],
     }
 
     if not quiet:
@@ -2328,7 +2917,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
     if components is None:
         components = measure_components()
     totals = calculate_totals(components)
-    context_window = detect_context_window()
+    context_window = detect_context_window()[0]
 
     # Collect trends if not provided
     if trends is None:
@@ -4070,7 +4659,7 @@ def _write_settings_atomic(settings_data):
     )
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            json.dump(settings_data, f, indent=2, ensure_ascii=True)
+            json.dump(settings_data, f, indent=2, ensure_ascii=False)
             f.write("\n")
         os.replace(tmp_path, str(SETTINGS_PATH))
     except Exception:
@@ -4390,13 +4979,15 @@ def setup_daemon(dry_run=False, uninstall=False):
 CHECKPOINT_DIR = CLAUDE_DIR / "token-optimizer" / "checkpoints"
 
 # Quality signal weights (must sum to 1.0)
+# context_fill_degradation is the most important signal at large context windows
 _QUALITY_WEIGHTS = {
-    "stale_reads": 0.25,
-    "bloated_results": 0.25,
-    "duplicates": 0.15,
+    "context_fill_degradation": 0.20,
+    "stale_reads": 0.20,
+    "bloated_results": 0.20,
+    "duplicates": 0.10,
     "compaction_depth": 0.15,
-    "decision_density": 0.10,
-    "agent_efficiency": 0.10,
+    "decision_density": 0.08,
+    "agent_efficiency": 0.07,
 }
 
 # Configurable via env vars
@@ -4692,10 +5283,25 @@ def compute_quality_score(quality_data):
 
     Each signal is scored 0-100, then weighted per _QUALITY_WEIGHTS.
     Higher = better quality (less waste).
+    7 signals: context fill degradation, stale reads, bloated results,
+    duplicates, compaction depth, decision density, agent efficiency.
     """
     total_messages = len(quality_data["messages"])
     if total_messages == 0:
         return {"score": 0, "signals": {}, "breakdown": {}}
+
+    # 0. Context fill degradation (MRCR-based)
+    # Estimate fill from token counts in the session
+    ctx_window = detect_context_window()[0]
+    total_input = quality_data.get("total_input_tokens", 0)
+    if total_input > 0:
+        fill_pct = min(1.0, total_input / ctx_window)
+    else:
+        # Estimate from message count (rough: ~5K tokens per message exchange)
+        fill_pct = min(1.0, (total_messages * 5000) / ctx_window)
+    fill_quality = _estimate_quality_from_fill(fill_pct)
+    # Scale to 0-100 score (76 at worst = 0, 98 at best = 100)
+    fill_score = max(0, min(100, (fill_quality - 76) / (98 - 76) * 100))
 
     # 1. Stale reads: score = 100 - (stale_ratio * 200), clamped
     total_reads = len(quality_data["reads"])
@@ -4719,8 +5325,16 @@ def compute_quality_score(quality_data):
     dup_data = detect_duplicates(quality_data)
     dup_score = max(0, min(100, 100 - dup_data["duplicates"] * 10))
 
-    # 4. Compaction depth: score = 100 - (compactions * 25), clamped
-    compaction_score = max(0, min(100, 100 - quality_data["compactions"] * 25))
+    # 4. Compaction depth: more aggressive penalties
+    compactions = quality_data["compactions"]
+    if compactions == 0:
+        compaction_score = 100
+    elif compactions == 1:
+        compaction_score = 60   # -40 (60-70% context lost)
+    elif compactions == 2:
+        compaction_score = 25   # -75 (~88% cumulative loss)
+    else:
+        compaction_score = 0    # 3+: documented behavioral degradation
 
     # 5. Decision density: ratio of substantive messages to total
     substantive = sum(1 for _, _, _, s in quality_data["messages"] if s)
@@ -4744,6 +5358,7 @@ def compute_quality_score(quality_data):
         agent_score = 80  # No agents = neutral score
 
     signals = {
+        "context_fill_degradation": round(fill_score, 1),
         "stale_reads": round(stale_score, 1),
         "bloated_results": round(bloated_score, 1),
         "duplicates": round(dup_score, 1),
@@ -4761,7 +5376,25 @@ def compute_quality_score(quality_data):
         + dup_data["estimated_waste_tokens"]
     )
 
+    # Compaction loss estimate
+    compaction_loss_pct = 0
+    if compactions == 1:
+        compaction_loss_pct = 65  # ~60-70%
+    elif compactions == 2:
+        compaction_loss_pct = 88  # cumulative
+    elif compactions >= 3:
+        compaction_loss_pct = 95  # near-total
+
+    band_name, _ = _degradation_band(fill_pct)
+
     breakdown = {
+        "context_fill_degradation": {
+            "score": signals["context_fill_degradation"],
+            "fill_pct": round(fill_pct * 100, 1),
+            "quality_estimate": fill_quality,
+            "band": band_name,
+            "detail": f"{round(fill_pct * 100)}% fill, {band_name.lower()}",
+        },
         "stale_reads": {
             "score": signals["stale_reads"],
             "count": stale_data["count"],
@@ -4784,8 +5417,12 @@ def compute_quality_score(quality_data):
         },
         "compaction_depth": {
             "score": signals["compaction_depth"],
-            "compactions": quality_data["compactions"],
-            "detail": f"{quality_data['compactions']} compaction(s)" if quality_data["compactions"] else "No compactions",
+            "compactions": compactions,
+            "cumulative_loss_pct": compaction_loss_pct,
+            "detail": (
+                f"{compactions} compaction(s) (~{compaction_loss_pct}% cumulative context loss)"
+                if compactions > 0 else "No compactions"
+            ),
         },
         "decision_density": {
             "score": signals["decision_density"],
@@ -4810,16 +5447,26 @@ def compute_quality_score(quality_data):
 
 
 def _find_current_session_jsonl():
-    """Find the most recent JSONL file for the current project directory."""
-    projects_dir = find_projects_dir()
-    if not projects_dir:
+    """Find the most recently modified JSONL file across all project directories.
+
+    Searches ALL project dirs and picks the globally most recent JSONL.
+    This is necessary because hooks often run from a CWD that doesn't match
+    the active session's project dir (e.g., when the session is in the home
+    dir but the hook runs from a skill directory).
+
+    For non-hook contexts (manual CLI), results are the same since the most
+    recently modified JSONL is almost always the currently active session.
+    """
+    projects_base = CLAUDE_DIR / "projects"
+    if not projects_base.exists():
         return None
-    jsonl_files = sorted(
-        projects_dir.glob("*.jsonl"),
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
-    return jsonl_files[0] if jsonl_files else None
+    all_jsonl = []
+    for d in projects_base.iterdir():
+        if d.is_dir():
+            all_jsonl.extend(d.glob("*.jsonl"))
+    if not all_jsonl:
+        return None
+    return max(all_jsonl, key=lambda f: f.stat().st_mtime)
 
 
 def _find_session_jsonl_by_id(session_id):
@@ -4890,9 +5537,15 @@ def quality_analyzer(session_id=None, as_json=False):
     else:
         band = "Critical"
 
+    # Degradation band
+    cfd = bd.get("context_fill_degradation", {})
+    fill_band = cfd.get("band", "")
+
     print(f"\n  Context Quality Report")
     print(f"  {'=' * 40}")
     print(f"  Content quality:     {score}/100 ({band})")
+    if fill_band:
+        print(f"  Degradation band:    {fill_band} ({cfd.get('fill_pct', 0):.0f}% fill, ~{cfd.get('quality_estimate', 0)}/100 MRCR)")
     print(f"  Messages analyzed:   {result['total_messages']}")
     print(f"  Decisions captured:  {result['decisions_found']}")
     print()
@@ -4913,7 +5566,8 @@ def quality_analyzer(session_id=None, as_json=False):
         issues.append(f"  {dp['count']:3d} duplicate reminders ({tokens:,} tokens est.)  repeated system-reminder injections")
     if bd["compaction_depth"]["compactions"] > 0:
         cd = bd["compaction_depth"]
-        issues.append(f"  {cd['compactions']:3d} compaction(s)       (information loss)    each compaction drops nuance + rebuilds cache")
+        loss_detail = f" (~{cd.get('cumulative_loss_pct', 0)}% cumulative context loss)" if cd.get("cumulative_loss_pct") else ""
+        issues.append(f"  {cd['compactions']:3d} compaction(s){loss_detail}")
 
     if issues:
         print("  Issues found:")
@@ -5744,13 +6398,22 @@ def _quality_cache_path_for(filepath=None):
 
 
 def _write_quality_cache(cache_path, result):
-    """Atomically write result dict to cache_path. Returns True on success."""
+    """Atomically write result dict to cache_path + global fallback. Returns True on success."""
     QUALITY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         fd, tmp_path = tempfile.mkstemp(dir=str(QUALITY_CACHE_DIR), suffix=".json")
         with os.fdopen(fd, "w") as f:
             json.dump(result, f)
         os.replace(tmp_path, str(cache_path))
+        # Always update the global fallback so the status line can read it
+        if str(cache_path) != str(QUALITY_CACHE_PATH):
+            try:
+                fd2, tmp2 = tempfile.mkstemp(dir=str(QUALITY_CACHE_DIR), suffix=".json")
+                with os.fdopen(fd2, "w") as f2:
+                    json.dump(result, f2)
+                os.replace(tmp2, str(QUALITY_CACHE_PATH))
+            except OSError:
+                pass
         return True
     except OSError:
         try:
@@ -5821,6 +6484,10 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
     result["turns"] = len([m for m in quality_data["messages"] if m[1] == "user"])
     result["timestamp"] = datetime.now(timezone.utc).isoformat()
     result["session_file"] = str(filepath)
+    # Add degradation band for status line
+    cfd = result.get("breakdown", {}).get("context_fill_degradation", {})
+    result["degradation_band"] = cfd.get("band", "")
+    result["fill_pct"] = cfd.get("fill_pct", 0)
 
     if not _write_quality_cache(cache_path, result):
         return None
@@ -6022,8 +6689,33 @@ def setup_quality_bar(dry_run=False, uninstall=False, status_only=False):
 if __name__ == "__main__":
     args = sys.argv[1:]
 
+    # Parse global --context-size flag (applies to all commands)
+    _filtered_args = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--context-size" and i + 1 < len(args):
+            try:
+                _cli_context_size = int(args[i + 1])
+            except ValueError:
+                print(f"[Error] Invalid --context-size value: {args[i + 1]}")
+                sys.exit(1)
+            i += 2
+        else:
+            _filtered_args.append(args[i])
+            i += 1
+    args = _filtered_args
+
     if not args or args[0] == "report":
         full_report()
+    elif args[0] == "quick":
+        output_json = "--json" in args
+        quick_scan(as_json=output_json)
+    elif args[0] == "doctor":
+        output_json = "--json" in args
+        doctor(as_json=output_json)
+    elif args[0] == "drift":
+        output_json = "--json" in args
+        drift_check(as_json=output_json)
     elif args[0] == "snapshot" and len(args) > 1:
         take_snapshot(args[1])
     elif args[0] == "compare":
@@ -6254,6 +6946,12 @@ if __name__ == "__main__":
             sys.exit(1)
     else:
         print("Usage:")
+        print("  python3 measure.py quick               # Quick scan: overhead, degradation risk, top offenders")
+        print("  python3 measure.py quick --json         # Machine-readable quick scan")
+        print("  python3 measure.py doctor               # Health check: verify all components installed")
+        print("  python3 measure.py doctor --json        # Machine-readable doctor output")
+        print("  python3 measure.py drift                # Drift report: compare against last snapshot")
+        print("  python3 measure.py drift --json          # Machine-readable drift output")
         print("  python3 measure.py report              # Full report")
         print("  python3 measure.py snapshot before      # Save pre-optimization snapshot")
         print("  python3 measure.py snapshot after       # Save post-optimization snapshot")
@@ -6304,3 +7002,6 @@ if __name__ == "__main__":
         print("  python3 measure.py setup-daemon            # Install persistent dashboard server (macOS)")
         print("  python3 measure.py setup-daemon --dry-run  # Show what would be installed")
         print("  python3 measure.py setup-daemon --uninstall # Remove dashboard daemon")
+        print()
+        print("  Global flags:")
+        print("    --context-size N   Override context window size (e.g., --context-size 1000000)")

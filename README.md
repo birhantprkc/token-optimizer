@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-2.3.1-green" alt="Version 2.3.1"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-2.4.0-green" alt="Version 2.4.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/alexgreensh/token-optimizer" alt="License"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/token-optimizer" alt="GitHub Stars"></a>
@@ -12,103 +12,146 @@
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Platform">
 </p>
 
-<p align="center"><strong>Audit your setup. Protect your sessions. Measure what matters.<br>Find the ghost tokens. Score your context quality. Survive compaction.</strong></p>
+<h2 align="center">Your AI is getting dumber and you can't see it.</h2>
 
-![Token Optimizer in action](skills/token-optimizer/assets/hero-terminal.svg)
+<p align="center">
+Opus 4.6 drops from 93% to 76% accuracy across a 1M context window. Compaction loses 60-70% of your conversation. Token Optimizer tracks the degradation, protects your decisions, and tells you what to fix.
+</p>
 
----
+```
+$ python3 measure.py quick
 
-### NEW in v2.0: Active Session Intelligence
+TOKEN OPTIMIZER: QUICK SCAN
+========================================
+  Context window:      1,000,000 tokens (1M, auto-detected Opus 4.6)
+  Startup overhead:    62,400 tokens (6.2%)
+  Usable before degradation: ~437K (50% fill = peak quality zone)
+  Messages before auto-compact: ~153 at typical message size
 
-v1.x found the ghost tokens. v2.0 protects your sessions from the inside.
+  DEGRADATION RISK
+    Current startup fill:  6% (62,400) -- PEAK ZONE
+    Quality estimate:      ~96/100 (MRCR-based at this fill level)
+    Next danger zone:      500,000 (50%, "lost in the middle" begins)
+    Auto-compact fires at: ~800,000 (60-70% of context LOST per compaction)
 
-| Capability | What It Does |
-|-----------|-------------|
-| **Smart Compaction** | Checkpoints decisions, errors, and agent state before auto-compact fires. Restores what the summary dropped. Your "why" survives. |
-| **Context Quality Scoring** | Six-signal analysis (stale reads, bloated results, duplicates, compaction depth, decision density, agent efficiency). Tells you when to `/compact`, not just how full you are. Shows live in your status bar. |
-| **Session Continuity** | Automatic checkpoints on session end, `/clear`, and crashes. New sessions pick up where you left off via keyword-matched context injection. |
+  TOP OFFENDERS
+    1. 58 skills loaded (42 unused in 30 days): 18,200 tokens
+    2. 12 MCP servers (3 with eager-loaded tools): 11,400 tokens
+    3. CLAUDE.md (482 lines): 7,800 tokens
 
-All three work together: quality score triggers compaction advice, smart compact captures state before it fires, continuity restores it in your next session. Zero external dependencies. Plain markdown checkpoints. Setup in one command:
+  #1 QUICK WIN
+    Archive 42 unused skills -> save ~12,600 tokens/session
+    Extends peak quality zone by ~12,600 tokens
+
+  COACHING INSIGHT
+    At 1M, Sonnet 4.6 outperforms Opus on multi-hop reasoning
+    (GraphWalks: 73.8 vs 38.7). Consider Sonnet for long code sessions.
+```
+
+## Install (3 lines)
 
 ```bash
-python3 $MEASURE_PY setup-smart-compact    # checkpoint + restore hooks
-python3 $MEASURE_PY setup-quality-bar      # live quality score in your status bar
-```
-
-[Full v2.0 docs below.](#v20-active-session-intelligence)
-
----
-
-## Install
-
-### Plugin (recommended)
-
-In Claude Code:
-
-```
+# Plugin (recommended, auto-updates)
 /plugin marketplace add alexgreensh/token-optimizer
 /plugin install token-optimizer@alexgreensh-token-optimizer
 ```
 
-Auto-updates when you restart Claude Code. Requires Claude Code 1.0.33+.
-
-### Script installer
+Or script installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alexgreensh/token-optimizer/main/install.sh | bash
 ```
 
-Updates: `cd ~/.claude/token-optimizer && git pull`.
+Then in Claude Code: `/token-optimizer`
 
-### Manual
+## Why install this first?
 
-```bash
-git clone https://github.com/alexgreensh/token-optimizer.git ~/.claude/token-optimizer
-ln -sf ~/.claude/token-optimizer/skills/token-optimizer ~/.claude/skills/token-optimizer
-```
+Every Claude Code session starts with invisible overhead: system prompt, tool definitions, skills, MCP servers, CLAUDE.md, MEMORY.md. A typical power user burns 50-70K tokens before typing a word.
 
-### Migrating from script to plugin
+At 200K context, that's 25-35% gone. At 1M, it's "only" 5-7%, but the degradation curve is the real problem:
 
-If you installed via the script and want to switch to the plugin (for auto-updates):
+- **MRCR drops from 93% to 76%** as context fills from 256K to 1M
+- **Higher effort = faster context burn.** More thinking tokens per response means you hit compaction sooner.
+- **Compaction is catastrophic.** 60-70% of your conversation gone per compaction. After 2-3 compactions: 88-95% cumulative loss. Claude starts hallucinating tool calls.
+- **Sonnet 4.6 beats Opus on long-context reasoning** (GraphWalks: 73.8 vs 38.7 at 1M)
 
-```bash
-# Remove skill (handles both symlink and directory)
-if [ -L ~/.claude/skills/token-optimizer ]; then
-  rm -f ~/.claude/skills/token-optimizer
-else
-  rm -rf ~/.claude/skills/token-optimizer
-fi
-rm -rf ~/.claude/token-optimizer            # remove clone (optional)
-```
-
-Then install the plugin using the commands above.
+Token Optimizer tracks all of this. Quality score, degradation bands, compaction loss, drift detection. Zero context tokens consumed (runs as external Python).
 
 ---
 
-Then start Claude Code and run:
+### NEW in v2.4: Degradation Intelligence
 
-```
-/token-optimizer
-```
-
-## Enable Session Tracking
-
-The optimizer can track your usage over time: which skills you use, how context fills up, model costs. This powers the Trends and Health tabs in your dashboard.
+| Command | What It Does |
+|---------|-------------|
+| `quick` | Overhead + degradation risk + top offenders + model coaching. The 10-second health check. |
+| `doctor` | Verify all components installed. Score out of 10 with fix commands. |
+| `drift` | Compare against your last snapshot. See how your setup has grown. |
+| `quality` | 7-signal analysis with MRCR-based degradation bands. |
+| `report` | Full per-component token breakdown. |
+| `/token-optimizer` | Interactive audit with 6 parallel agents. Guided fixes. |
 
 ```bash
-python3 $MEASURE_PY setup-hook --dry-run   # preview the change
-python3 $MEASURE_PY setup-hook             # install it
+python3 $MEASURE_PY quick                # 10-second overview
+python3 $MEASURE_PY doctor               # health check
+python3 $MEASURE_PY drift                # drift since last snapshot
+python3 $MEASURE_PY quality current      # session quality
+python3 $MEASURE_PY report               # full report
 ```
 
-This adds a SessionEnd hook that silently collects usage stats after each session (~2 seconds, all data local). The dashboard auto-refreshes with your latest data.
+### Quality Scoring (7 signals)
 
-Already ran `/token-optimizer` and skipped this step? Just run the command above. Remove anytime: `python3 $MEASURE_PY setup-hook --uninstall`
+| Signal | Weight | What It Catches |
+|--------|--------|----------------|
+| **Context fill degradation** | 20% | MRCR-based quality estimate from fill level |
+| **Stale reads** | 20% | Files edited since reading (wasted context) |
+| **Bloated results** | 20% | Tool outputs never referenced again |
+| **Compaction depth** | 15% | Each compaction: 60-70% context lost |
+| **Duplicates** | 10% | Repeated system-reminder injections |
+| **Decision density** | 8% | Ratio of substantive to filler messages |
+| **Agent efficiency** | 7% | Subagent result tokens vs dispatch overhead |
+
+Degradation bands in the status bar:
+- Green (<50% fill): peak quality zone
+- Yellow (50-70%): degradation starting
+- Orange (70-80%): quality dropping
+- Red (80%+): severe, consider /clear
+
+### Smart Compaction
+
+Auto-compaction is lossy. Smart Compaction checkpoints decisions, errors, and agent state before it fires, then restores what the summary dropped.
+
+```bash
+python3 $MEASURE_PY setup-smart-compact    # checkpoint + restore hooks
+python3 $MEASURE_PY setup-quality-bar      # live quality score in status bar
+```
+
+---
+
+## How It Compares
+
+| Capability | Token Optimizer | `/context` (built-in) | context-mode |
+|---|---|---|---|
+| Startup overhead audit | Deep (per-component) | Summary (v2.1.74+) | No |
+| Quality degradation tracking | MRCR-based bands | Basic capacity % | No |
+| Guided remediation | Yes, with token estimates | Basic suggestions | No |
+| Runtime output containment | No | No | Yes (98% reduction) |
+| Smart compaction survival | Checkpoint + restore | No | Session guide |
+| Model recommendation | Yes (Sonnet vs Opus by context) | No | No |
+| Usage trends + dashboard | SQLite + interactive HTML | No | Session stats |
+| Compaction loss tracking | Yes (cumulative % lost) | No | Partial |
+| Multi-platform | Claude Code (planned expansion) | Claude Code | 6 platforms |
+| Context tokens consumed | 0 (Python script) | ~200 tokens | MCP overhead |
+
+`/context` shows capacity. Token Optimizer fixes the causes.
+context-mode prevents runtime floods. Token Optimizer prevents structural waste.
+
+---
 
 ## The Problem
 
-Every message you send to Claude Code re-sends everything: system prompt, tool definitions, MCP servers, skills, commands, CLAUDE.md, MEMORY.md, and system reminders. The API is stateless. No memory between messages. The full stack, replayed every time. These are the ghost tokens: invisible overhead that eats your context window before you type a word.
+Every message you send to Claude Code re-sends everything: system prompt, tool definitions, MCP servers, skills, commands, CLAUDE.md, MEMORY.md, and system reminders. The API is stateless. These are the ghost tokens: invisible overhead that eats your context window before you type a word.
 
-Prompt caching makes this [cheap](https://code.claude.com/docs/en/costs) (90% cost reduction on cached tokens). But cheap doesn't mean small. Those tokens still fill your context window, count toward rate limits, and degrade output quality past 50-70% fill.
+Prompt caching makes this [cheap](https://code.claude.com/docs/en/costs) (90% cost reduction). But cheap doesn't mean small. Those tokens still fill your context window, count toward rate limits, and degrade output quality.
 
 The more you've customized Claude Code, the worse it gets.
 
@@ -116,23 +159,17 @@ The more you've customized Claude Code, the worse it gets.
 
 ### Where it all goes
 
-Your 200K context window gets eaten from multiple directions:
+**Fixed overhead** (everyone pays): System prompt (~3K tokens) plus built-in tool definitions (12-17K tokens). About 8-10% of your 200K window.
 
-**Fixed overhead** (everyone pays, can't change): System prompt (~3K tokens) plus built-in tool definitions (12-17K tokens). About 8-10% of your window, gone before anything else loads. Common misconception: the "system prompt" is often reported as ~3K tokens. But built-in tools load alongside it every message. The real irreducible floor is ~15K, not ~3K. Posts quoting the base prompt alone understate overhead by 5x.
+**Autocompact buffer**: ~30-35K tokens (~16%) reserved for compaction headroom.
 
-**Autocompact buffer**: When autocompact is on (the default), Claude Code reserves headroom for compaction. In practice, roughly 30-35K tokens (~16% of your window) sit empty. Run `/context` on a fresh session to see the exact number.
+**MCP tools**: The biggest variable. Anthropic's team [measured 134K tokens consumed by tool definitions](https://www.anthropic.com/engineering/advanced-tool-use) before optimization. [Tool Search](https://www.anthropic.com/engineering/advanced-tool-use) reduced this by 85%, but servers still add up.
 
-**MCP tools**: The biggest variable. Anthropic's own engineering team [measured 134K tokens consumed by tool definitions](https://www.anthropic.com/engineering/advanced-tool-use) before optimization. [Tool Search](https://www.anthropic.com/engineering/advanced-tool-use) (activates automatically when MCP tools exceed [~10% of context](https://code.claude.com/docs/en/costs)) reduced this by 85%, but MCP servers still add up: each deferred tool costs ~15 tokens, plus server instructions.
-
-**Your config stack** (what this tool optimizes): CLAUDE.md that's grown organically. MEMORY.md that duplicates half of it. 50+ skills you installed and forgot. Commands you never use. [`@imports`](https://code.claude.com/docs/en/memory) pulling in files you didn't realize. [`.claude/rules/`](https://code.claude.com/docs/en/memory) adding up quietly. No `permissions.deny` rules to exclude files from context.
-
-A real power user's baseline overhead: **~43,000 tokens** (22% of the 200K window). Add the autocompact buffer and **~38% is unavailable** before you type a single word.
-
-Every subagent you spawn gets its own 200K window and loads the same full stack. Five parallel agents means five copies of that overhead, each starting ~30% full before doing any work.
+**Your config stack** (what this tool optimizes): CLAUDE.md that's grown organically. MEMORY.md that duplicates half of it. 50+ skills you installed and forgot. Commands you never use. [`@imports`](https://code.claude.com/docs/en/memory). [`.claude/rules/`](https://code.claude.com/docs/en/memory). No `permissions.deny` rules.
 
 ## What This Does
 
-One command. Six parallel agents audit your entire setup. You get a prioritized list of exactly what's eating your context and how to fix it.
+One command. Six parallel agents audit your entire setup. Prioritized fixes with exact token savings.
 
 ```
 > /token-optimizer
@@ -160,52 +197,24 @@ Everything gets backed up before any change. You see diffs. You approve each fix
 
 | Area | What It Catches |
 |------|----------------|
-| **CLAUDE.md** | Content that should be skills or reference files. Duplication with MEMORY.md. [`@imports`](https://code.claude.com/docs/en/memory) pulling in more than you realize. Poor cache structure. |
+| **CLAUDE.md** | Content that should be skills or reference files. Duplication with MEMORY.md. [`@imports`](https://code.claude.com/docs/en/memory). Poor cache structure. |
 | **MEMORY.md** | Overlap with CLAUDE.md. Verbose entries. Content past the [200-line auto-load cap](https://code.claude.com/docs/en/memory). |
-| **Skills** | Unused skills still loading frontmatter (~100 tokens each). Duplicates. Archived skills in the wrong directory still loading. |
-| **MCP Servers** | Broken/unused servers. Duplicate tools across servers and plugins. Missing [Tool Search](https://www.anthropic.com/engineering/advanced-tool-use). |
-| **Commands** | Rarely-used commands inflating the menu (~50 tokens each). |
-| **Rules & Advanced** | [`.claude/rules/`](https://code.claude.com/docs/en/memory) overhead. Missing `permissions.deny` rules. No hooks. No monitoring. |
+| **Skills** | Unused skills loading frontmatter (~100 tokens each). Duplicates. Wrong directory. |
+| **MCP Servers** | Broken/unused servers. Duplicate tools. Missing [Tool Search](https://www.anthropic.com/engineering/advanced-tool-use). |
+| **Commands** | Rarely-used commands (~50 tokens each). |
+| **Rules & Advanced** | [`.claude/rules/`](https://code.claude.com/docs/en/memory) overhead. Missing `permissions.deny`. No hooks. |
 
 ### The fix: progressive disclosure
-
-Not everything needs to load every message. The optimizer moves content to where it costs the least:
 
 | Where | Token Cost | What Goes Here |
 |-------|-----------|----------------|
 | **CLAUDE.md** | Every message (~800 token target) | Identity, critical rules, key paths |
-| **Skills & references** | ~100 tokens in menu, full content only when invoked | Workflows, configs, detailed standards |
-| **Project files** | Zero until explicitly read | Guides, templates, documentation |
-
-A bloated CLAUDE.md doesn't need deleting. Coding standards move to a reference file. A deployment workflow becomes a skill. Same functionality, fraction of the per-message cost.
-
-## Typical Results
-
-Results depend on your setup. Heavier setups save more.
-
-**Config cleanup** (what the tool directly changes):
-
-| Starting Point | Typical Recovery |
-|----------------|-----------------|
-| Power user (50+ skills, 3+ MCP servers, bloated config) | 5-15% of context window |
-| No Tool Search (disabled or not triggered) | [134K → ~8.7K tokens](https://www.anthropic.com/engineering/advanced-tool-use) (85% reduction in MCP overhead) |
-| Lighter setup (few skills, 1 MCP server) | 3-8% |
-
-**Advanced option**: Disabling autocompact and managing `/compact` manually recovers an additional ~16% of your window. The optimizer explains the tradeoff and helps you decide.
-
-**Behavioral savings** (free, compound across every session):
-
-| Habit | Why It Matters |
-|-------|---------------|
-| `/compact` at 50-70% instead of waiting for auto-compact | Better output quality, fewer hallucinations |
-| [Haiku for data-gathering agents](https://code.claude.com/docs/en/costs) | 5x cheaper than Opus for file reads and counting |
-| `/clear` between unrelated topics | Fresh context, no stale information dragging quality down |
-| Batch requests into one message | Each message re-sends your full config stack |
-| [Plan mode](https://code.claude.com/docs/en/best-practices) for complex tasks | Prevents expensive re-work from wrong initial direction |
+| **Skills & references** | ~100 tokens in menu, full when invoked | Workflows, configs, standards |
+| **Project files** | Zero until read | Guides, templates, documentation |
 
 ## Interactive Dashboard
 
-After the audit, you get an interactive HTML dashboard that breaks down exactly where your tokens go and what you can do about it.
+After the audit, you get an interactive HTML dashboard.
 
 ![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-overview.png)
 
@@ -213,135 +222,23 @@ Every component is clickable. Expand any item to see why it matters, what the tr
 
 ### Persistent Dashboard
 
-The dashboard auto-regenerates after every session (via the SessionEnd hook). It shows Trends and Health tabs with your latest usage data. The full audit dashboard (with optimization recommendations) requires running `/token-optimizer`.
-
-**Bookmarkable URL (macOS):**
+The dashboard auto-regenerates after every session (via the SessionEnd hook).
 
 ```bash
-python3 $MEASURE_PY setup-daemon
-# => http://localhost:24842/
+python3 $MEASURE_PY setup-daemon     # Bookmarkable URL at http://localhost:24842/
+python3 $MEASURE_PY dashboard --serve # One-time serve over HTTP
 ```
 
-This installs a tiny background server (~2MB memory) that starts when you log in. Bookmark the URL and check your dashboard anytime. It always shows the latest data because the SessionEnd hook regenerates the file after every session.
-
-Only accessible from your machine (localhost). Uninstall: `python3 $MEASURE_PY setup-daemon --uninstall`
-
-**Other options:**
+## Enable Session Tracking
 
 ```bash
-# Open the file directly (no server needed)
-open ~/.claude/_backups/token-optimizer/dashboard.html
-
-# Serve over HTTP (headless/remote machines)
-python3 $MEASURE_PY dashboard --serve
-
-# Remote access via SSH tunnel
-ssh -L 8080:localhost:8080 your-server
-# Then open http://localhost:8080/dashboard.html locally
+python3 $MEASURE_PY setup-hook --dry-run   # preview
+python3 $MEASURE_PY setup-hook             # install
 ```
 
-To regenerate manually: `python3 $MEASURE_PY dashboard`.
-
-**Full audit dashboard** (after running `/token-optimizer`):
-
-```bash
-python3 $MEASURE_PY dashboard --coord-path PATH --serve
-```
-
-## How It Works
-
-![5-phase optimization flow](skills/token-optimizer/assets/how-it-works.svg)
-
-| Phase | What Happens |
-|-------|-------------|
-| **Initialize** | Backs up your config, takes a "before" snapshot |
-| **Audit** | 6 parallel agents scan everything (sonnet for judgment, haiku for counting) |
-| **Analyze** | Synthesis agent (opus) prioritizes fixes by impact |
-| **Implement** | You choose what to fix. Diffs and approval before every change |
-| **Verify** | Re-measures everything, shows before/after with exact savings |
-
-Right model for each job. Session folder pattern keeps agent output from flooding your context.
-
-## Why It Matters Even With Caching
-
-Prompt caching cuts cost by 90%. But it doesn't shrink your context window.
-
-- **You hit compaction sooner.** Compaction is lossy. Every cycle throws away context.
-- **Rate limits burn faster.** Cache reads still count toward your subscription quota.
-- **Quality degrades.** Performance drops as context fills, especially past 70%.
-- **Agents multiply it.** Every subagent loads its own copy of your full config stack. Dispatch 5 agents and that overhead loads 5 times, each in a fresh 200K window. [Agent teams use ~7x more tokens in plan mode](https://code.claude.com/docs/en/costs) than standard sessions. Reducing per-agent overhead from 43K to 28K saves 75K tokens across those 5 agents.
-
-## Measurement Tool
-
-Standalone script. No dependencies. Python 3.8+.
-
-The path depends on how you installed. Set it once:
-
-```bash
-# Auto-detect (works for both plugin and script/manual installs):
-MEASURE_PY=""
-for f in ~/.claude/skills/token-optimizer/scripts/measure.py \
-         ~/.claude/plugins/cache/*/token-optimizer/*/skills/token-optimizer/scripts/measure.py; do
-  [ -f "$f" ] && MEASURE_PY="$f" && break
-done
-[ -z "$MEASURE_PY" ] && { echo "measure.py not found. Is Token Optimizer installed?"; exit 1; }
-```
-
-```bash
-python3 $MEASURE_PY report
-
-# Save snapshots for before/after comparison
-python3 $MEASURE_PY snapshot before
-# ... make changes ...
-python3 $MEASURE_PY snapshot after
-python3 $MEASURE_PY compare
-```
+Adds a SessionEnd hook that collects usage stats after each session (~2 seconds, all data local).
 
 ## Usage Analytics
-
-The optimizer doesn't just audit your config once. It tracks how you actually use Claude Code over time, so you can spot patterns, catch waste, and make informed decisions about what to keep and what to archive.
-
-Two commands power this: `trends` for usage patterns and `health` for session hygiene. Both work from the CLI and appear as interactive tabs in the persistent dashboard (auto-refreshed after every session) and in the full audit dashboard.
-
-### Automatic Collection
-
-See [Enable Session Tracking](#enable-session-tracking) above for quick setup.
-
-Add a SessionEnd hook and usage data collects itself. The setup command auto-detects measure.py's path regardless of install method:
-
-```bash
-python3 $MEASURE_PY setup-hook --dry-run   # preview the change
-python3 $MEASURE_PY setup-hook             # install it
-```
-
-Or add manually to `~/.claude/settings.json` (adjust the path to match your install):
-
-```json
-{
-  "hooks": {
-    "SessionEnd": [{
-      "hooks": [{
-        "type": "command",
-        "command": "python3 /path/to/measure.py collect --quiet && python3 /path/to/measure.py dashboard --quiet"
-      }]
-    }]
-  }
-}
-```
-
-Every session end: collects the JSONL log into a local SQLite database (`~/.claude/_backups/token-optimizer/trends.db`), then regenerates the persistent dashboard. No external services. No API calls. Your data stays on your machine.
-
-You can also collect manually or backfill older sessions:
-
-```bash
-# Collect last 90 days of sessions (default)
-python3 $MEASURE_PY collect
-
-# Backfill a longer history
-python3 $MEASURE_PY collect --days 180
-```
-
-Collection is idempotent. Running it twice on the same sessions won't double-count anything.
 
 ### Usage Trends
 
@@ -351,43 +248,7 @@ python3 $MEASURE_PY trends --days 7
 python3 $MEASURE_PY trends --json
 ```
 
-Scans your session history and shows:
-
-**Skills usage**: Which skills you actually invoke vs. which sit idle loading frontmatter every session. This is the most actionable insight. If you have 59 skills installed but only use 8 in the last 30 days, that's 51 skills costing ~100 tokens each, every session, for nothing.
-
-**Model mix**: Your opus/sonnet/haiku split across all sessions. If you see 90% opus, you're probably overspending on data-gathering agents that would work fine on haiku.
-
-**Daily breakdown**: Per-day session count, token volume, and which skills were used. In the dashboard, each day expands to show individual sessions with duration, message count, cache hit rate, and skills used.
-
-```
-USAGE TRENDS (last 30 days)
-  Sessions: 70 | Avg duration: 340 min
-
-SKILLS
-  Used (8 of 59 installed):
-    morning .................. 28 sessions
-    evening-auto ............. 25 sessions
-    recall ................... 12 sessions
-
-  Never used (last 30 days):
-    api-docs, condition-based-waiting, ...
-    (51 skills, ~5,100 tokens overhead)
-
-MODEL MIX
-  sonnet ████████████████████░░░░░ 63%  3.4M tokens
-  opus   ████████████░░░░░░░░░░░░░ 22%  1.2M tokens
-  haiku  ███████░░░░░░░░░░░░░░░░░░ 15%  800K tokens
-```
-
-### Clickable Skill Details
-
-In the dashboard, every skill listed in trends is clickable. Click a skill name and it expands to show:
-
-- **Description**: What the skill does (from SKILL.md frontmatter)
-- **Frontmatter tokens**: How much it costs per session just sitting in the menu
-- **File structure**: What files the skill contains (SKILL.md, references/, scripts/, etc.)
-
-Never-used skills link directly to the Quick Wins tab so you can archive them in one step.
+Shows skills usage (installed vs actually invoked), model mix, daily breakdown.
 
 ### Session Health
 
@@ -395,87 +256,17 @@ Never-used skills link directly to the Quick Wins tab so you can archive them in
 python3 $MEASURE_PY health
 ```
 
-Detects running Claude Code processes and flags problems:
-
-- **Stale sessions** (24h+): Still running but probably forgotten. Long sessions accumulate context bloat.
-- **Zombie sessions** (48h+): Almost certainly orphaned. Safe to kill.
-- **Outdated versions**: Running an older Claude Code version than what's installed. Restart to get fixes.
-- **Automated processes**: Lists any launchd/cron jobs running Claude.
-
-```
-SESSION HEALTH CHECK
-  Installed version: 2.1.63
-
-RUNNING SESSIONS (2)
-  PID 521     (2d 8h ago)  v2.1.62  OUTDATED  ZOMBIE
-  PID 91719   (1d 2h ago)  v2.1.63  STALE
-
-RECOMMENDATIONS
-  - 1 session running older version. Restart to get latest fixes.
-  - 2 sessions running 24+ hours. Check if still needed.
-```
-
-### Dashboard Analytics Tabs
-
-Trends and health appear as dedicated tabs in both the persistent dashboard (`measure.py dashboard`) and the full audit dashboard (`measure.py dashboard --coord-path PATH`). The Trends tab includes:
-
-- Date range selector (7/14/30 days + calendar date picker)
-- Interactive daily breakdown table (click a day to expand individual sessions)
-- Skills usage bars with clickable detail panels
-- Model mix visualization with cost-saving context
-
-The persistent dashboard defaults to the Trends tab and hides empty audit sections. The full audit dashboard shows all tabs. The right panel collapses on analytics tabs since they're informational, giving the data more room.
+Detects stale sessions (24h+), zombie sessions (48h+), outdated versions, automated processes.
 
 ## Coach Mode
-
-The audit tells you what's wrong with your current setup. Coach Mode tells you how to build things right from the start.
 
 ```
 > /token-coach
 ```
 
-One question: "What's your goal today?"
+One question: "What's your goal today?" Then architecture guidance, pattern detection with named anti-patterns, multi-agent design patterns, and a prioritized action plan.
 
-- **Building something new**: Architecture guidance for skills, MCP servers, CLAUDE.md structure
-- **Existing setup feels slow**: Pattern detection with named anti-patterns and fix priorities
-- **Designing a multi-agent system**: Agent type selection, model routing, coordination patterns, cost math
-- **Quick health check**: Token Health Score (0-100) and top 3 actions
-
-Coach Mode is conversational, not a wall of text. It leads with your actual numbers, names the patterns it detects ("You've got the 50-Skill Trap going on"), asks follow-up questions, and generates a prioritized action plan with estimated token savings.
-
-### Token Health Score
-
-Every setup gets a 0-100 score based on detected patterns:
-
-```bash
-python3 $MEASURE_PY coach
-
-  Token Health Score: 78/100
-  Startup overhead: 18,200 tokens (9.1% of 200K)
-  Usable context: ~148,800 tokens
-
-  Issues detected:
-    [!!] Heavy CLAUDE.md: 1,450 tokens (target: <800)
-    [!]  Verbose Skill Descriptions: 5 skills over 200 chars
-
-  Good practices:
-    [OK] Reasonable Skill Count: 23 skills (2,300 tokens)
-    [OK] SessionEnd Hook Installed: Usage tracking active
-```
-
-The score and pattern analysis also appear as a dedicated **Coach tab** in the [dashboard](#interactive-dashboard).
-
-### What the coach knows
-
-The coaching knowledge base covers config optimization and agentic architecture:
-
-**8 named anti-patterns**: The 50-Skill Trap, The Opus Addiction, The CLAUDE.md Novel, The Import Avalanche, The MCP Sprawl, The Stale Memory, The Singleton Session, The Unscoped Rules. Each with symptoms, fix, and estimated savings.
-
-**Multi-agent design patterns**: Subagent cost model (each inherits your full config stack), coordination folder pattern, model routing table (Haiku for data-gathering, Sonnet for analysis, Opus for reasoning), built-in agent type selection (Explore vs Plan vs General-purpose), skill assignment costs (static, not progressive in subagents).
-
-**Hard numbers**: Baseline overhead breakdown, MCP tool costs (GitHub 26K eager vs 525 deferred), context quality degradation bands, environment variable reference, community benchmarks.
-
-### Coach data for scripts
+8 named anti-patterns, multi-agent design patterns, hard numbers. Coach tab in the dashboard.
 
 ```bash
 python3 $MEASURE_PY coach --json          # Full JSON output
@@ -483,34 +274,20 @@ python3 $MEASURE_PY coach --focus skills   # Focus on skill patterns
 python3 $MEASURE_PY coach --focus agentic  # Focus on multi-agent patterns
 ```
 
-## v2.0: Active Session Intelligence
-
-v1.x audits your setup. v2.0 protects your sessions.
+## v2.0+: Active Session Intelligence
 
 ### Smart Compaction
 
-Auto-compaction fires when context gets tight, but it's lossy. It drops the "why" behind decisions, error sequences, and agent state. Smart Compaction adds structured checkpoints before compaction and restores what was lost afterward.
-
 ```bash
-# Install the hook system (PreCompact + SessionStart + Stop + SessionEnd)
 python3 $MEASURE_PY setup-smart-compact --dry-run   # preview
 python3 $MEASURE_PY setup-smart-compact              # install
 python3 $MEASURE_PY setup-smart-compact --status     # check
 python3 $MEASURE_PY setup-smart-compact --uninstall  # remove
 ```
 
-What gets captured: decisions and reasoning, modified files (beyond Claude's 5-file rehydration), error-fix sequences, open questions, agent dispatch state, and the continuation point. All stored as plain markdown in `~/.claude/token-optimizer/checkpoints/`.
-
-Generate project-specific compaction instructions:
-
-```bash
-python3 $MEASURE_PY compact-instructions
-# Add the output to your project .claude/settings.json compactInstructions field
-```
+Captures: decisions and reasoning, modified files, error-fix sequences, open questions, agent dispatch state. All stored as plain markdown in `~/.claude/token-optimizer/checkpoints/`.
 
 ### Context Quality Analyzer
-
-Every tool measures how full your context is. This measures how useful the content is.
 
 ```bash
 python3 $MEASURE_PY quality current
@@ -520,71 +297,68 @@ python3 $MEASURE_PY quality current
 Context Quality Report
 ========================================
 Content quality:     74/100 (Good)
+Degradation band:    PEAK ZONE (34% fill, ~91/100 MRCR)
 Messages analyzed:   156
 Decisions captured:  8
 
 Issues found:
-   23 stale file reads    (14,000 tokens est.)  files edited since reading
-    3 bloated results     ( 8,000 tokens est.)  tool outputs never referenced again
-    4 duplicate reminders ( 2,000 tokens est.)  repeated system-reminder injections
-
-Signal-to-noise:
-  Decision density:  0.34 (34% substantive)
-  Agent efficiency:  82%
-
-Recommendation:
-  /compact would free ~24,000 tokens of low-value content
-  Smart Compact checkpoint would preserve 8 decisions
+   23 stale file reads    (14,000 tokens est.)
+    3 bloated results     ( 8,000 tokens est.)
+    2 compaction(s) (~88% cumulative context loss)
 ```
-
-Six weighted signals: stale reads (25%), bloated results (25%), duplicates (15%), compaction depth (15%), decision density (10%), agent efficiency (10%). Score ranges from 0-100. Quality data appears in the dashboard Health tab as an interactive gauge.
 
 ### Live Quality Bar
 
-See your context quality score in the terminal status bar, updated every ~2 minutes:
-
 ```
-Opus 4.6 | my-project ████████░░ 43% | Context Quality 74%
+Opus 4.6 | my-project ████████░░ 43% | Q:74 Compacts:2(~88% lost)
 ```
 
-Colors tell the story: green (85%+, clean), dim (70-84%, fine), yellow (50-69%, compact soon), red (<50%, clear and restart).
+Degradation-aware colors: green (peak), yellow (degrading), orange (dropping), red (severe).
 
 ```bash
 python3 $MEASURE_PY setup-quality-bar --dry-run   # preview
 python3 $MEASURE_PY setup-quality-bar              # install
-python3 $MEASURE_PY setup-quality-bar --status     # check
-python3 $MEASURE_PY setup-quality-bar --uninstall  # remove
 ```
-
-This installs two things: a status line script that displays the score, and a UserPromptSubmit hook that recalculates it every 2 minutes. If you already have a custom status line, it shows integration instructions instead of replacing yours.
-
-When quality drops below 70%, Claude also gets a warning and will proactively suggest `/compact`.
 
 ### Session Continuity
 
-When sessions end (normally, via /clear, or crash), state is checkpointed automatically. New sessions in the same project can pick up where you left off:
+Sessions auto-checkpoint on end, /clear, and crashes. New sessions pick up via keyword-matched context injection.
 
-- **Same session (post-compact)**: Full context recovery injected automatically
-- **New session (related work)**: Checkpoint injected if first message has >30% keyword overlap
-- **New session (unrelated)**: One-line pointer to available checkpoint
-
-All thresholds configurable via environment variables:
-
-| Variable | Default | What It Controls |
-|----------|---------|-----------------|
+| Variable | Default | Controls |
+|----------|---------|---------|
 | `TOKEN_OPTIMIZER_CHECKPOINT_TTL` | 300 (5 min) | Max age for post-compact restore |
 | `TOKEN_OPTIMIZER_CHECKPOINT_FILES` | 10 | Max checkpoint files kept |
-| `TOKEN_OPTIMIZER_CHECKPOINT_RETENTION_DAYS` | 7 | Days before old checkpoints are cleaned |
-| `TOKEN_OPTIMIZER_RELEVANCE_THRESHOLD` | 0.3 | Keyword overlap for new-session restore |
+| `TOKEN_OPTIMIZER_CHECKPOINT_RETENTION_DAYS` | 7 | Cleanup age |
+| `TOKEN_OPTIMIZER_RELEVANCE_THRESHOLD` | 0.3 | Keyword overlap for restore |
 
-## vs Alternatives
+## Measurement Tool
 
-| Tool | What It Does | Limitation |
-|------|-------------|------------|
-| **Manual audit** | Flexible | Takes hours. No measurement. Easy to miss things. |
-| **ccusage** | Monitors spending | Shows cost, not context waste or how to fix it. |
-| **token-optimizer-mcp** | Caches MCP calls | One dimension only. |
-| **This** | Audits, diagnoses, fixes, measures | Requires Claude Code. |
+Standalone script. No dependencies. Python 3.8+.
+
+```bash
+# Auto-detect path:
+MEASURE_PY=""
+for f in ~/.claude/skills/token-optimizer/scripts/measure.py \
+         ~/.claude/plugins/cache/*/token-optimizer/*/skills/token-optimizer/scripts/measure.py; do
+  [ -f "$f" ] && MEASURE_PY="$f" && break
+done
+[ -z "$MEASURE_PY" ] && { echo "measure.py not found. Is Token Optimizer installed?"; exit 1; }
+```
+
+```bash
+python3 $MEASURE_PY quick                # Quick scan with degradation bands
+python3 $MEASURE_PY doctor               # Health check (10 checks)
+python3 $MEASURE_PY drift                # Drift report vs last snapshot
+python3 $MEASURE_PY report               # Full token report
+python3 $MEASURE_PY quality current      # Session quality analysis
+python3 $MEASURE_PY dashboard            # Interactive dashboard
+python3 $MEASURE_PY trends               # Usage trends
+python3 $MEASURE_PY coach                # Coaching data
+python3 $MEASURE_PY collect              # Collect sessions to SQLite
+
+# Global flag: override context window detection
+python3 $MEASURE_PY quick --context-size 1000000
+```
 
 ## What's Inside
 
@@ -592,34 +366,23 @@ All thresholds configurable via environment variables:
 skills/token-optimizer/
   SKILL.md                             Orchestrator (phases 0-5 + v2.0 actions)
   assets/
-    dashboard.html                     Interactive dashboard (optimization + analytics + quality gauge)
-    dashboard-overview.png             Dashboard screenshot
+    dashboard.html                     Interactive dashboard
     logo.svg                           Animated ASCII logo
     hero-terminal.svg                  Terminal demo
-    before-after.svg                   Token breakdown comparison
-    how-it-works.svg                   5-phase flow diagram
-    user-profiles.svg                  Context usage by setup type
   references/
     agent-prompts.md                   8 agent prompt templates
-    implementation-playbook.md         Fix implementation details (4A-4N)
+    implementation-playbook.md         Fix implementation details
     optimization-checklist.md          32 optimization techniques
     token-flow-architecture.md         How Claude Code loads tokens
   examples/
     claude-md-optimized.md             Optimized CLAUDE.md template
     permissions-deny-template.json     permissions.deny starter
-    hooks-starter.json                 Hook configuration (v2.0: smart compact + analytics)
+    hooks-starter.json                 Hook configuration
   scripts/
-    measure.py                         Measurement, quality, smart compact, trends, health & collection
-    statusline.js                      Status line script (shows context quality live)
+    measure.py                         Core engine (audit, quality, smart compact, trends, health, quick, doctor, drift)
+    statusline.js                      Status line (degradation-aware colors)
 skills/token-coach/
-  SKILL.md                             Coaching orchestrator (quality-aware)
-  references/
-    coaching-scripts.md                Conversation flows + quality-driven coaching
-    coach-patterns.md                  Anti-patterns and fix patterns
-    agentic-systems.md                 Multi-agent architecture coaching
-    quick-reference.md                 Hard numbers and baselines
-  examples/
-    coaching-session-*.md              Few-shot coaching examples
+  SKILL.md                             Coaching orchestrator
 install.sh                             One-command installer
 ```
 

@@ -11,3 +11,4 @@ venv/
 snapshots/
 .pytest_cache/
 FIELD_NOTES.md
+private-review/

@@ -33,8 +33,8 @@ body {
   color: var(--c-text-main);
   font-family: var(--font-sans);
   font-weight: 300;
-  font-size: 16px;
-  line-height: 1.4;
+  font-size: 18px;
+  line-height: 1.5;
   min-height: 100vh;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
@@ -122,7 +122,7 @@ h1, h2, h3, h4 { font-weight: 400; }
   font-family: var(--font-sans);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  font-size: 13px;
+  font-size: 15px;
   border-left: 2px solid transparent;
 }
 
@@ -137,7 +137,7 @@ h1, h2, h3, h4 { font-weight: 400; }
 
 .nav-badge {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 13px;
   color: var(--c-accent-cyan);
   border: 1px solid var(--c-accent-cyan);
   padding: 0 4px;
@@ -146,7 +146,7 @@ h1, h2, h3, h4 { font-weight: 400; }
 }
 
 .user-profile {
-  font-size: 13px;
+  font-size: 15px;
   color: var(--c-text-dim);
   border-top: 1px solid var(--c-border);
   padding-top: var(--s-3);
@@ -171,7 +171,7 @@ h1, h2, h3, h4 { font-weight: 400; }
 .header { margin-bottom: var(--s-3); }
 
 .label {
-  font-size: 12px;
+  font-size: 14px;
   text-transform: uppercase;
   letter-spacing: 0.15em;
   color: var(--c-text-dim);
@@ -208,7 +208,7 @@ h1, h2, h3, h4 { font-weight: 400; }
   background: var(--c-surface);
   position: relative;
   border-radius: 12px;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   transition: transform 0.2s, border-color 0.2s;
 }
@@ -222,6 +222,7 @@ h1, h2, h3, h4 { font-weight: 400; }
   height: 1px;
   background: linear-gradient(90deg, transparent, var(--c-accent-cyan), transparent);
   opacity: 0.5;
+  border-radius: 12px 12px 0 0;
 }
 
 .card-header {
@@ -236,7 +237,7 @@ h1, h2, h3, h4 { font-weight: 400; }
 .card-header span:first-child {
   font-family: var(--font-sans);
   font-weight: 600;
-  font-size: 18px;
+  font-size: 20px;
   letter-spacing: 0.05em;
   color: var(--c-text-main);
 }
@@ -278,7 +279,7 @@ h1, h2, h3, h4 { font-weight: 400; }
 }
 
 .mini-label {
-  font-size: 16px;
+  font-size: 18px;
   color: var(--c-text-dim);
   font-family: var(--font-sans);
   text-transform: uppercase;
@@ -297,12 +298,12 @@ h1, h2, h3, h4 { font-weight: 400; }
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 14px;
+  font-size: 16px;
   font-family: var(--font-mono);
 }
 
 .bar-label {
-  width: 100px;
+  width: 130px;
   color: var(--c-text-dim);
   flex-shrink: 0;
   text-align: right;
@@ -333,11 +334,11 @@ h1, h2, h3, h4 { font-weight: 400; }
 }
 
 .bar-value {
-  width: 70px;
+  width: 80px;
   color: var(--c-text-dim);
   flex-shrink: 0;
   text-align: right;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 /* (opt-grid removed: replaced by component-cards) */
@@ -425,7 +426,7 @@ h1, h2, h3, h4 { font-weight: 400; }
 
 .status-badge {
   display: inline-block;
-  font-size: 11px;
+  font-size: 13px;
   border: 1px solid var(--c-accent-cyan);
   color: var(--c-accent-cyan);
   background: rgba(0,240,255,0.1);
@@ -500,7 +501,7 @@ input:checked + .slider:before {
 }
 
 .section-title {
-  font-size: 12px;
+  font-size: 14px;
   text-transform: uppercase;
   letter-spacing: 0.2em;
   margin-bottom: var(--s-3);
@@ -513,7 +514,7 @@ input:checked + .slider:before {
 
 .summary-metric {
   font-family: var(--font-mono);
-  font-size: 16px;
+  font-size: 18px;
   color: var(--c-text-dim);
   margin-bottom: var(--s-3);
 }
@@ -536,13 +537,11 @@ input:checked + .slider:before {
   padding: 10px var(--s-3);
   border: 1px solid var(--c-border);
   border-radius: 8px;
-  font-size: 15px;
+  font-size: 16px;
   color: var(--c-text-main);
   font-family: var(--font-sans);
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .notes-area {
@@ -554,7 +553,7 @@ input:checked + .slider:before {
   padding: var(--s-2) var(--s-3);
   color: var(--c-text-main);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 16px;
   resize: vertical;
   line-height: 1.5;
 }
@@ -570,9 +569,9 @@ input:checked + .slider:before {
   font-family: var(--font-mono);
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  padding: 12px 14px;
+  padding: 14px 14px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 15px;
   transition: 0.2s;
   border-radius: 4px;
 }
@@ -597,7 +596,7 @@ input:checked + .slider:before {
 .version-footer {
   margin-top: auto;
   opacity: 0.4;
-  font-size: 11px;
+  font-size: 13px;
   text-align: center;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -635,13 +634,13 @@ input:checked + .slider:before {
   text-align: center;
   padding: 2.5rem 1rem;
   color: var(--c-text-dim);
-  font-size: 16px;
+  font-size: 17px;
   font-family: var(--font-mono);
 }
 
 .last-updated {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 14px;
   color: var(--c-text-dim);
   border-bottom: 1px solid var(--c-border);
   padding-bottom: var(--s-2);
@@ -685,7 +684,7 @@ input:checked + .slider:before {
 }
 
 .setting-detail .detail-heading {
-  font-size: 13px;
+  font-size: 15px;
   text-transform: uppercase;
   letter-spacing: 0.15em;
   color: var(--c-text-dim);
@@ -699,7 +698,7 @@ input:checked + .slider:before {
 }
 
 .setting-detail .detail-text {
-  font-size: 16px;
+  font-size: 17px;
   font-family: var(--font-mono);
   color: var(--c-text-dim);
   line-height: 1.6;
@@ -735,7 +734,7 @@ input:checked + .slider:before {
 .component-card-header .cc-name {
   font-family: var(--font-sans);
   font-weight: 500;
-  font-size: 18px;
+  font-size: 20px;
   color: var(--c-text-main);
 }
 
@@ -747,7 +746,7 @@ input:checked + .slider:before {
 
 .component-card-header .cc-tokens {
   font-family: var(--font-mono);
-  font-size: 16px;
+  font-size: 18px;
   color: var(--c-accent-cyan);
   text-shadow: var(--glow-text);
 }
@@ -764,7 +763,7 @@ input:checked + .slider:before {
 
 .component-card-sub {
   padding: 0 var(--s-4) var(--s-2);
-  font-size: 16px;
+  font-size: 17px;
   color: var(--c-text-dim);
   font-family: var(--font-sans);
 }
@@ -783,7 +782,7 @@ input:checked + .slider:before {
 }
 
 .component-card-detail .detail-heading {
-  font-size: 13px;
+  font-size: 15px;
   text-transform: uppercase;
   letter-spacing: 0.15em;
   color: var(--c-text-dim);
@@ -797,7 +796,7 @@ input:checked + .slider:before {
 }
 
 .component-card-detail .detail-text {
-  font-size: 16px;
+  font-size: 17px;
   font-family: var(--font-mono);
   color: var(--c-text-dim);
   line-height: 1.6;
@@ -910,7 +909,7 @@ input:checked + .slider:before {
   padding: var(--s-4) 0;
   margin-top: var(--s-5);
   opacity: 0.4;
-  font-size: 11px;
+  font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   font-family: var(--font-mono);
@@ -953,16 +952,14 @@ input:checked + .slider:before {
 .stat-card .stat-card-value {
   font-family: var(--font-mono);
   font-weight: 300;
-  font-size: 36px;
+  font-size: 38px;
   color: var(--c-text-main);
   margin-bottom: var(--s-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-word;
 }
 
 .stat-card .stat-card-label {
-  font-size: 12px;
+  font-size: 14px;
   text-transform: uppercase;
   letter-spacing: 0.15em;
   color: var(--c-text-dim);
@@ -979,7 +976,7 @@ input:checked + .slider:before {
 
 .skills-gap-tag {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 14px;
   color: var(--c-text-dim);
   background: var(--c-surface-hover);
   border: 1px solid var(--c-border);
@@ -1020,7 +1017,7 @@ input:checked + .slider:before {
   flex-wrap: wrap;
   gap: var(--s-4);
   margin-top: var(--s-2);
-  font-size: 13px;
+  font-size: 15px;
   font-family: var(--font-mono);
   color: var(--c-text-dim);
 }
@@ -1066,7 +1063,7 @@ input:checked + .slider:before {
 }
 
 .trajectory-label {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--c-text-dim);
   font-family: var(--font-mono);
   margin-top: var(--s-1);
@@ -1078,12 +1075,12 @@ input:checked + .slider:before {
   width: 100%;
   border-collapse: collapse;
   font-family: var(--font-mono);
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .session-table th {
   text-align: left;
-  font-size: 11px;
+  font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.15em;
   color: var(--c-text-dim);
@@ -1101,7 +1098,7 @@ input:checked + .slider:before {
 /* ========== FLAG BADGES ========== */
 .flag-badge {
   display: inline-block;
-  font-size: 10px;
+  font-size: 12px;
   font-family: var(--font-mono);
   font-weight: 500;
   text-transform: uppercase;
@@ -1148,7 +1145,7 @@ input:checked + .slider:before {
   padding: var(--s-3) var(--s-4);
   margin-bottom: var(--s-2);
   font-family: var(--font-mono);
-  font-size: 14px;
+  font-size: 16px;
   color: var(--c-text-dim);
   line-height: 1.6;
 }
@@ -1166,7 +1163,7 @@ input:checked + .slider:before {
   border: 1px solid var(--c-border);
   color: var(--c-text-dim);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 15px;
   padding: 6px 12px;
   border-radius: 6px;
   cursor: pointer;
@@ -1181,7 +1178,7 @@ input:checked + .slider:before {
   border: 1px solid var(--c-border);
   color: var(--c-text-main);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 15px;
   padding: 6px 10px;
   border-radius: 6px;
   cursor: pointer;
@@ -1253,14 +1250,14 @@ input:checked + .slider:before {
 
 .skill-detail-header .skill-name {
   font-family: var(--font-mono);
-  font-size: 14px;
+  font-size: 16px;
   color: var(--c-text-main);
   flex: 1;
 }
 
 .skill-detail-header .skill-tokens {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 14px;
   color: var(--c-text-dim);
   white-space: nowrap;
 }
@@ -1289,7 +1286,7 @@ input:checked + .slider:before {
 }
 
 .skill-detail-content .skill-desc {
-  font-size: 13px;
+  font-size: 15px;
   color: var(--c-text-dim);
   margin-bottom: var(--s-2);
   line-height: 1.5;
@@ -1303,7 +1300,7 @@ input:checked + .slider:before {
 
 .skill-file-tag {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 13px;
   color: var(--c-text-dim);
   background: rgba(255,255,255,0.04);
   padding: 2px 8px;
@@ -1338,9 +1335,9 @@ input:checked + .slider:before {
 .hook-row { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3); border-bottom: 1px solid var(--c-border); }
 .hook-row:last-child { border-bottom: none; }
 .hook-info { flex: 1; }
-.hook-label { font-weight: 500; font-size: 15px; }
-.hook-desc { font-size: 13px; color: var(--c-text-dim); margin-top: 2px; }
-.hook-cmd-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--c-accent-cyan); color: var(--c-bg); padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; }
+.hook-label { font-weight: 500; font-size: 17px; }
+.hook-desc { font-size: 15px; color: var(--c-text-dim); margin-top: 2px; }
+.hook-cmd-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--c-accent-cyan); color: var(--c-bg); padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: 500; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; }
 .hook-cmd-toast.visible { opacity: 1; }
 .hook-partial { font-size: 12px; color: #ff9f43; margin-top: 2px; }
 </style>
@@ -1381,7 +1378,7 @@ window.__TOKEN_DATA__ = null;
       <header class="header">
         <div class="label">Token Overhead Analysis</div>
         <h1>Overview</h1>
-        <p>Your current config overhead, measured against a 200K context window.</p>
+        <p>Your current config overhead, measured against your detected context window.</p>
       </header>
 
       <div class="card wide" id="hero-card">
@@ -1398,12 +1395,12 @@ window.__TOKEN_DATA__ = null;
           <div class="card-header"><span>Before You Start</span></div>
           <div class="mini-stat" id="stat-pct"></div>
           <div class="chart-container" id="chart-bars"></div>
-          <p class="label" style="margin-top: var(--s-2); line-height: 1.5; text-transform: none; font-size: 15px; letter-spacing: 0; color: var(--c-text-dim); text-shadow: none;" id="sat-desc"></p>
+          <p class="label" style="margin-top: var(--s-2); line-height: 1.5; text-transform: none; font-size: 17px; letter-spacing: 0; color: var(--c-text-dim); text-shadow: none;" id="sat-desc"></p>
         </div>
         <div class="card" id="card-potential">
           <div class="card-header"><span>What You'd Save</span></div>
           <div class="mini-stat" id="stat-potential"></div>
-          <p class="label" style="margin-top: auto; line-height: 1.5; text-transform: none; font-size: 15px; letter-spacing: 0; color: var(--c-text-dim); text-shadow: none;" id="potential-desc"></p>
+          <p class="label" style="margin-top: auto; line-height: 1.5; text-transform: none; font-size: 17px; letter-spacing: 0; color: var(--c-text-dim); text-shadow: none;" id="potential-desc"></p>
         </div>
       </div>
 

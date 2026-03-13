@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Token Optimizer - Claude Code Status Line
-// Shows: model | project | context bar used% | Context Quality score | Compacts:N
+// Shows: model | project | context bar used% | Q:score | Compacts:N(loss)
 //
 // Install: python3 measure.py setup-quality-bar
 // The quality score is updated by a UserPromptSubmit hook every ~2 minutes.
+// Reads from quality-cache.json (global fallback, always updated).
 
 const fs = require('fs');
 const path = require('path');
@@ -19,56 +20,61 @@ process.stdin.on('end', () => {
     const dir = data.workspace?.current_dir || process.cwd();
     const remaining = data.context_window?.remaining_percentage;
 
-    // Context window bar (scaled to 80% real limit)
+    // Context window bar with degradation-aware colors
+    // Colors based on MRCR degradation bands:
+    //   <50% fill = green (peak zone), 50-70% = yellow (degradation starting),
+    //   70-80% = orange (quality dropping), 80%+ = red (severe)
     let ctx = '';
     if (remaining != null) {
       const rem = Math.round(remaining);
-      const rawUsed = Math.max(0, Math.min(100, 100 - rem));
-      const used = Math.min(100, Math.round((rawUsed / 80) * 100));
+      const used = Math.max(0, Math.min(100, 100 - rem));
 
       const filled = Math.floor(used / 10);
       const bar = '\u2588'.repeat(filled) + '\u2591'.repeat(10 - filled);
 
-      if (used < 63) {
-        ctx = ` \x1b[32m${bar} ${used}%\x1b[0m`;
-      } else if (used < 81) {
-        ctx = ` \x1b[33m${bar} ${used}%\x1b[0m`;
-      } else if (used < 95) {
-        ctx = ` \x1b[38;5;208m${bar} ${used}%\x1b[0m`;
+      if (used < 50) {
+        ctx = ` \x1b[32m${bar} ${used}%\x1b[0m`;           // Green: peak zone
+      } else if (used < 70) {
+        ctx = ` \x1b[33m${bar} ${used}%\x1b[0m`;           // Yellow: degradation starting
+      } else if (used < 80) {
+        ctx = ` \x1b[38;5;208m${bar} ${used}%\x1b[0m`;     // Orange: quality dropping
       } else {
-        ctx = ` \x1b[5;31m${bar} ${used}%\x1b[0m`;
+        ctx = ` \x1b[5;31m${bar} ${used}%\x1b[0m`;         // Red blinking: severe
       }
     }
 
-    // Read quality cache for score, compactions, turns
+    // Read quality cache (global fallback, always kept in sync by measure.py)
     let qScore = '';
     let sessionInfo = '';
-    const qFile = path.join(os.homedir(), '.claude', 'token-optimizer', 'quality-cache.json');
+    const cacheDir = path.join(os.homedir(), '.claude', 'token-optimizer');
+    const qFile = path.join(cacheDir, 'quality-cache.json');
+
     if (fs.existsSync(qFile)) {
       try {
         const q = JSON.parse(fs.readFileSync(qFile, 'utf8'));
         const s = q.score;
         if (s != null) {
-          if (s >= 85) {
-            qScore = ` \x1b[2m|\x1b[0m \x1b[32mContext Quality ${s}%\x1b[0m`;
-          } else if (s >= 70) {
-            qScore = ` \x1b[2m|\x1b[0m \x1b[2mContext Quality ${s}%\x1b[0m`;
-          } else if (s >= 50) {
-            qScore = ` \x1b[2m|\x1b[0m \x1b[33mContext Quality ${s}%\x1b[0m`;
+          const score = Math.round(s);
+          if (score >= 85) {
+            qScore = ` \x1b[2m|\x1b[0m \x1b[32mQ:${score}\x1b[0m`;
+          } else if (score >= 70) {
+            qScore = ` \x1b[2m|\x1b[0m \x1b[2mQ:${score}\x1b[0m`;
+          } else if (score >= 50) {
+            qScore = ` \x1b[2m|\x1b[0m \x1b[33mQ:${score}\x1b[0m`;
           } else {
-            qScore = ` \x1b[2m|\x1b[0m \x1b[31mContext Quality ${s}%\x1b[0m`;
+            qScore = ` \x1b[2m|\x1b[0m \x1b[31mQ:${score}\x1b[0m`;
           }
         }
 
-        // Compaction count (amber 1-2, red 3+)
+        // Compaction count with cumulative loss info
         const c = q.compactions;
-        if (c != null) {
-          if (c === 0) {
-            sessionInfo = ` \x1b[2mCompacts:${c}\x1b[0m`;
-          } else if (c <= 2) {
-            sessionInfo = ` \x1b[33mCompacts:${c}\x1b[0m`;
+        if (c != null && c > 0) {
+          const lossMap = { 1: '~65%', 2: '~88%' };
+          const loss = lossMap[c] || '~95%';
+          if (c <= 2) {
+            sessionInfo = ` \x1b[33mCompacts:${c}(${loss} lost)\x1b[0m`;
           } else {
-            sessionInfo = ` \x1b[31mCompacts:${c}\x1b[0m`;
+            sessionInfo = ` \x1b[31mCompacts:${c}(${loss} lost)\x1b[0m`;
           }
         }
       } catch (e) {}
