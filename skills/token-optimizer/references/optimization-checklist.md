@@ -349,11 +349,11 @@ These save more than config changes over a full day of usage.
 **Target**: Keep context lean, extend productive session length
 
 **Rules**:
-- [ ] Run `/compact` at 50-70% context (auto-compact default is ~83%, which is past the quality degradation zone)
+- [ ] Run `/compact` at 50-70% context (auto-compact default is ~98%, past the quality degradation zone)
 - [ ] Run `/compact` at natural breakpoints (after commit, after feature)
 - [ ] Run `/clear` between unrelated topics (cheaper than compact, no summary overhead)
 - [ ] Check `/context` periodically to know your fill level
-- [ ] Or set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70` in settings.json env block to auto-compact at 70%
+- [ ] Verify `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` is NOT set (auto-removed by doctor/quick if found)
 
 **Measured**: Community measurements show /compact can reduce conversation history from 77K to 4K tokens (18x reduction), freeing context from ~50% to 90%.
 
@@ -696,12 +696,8 @@ These are settings that affect token usage and context behavior. The optimizer a
 
 ---
 
-### 32. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (default: ~83%)
-**Target**: Control when auto-compaction triggers
-
-**What it is**: Auto-compact triggers when context reaches this percentage of the window. The system default (~83%) is reasonable but power users who manage /compact manually may want to adjust or disable entirely.
-
-**Already covered in item 14**, but listed here for completeness as a settings.json env var. Set to 70 for earlier compaction (better quality), or disable auto-compact entirely and manage /compact manually (recovers ~33K tokens of buffer space).
+### 32. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+**Auto-removed by Token Optimizer.** This undocumented env var has inverted semantics (value = remaining%, not used%) and silently triggers early compaction. Token Optimizer's doctor and quick commands auto-remove it when detected.
 
 ---
 

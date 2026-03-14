@@ -1025,6 +1025,9 @@ def quick_scan(as_json=False):
     ctx_window, ctx_source = detect_context_window()
     ctx_label = _fmt_context_window(ctx_window)
 
+    # Auto-remove CLAUDE_AUTOCOMPACT_PCT_OVERRIDE if set (inverted semantics, causes premature compaction)
+    _auto_remove_bad_env_vars()
+
     overhead = totals["estimated_total"]
     overhead_pct = overhead / ctx_window * 100
 
@@ -1279,7 +1282,22 @@ def doctor(as_json=False):
     else:
         checks.append(("!!", "Dashboard", "not generated (fix: python3 measure.py dashboard)"))
 
-    # 9. Broken symlinks
+    # 9. Auto-remove harmful env vars (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE etc.)
+    total += 1
+    env_block = settings.get("env", {})
+    bad_found = {v: env_block.get(v) for v in BAD_ENV_VARS if v in env_block}
+    if bad_found:
+        _auto_remove_bad_env_vars()
+        # Re-read settings after removal
+        settings, _ = _read_settings_json()
+        for var, val in bad_found.items():
+            checks.append(("OK", f"Env cleanup", f"REMOVED {var}={val} (inverted semantics, caused premature compaction)"))
+        score += 1
+    else:
+        checks.append(("OK", "Env vars", "no harmful overrides"))
+        score += 1
+
+    # 10. Broken symlinks (renumbered from 9)
     total += 1
     broken = []
     skills_dir = CLAUDE_DIR / "skills"
@@ -4671,6 +4689,28 @@ def _write_settings_atomic(settings_data):
         raise
 
 
+BAD_ENV_VARS = ["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"]
+"""Env vars that should be auto-removed from settings.json.
+CLAUDE_AUTOCOMPACT_PCT_OVERRIDE is undocumented and has inverted semantics
+(value = remaining%, not used%). Setting it to 70 triggers compaction at
+30% used, silently destroying sessions."""
+
+
+def _auto_remove_bad_env_vars():
+    """Auto-remove harmful env vars from settings.json."""
+    settings, _ = _read_settings_json()
+    env_block = settings.get("env", {})
+    removed = []
+    for var in BAD_ENV_VARS:
+        if var in env_block:
+            removed.append((var, env_block.pop(var)))
+    if removed:
+        settings["env"] = env_block
+        _write_settings_atomic(settings)
+        for var, val in removed:
+            print(f"  [Auto-fix] Removed {var}={val} from settings.json (inverted semantics, caused premature compaction)")
+
+
 def setup_hook(dry_run=False):
     """Install the SessionEnd hook for automatic usage collection and dashboard refresh."""
     # Load existing settings
@@ -6631,9 +6671,9 @@ def setup_quality_bar(dry_run=False, uninstall=False, status_only=False):
                 f"      try {{\n"
                 f"        const q = JSON.parse(fs.readFileSync(qFile, 'utf8'));\n"
                 f"        const s = q.score;\n"
-                f"        if (s < 50) qScore = ' | \\x1b[31mContext Quality ' + s + '%\\x1b[0m';\n"
-                f"        else if (s < 70) qScore = ' | \\x1b[33mContext Quality ' + s + '%\\x1b[0m';\n"
-                f"        else qScore = ' | \\x1b[2mContext Quality ' + s + '%\\x1b[0m';\n"
+                f"        if (s < 50) qScore = ' | \\x1b[31mContextQ:' + s + '\\x1b[0m';\n"
+                f"        else if (s < 70) qScore = ' | \\x1b[33mContextQ:' + s + '\\x1b[0m';\n"
+                f"        else qScore = ' | \\x1b[2mContextQ:' + s + '\\x1b[0m';\n"
                 f"      }} catch (e) {{}}\n"
                 f"    }}\n"
                 f"    // Append qScore to your output\n"
@@ -6672,7 +6712,7 @@ def setup_quality_bar(dry_run=False, uninstall=False, status_only=False):
         if skipped:
             print(f"  Already had: {', '.join(skipped)}")
         print(f"\n  What you'll see:")
-        print(f"    Status line:  model | project ████ 43% | Context Quality 74%")
+        print(f"    Status line:  model | effort | project ████ 43% | ContextQ:74")
         print(f"    Quality updates every ~2 minutes during active sessions")
         print(f"    Colors: green (85%+), dim (70-84%), yellow (50-69%), red (<50%)")
         print(f"\n  To remove: python3 measure.py setup-quality-bar --uninstall")
@@ -6887,6 +6927,9 @@ if __name__ == "__main__":
                 print(f"[Token Optimizer] Context quality: {score}/100 (critical). Heavy rot detected. Consider /clear with checkpoint.")
             else:
                 print(f"[Token Optimizer] Context quality: {score}/100. Stale reads and bloated results building up. Consider /compact.")
+    elif args[0] == "ensure-health":
+        # Silent auto-fix of known harmful settings. Called by SessionStart hook.
+        _auto_remove_bad_env_vars()
     elif args[0] == "setup-quality-bar":
         dry = "--dry-run" in args
         uninstall = "--uninstall" in args

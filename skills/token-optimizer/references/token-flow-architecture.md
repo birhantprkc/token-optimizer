@@ -277,7 +277,7 @@ Continue until /clear or session end
 | 70-85% | Noticeable cutting corners |
 | 85%+ | Hallucinations, drift, forgetfulness |
 
-**Recommendation**: Manually /compact at 50-70% to stay in peak zone. Auto-compact triggers near context limits, past the quality degradation threshold. Set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70` to auto-compact earlier.
+**Recommendation**: Manually /compact at 50-70% to stay in peak zone. Auto-compact triggers near ~98% of context (the default), which is past the quality degradation threshold. Token Optimizer auto-removes `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` if found (undocumented env var with inverted semantics that causes premature compaction).
 
 ---
 
@@ -582,7 +582,6 @@ The `env` block in `~/.claude/settings.json` can set several token-relevant vari
 ```json
 {
   "env": {
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "70",
     "CLAUDE_CODE_MAX_THINKING_TOKENS": "10000",
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384",
     "MAX_MCP_OUTPUT_TOKENS": "25000",

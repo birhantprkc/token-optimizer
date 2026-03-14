@@ -202,7 +202,7 @@ Audit settings.json env block and help user tune token-relevant variables.
    Settings Audit:
    | Variable                        | Current | Default | Recommendation |
    |---------------------------------|---------|---------|----------------|
-   | CLAUDE_AUTOCOMPACT_PCT_OVERRIDE | not set | ~83%    | Set to 70 for better quality |
+   | CLAUDE_AUTOCOMPACT_PCT_OVERRIDE | not set | ~98%    | Auto-removed if found (undocumented, semantics inverted) |
    | MAX_THINKING_TOKENS             | not set | 10,000  | Default is fine |
    | ENABLE_TOOL_SEARCH              | auto    | auto    | Good (active)  |
    ```
