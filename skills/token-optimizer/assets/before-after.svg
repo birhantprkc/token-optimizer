@@ -145,7 +145,7 @@
     <text x="680" y="476" fill="#a6e3a1" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12" text-anchor="end">-8%</text>
 
     <!-- Footnotes -->
-    <text x="400" y="510" fill="#585b70" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="11" text-anchor="middle">Plus ~33K autocompact buffer. Total unavailable: 38% before, 30% after optimization.</text>
-    <text x="400" y="528" fill="#585b70" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="11" text-anchor="middle">100 messages/day = 1.5M tokens of overhead saved daily.</text>
+    <text x="400" y="510" fill="#585b70" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="11" text-anchor="middle">Based on 200K context. At 1M, overhead is 4-7% but every token saved extends your peak quality zone.</text>
+    <text x="400" y="528" fill="#585b70" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="11" text-anchor="middle">Run python3 measure.py quick for your degradation risk at 1M.</text>
   </g>
 </svg>

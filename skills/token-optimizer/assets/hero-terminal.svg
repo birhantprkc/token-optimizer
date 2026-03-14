@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" width="800" height="520">
   <!--
-    Token Optimizer hero – Claude Code terminal running /token-optimizer.
+    Token Optimizer hero – Claude Code terminal running quick scan.
     16s loop. Catppuccin Mocha palette. Pure SMIL animations.
-    Numbers: Post-Tool-Search (Feb 2026). ~43K tokens typical power user overhead.
-    Sources: Anthropic Tool Search docs, /context output, community measurements.
+    Numbers: 1M context window (March 2026). ~62K tokens typical power user overhead.
+    Sources: Anthropic MRCR benchmarks, /context output, community measurements.
   -->
   <defs>
     <clipPath id="tc"><rect width="800" height="520" rx="10"/></clipPath>
@@ -36,85 +36,91 @@
 
   <!-- Claude Code header -->
   <text x="28" y="62" fill="#cdd6f4" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="16" font-weight="bold">Claude Code</text>
-  <text x="172" y="62" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">v2.1.59</text>
+  <text x="172" y="62" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">v2.1.75</text>
   <text x="28" y="82" fill="#6c7086" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">Opus 4.6 · Claude Max · ~/.claude</text>
 
   <!-- Separator -->
   <line x1="20" y1="98" x2="780" y2="98" stroke="#313244" stroke-width="0.5"/>
 
   <!-- User prompt (typing animation) -->
-  <text clip-path="url(#ty)" x="28" y="128" fill="#89b4fa" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="16" font-weight="bold">&#x276F; /token-optimizer</text>
+  <text clip-path="url(#ty)" x="28" y="128" fill="#89b4fa" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="16" font-weight="bold">&#x276F; python3 measure.py quick</text>
 
-  <!-- Status line -->
+  <!-- Scan header -->
   <g opacity="0">
     <animate attributeName="opacity"
       values="0;0;1;1;0;0"
       keyTimes="0;0.14;0.17;0.84;0.88;1"
       dur="16s" repeatCount="indefinite"/>
-    <text x="28" y="158" fill="#a6e3a1" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="13" font-style="italic">[Token Optimizer Initialized]</text>
+    <text x="28" y="158" fill="#cdd6f4" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14" font-weight="bold">TOKEN OPTIMIZER: QUICK SCAN</text>
+    <line x1="28" y1="166" x2="400" y2="166" stroke="#313244" stroke-width="1"/>
   </g>
 
-  <!-- Dispatching agents -->
+  <!-- Context window + overhead -->
   <g opacity="0">
     <animate attributeName="opacity"
       values="0;0;1;1;0;0"
       keyTimes="0;0.19;0.22;0.84;0.88;1"
       dur="16s" repeatCount="indefinite"/>
-    <text x="28" y="186" fill="#f9e2af" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">Dispatching 6 audit agents...</text>
+    <text fill="#bac2de" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">
+      <tspan x="44" y="190">Context window:    </tspan>
+      <tspan fill="#89b4fa">1,000,000 tokens (1M, auto-detected)</tspan>
+    </text>
+    <text fill="#bac2de" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">
+      <tspan x="44" y="210">Startup overhead:  </tspan>
+      <tspan fill="#f9e2af">62,400 tokens (6.2%)</tspan>
+    </text>
+    <text fill="#bac2de" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">
+      <tspan x="44" y="230">Quality estimate:  </tspan>
+      <tspan fill="#a6e3a1">~96/100 (MRCR peak zone)</tspan>
+    </text>
   </g>
 
-  <!-- Agent names appearing one by one -->
-  <g opacity="0">
-    <animate attributeName="opacity" values="0;0;1;1;0;0" keyTimes="0;0.24;0.26;0.84;0.88;1" dur="16s" repeatCount="indefinite"/>
-    <text x="44" y="206" fill="#585b70" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">claude-md · memory-md · skills · mcp · commands · advanced</text>
-  </g>
-
-  <!-- Results: CURRENT STATE header -->
+  <!-- DEGRADATION RISK header -->
   <g opacity="0">
     <animate attributeName="opacity"
       values="0;0;1;1;0;0"
       keyTimes="0;0.30;0.34;0.84;0.88;1"
       dur="16s" repeatCount="indefinite"/>
-    <text x="28" y="238" fill="#cdd6f4" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14" font-weight="bold">CURRENT STATE</text>
+    <text x="28" y="264" fill="#f9e2af" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14" font-weight="bold">DEGRADATION RISK</text>
   </g>
 
-  <!-- Current state details -->
+  <!-- Risk details -->
   <g opacity="0">
     <animate attributeName="opacity"
       values="0;0;1;1;0;0"
       keyTimes="0;0.36;0.40;0.84;0.88;1"
       dur="16s" repeatCount="indefinite"/>
     <text fill="#bac2de" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">
-      <tspan x="28" y="260">Per-message overhead:  </tspan>
-      <tspan fill="#f38ba8" font-weight="bold">~43,000 tokens</tspan>
+      <tspan x="44" y="288">Danger zone:       </tspan>
+      <tspan fill="#f9e2af">500K (50%, quality starts dropping)</tspan>
     </text>
     <text fill="#bac2de" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">
-      <tspan x="28" y="280">Context unavailable:   </tspan>
-      <tspan fill="#f9e2af">38% before your first message</tspan>
+      <tspan x="44" y="308">Auto-compact at:   </tspan>
+      <tspan fill="#f38ba8">~800K (60-70% of context LOST)</tspan>
     </text>
     <text fill="#bac2de" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">
-      <tspan x="28" y="300">Controllable overhead: </tspan>
-      <tspan fill="#89b4fa">~28,000 tokens (this is what you fix)</tspan>
+      <tspan x="44" y="328">After 2 compacts:  </tspan>
+      <tspan fill="#f38ba8">~88% cumulative context loss</tspan>
     </text>
   </g>
 
-  <!-- QUICK WINS header -->
+  <!-- TOP OFFENDERS header -->
   <g opacity="0">
     <animate attributeName="opacity"
       values="0;0;1;1;0;0"
       keyTimes="0;0.46;0.50;0.84;0.88;1"
       dur="16s" repeatCount="indefinite"/>
-    <text x="28" y="332" fill="#a6e3a1" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14" font-weight="bold">QUICK WINS</text>
+    <text x="28" y="362" fill="#a6e3a1" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14" font-weight="bold">TOP OFFENDERS</text>
   </g>
 
-  <!-- Quick win items -->
+  <!-- Offender items -->
   <g opacity="0">
     <animate attributeName="opacity"
       values="0;0;1;1;0;0"
       keyTimes="0;0.52;0.55;0.84;0.88;1"
       dur="16s" repeatCount="indefinite"/>
     <text fill="#bac2de" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">
-      <tspan x="28" y="356">&#xB7; Slim CLAUDE.md + MEMORY.md: </tspan><tspan fill="#a6e3a1">Save ~5,000 tokens/msg</tspan>
+      <tspan x="44" y="386">1. 58 skills loaded </tspan><tspan fill="#585b70">(42 unused in 30d):</tspan><tspan fill="#f9e2af"> 18,200 tokens</tspan>
     </text>
   </g>
 
@@ -124,43 +130,36 @@
       keyTimes="0;0.56;0.59;0.84;0.88;1"
       dur="16s" repeatCount="indefinite"/>
     <text fill="#bac2de" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">
-      <tspan x="28" y="380">&#xB7; Prune MCP + archive skills:</tspan><tspan fill="#a6e3a1"> Save ~8,000 tokens/msg</tspan>
+      <tspan x="44" y="406">2. 12 MCP servers </tspan><tspan fill="#585b70">(3 eager-loaded):</tspan><tspan fill="#f9e2af"> 11,400 tokens</tspan>
     </text>
   </g>
 
-  <g opacity="0">
-    <animate attributeName="opacity"
-      values="0;0;1;1;0;0"
-      keyTimes="0;0.60;0.63;0.84;0.88;1"
-      dur="16s" repeatCount="indefinite"/>
-    <text fill="#bac2de" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14">
-      <tspan x="28" y="404">&#xB7; Add file exclusion + hooks:</tspan><tspan fill="#a6e3a1"> Save ~2,000 tokens/msg</tspan>
-    </text>
-  </g>
-
-  <!-- Total savings line -->
+  <!-- Quick win -->
   <g opacity="0">
     <animate attributeName="opacity"
       values="0;0;1;1;0;0"
       keyTimes="0;0.66;0.70;0.84;0.88;1"
       dur="16s" repeatCount="indefinite"/>
-    <line x1="28" y1="420" x2="560" y2="420" stroke="#313244" stroke-width="0.5"/>
-    <text x="28" y="442" fill="#a6e3a1" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14" font-weight="bold">Context recovered: ~15,000 tokens/msg (38% &#x2192; 30%)</text>
+    <line x1="28" y1="424" x2="560" y2="424" stroke="#313244" stroke-width="0.5"/>
+    <text x="28" y="446" fill="#a6e3a1" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="14" font-weight="bold">#1 Quick Win: Archive 42 unused skills &#x2192; save ~12,600 tokens</text>
   </g>
 
   <!-- Blinking cursor -->
-  <rect x="28" y="456" width="9" height="16" fill="#89b4fa">
+  <rect x="28" y="460" width="9" height="16" fill="#89b4fa">
     <animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.4;0.5;1" dur="1s" repeatCount="indefinite"/>
   </rect>
 
   <!-- Status bar -->
-  <text x="14" y="506" fill="#a6adc8" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">[Opus 4.6] ~/.claude · main</text>
+  <text x="14" y="506" fill="#a6adc8" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">Opus 4.6 | my-project</text>
 
-  <!-- Context progress bar (38% unavailable) -->
-  <rect x="340" y="496" width="100" height="10" rx="5" fill="#313244"/>
-  <rect x="340" y="496" width="38" height="10" rx="5" fill="#f9e2af"/>
-  <text x="448" y="506" fill="#f9e2af" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">38%</text>
+  <!-- Context progress bar (6% used) -->
+  <rect x="280" y="496" width="100" height="10" rx="5" fill="#313244"/>
+  <rect x="280" y="496" width="6" height="10" rx="3" fill="#a6e3a1"/>
+  <text x="388" y="506" fill="#a6e3a1" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">6%</text>
+
+  <!-- Quality score -->
+  <text x="430" y="506" fill="#a6e3a1" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">Q:96</text>
 
   <!-- Right status -->
-  <text x="786" y="506" text-anchor="end" fill="#585b70" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">124K tokens remaining</text>
+  <text x="786" y="506" text-anchor="end" fill="#585b70" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="12">938K tokens remaining</text>
 </svg>

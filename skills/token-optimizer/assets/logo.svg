@@ -41,8 +41,8 @@
   <line x1="140" y1="248" x2="640" y2="248" stroke="url(#line-grad)" stroke-width="1.5" opacity="0.4"/>
 
   <!-- Value subtitle with blinking cursor -->
-  <text x="390" y="278" text-anchor="middle" font-family="'Menlo','Cascadia Code','JetBrains Mono','Fira Code',monospace" font-size="14" fill="#e87b55" opacity="0.9" letter-spacing="2">25-38% OF YOUR CONTEXT IS GONE BEFORE YOU TYPE A WORD<tspan class="cursor">▌</tspan></text>
+  <text x="390" y="278" text-anchor="middle" font-family="'Menlo','Cascadia Code','JetBrains Mono','Fira Code',monospace" font-size="14" fill="#e87b55" opacity="0.9" letter-spacing="2">GHOST TOKENS ARE EATING YOUR CONTEXT WINDOW<tspan class="cursor">▌</tspan></text>
 
   <!-- Tagline -->
-  <text x="390" y="308" text-anchor="middle" font-family="'Menlo','Cascadia Code','JetBrains Mono','Fira Code',monospace" font-size="13" fill="#7a7a9a" letter-spacing="1.5">See where it goes. Get it back.</text>
+  <text x="390" y="308" text-anchor="middle" font-family="'Menlo','Cascadia Code','JetBrains Mono','Fira Code',monospace" font-size="13" fill="#7a7a9a" letter-spacing="1.5">Find them. Fix them. Track the quality decay.</text>
 </svg>

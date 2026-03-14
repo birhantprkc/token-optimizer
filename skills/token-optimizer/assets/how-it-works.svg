@@ -149,7 +149,7 @@
     <animate attributeName="opacity" values="0;0;0;0;0;0;1;1;0;0" keyTimes="0;0.14;0.24;0.34;0.44;0.52;0.58;0.75;0.82;1" dur="14s" repeatCount="indefinite"/>
   </text>
   <text x="175" y="696" fill="#a6e3a1" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="18" font-weight="bold" text-anchor="middle" opacity="0">
-    4 sonnet + 2 haiku
+    6 parallel
     <animate attributeName="opacity" values="0;0;0;0;0;0;1;1;0;0" keyTimes="0;0.14;0.24;0.34;0.44;0.52;0.58;0.75;0.82;1" dur="14s" repeatCount="indefinite"/>
   </text>
 
@@ -162,7 +162,7 @@
     <animate attributeName="opacity" values="0;0;0;0;0;0;1;1;0;0" keyTimes="0;0.14;0.24;0.34;0.44;0.52;0.58;0.75;0.82;1" dur="14s" repeatCount="indefinite"/>
   </text>
   <text x="480" y="696" fill="#f9e2af" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace" font-size="18" font-weight="bold" text-anchor="middle" opacity="0">
-    opus
+    synthesizer
     <animate attributeName="opacity" values="0;0;0;0;0;0;1;1;0;0" keyTimes="0;0.14;0.24;0.34;0.44;0.52;0.58;0.75;0.82;1" dur="14s" repeatCount="indefinite"/>
   </text>
 

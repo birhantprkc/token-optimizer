@@ -14,39 +14,15 @@
 
 <h2 align="center">Your AI is getting dumber and you can't see it.</h2>
 
+<p align="center"><em>Find the ghost tokens. Survive compaction. Track the quality decay.</em></p>
+
 <p align="center">
-Opus 4.6 drops from 93% to 76% accuracy across a 1M context window. Compaction loses 60-70% of your conversation. Token Optimizer tracks the degradation, protects your decisions, and tells you what to fix.
+Opus 4.6 drops from 93% to 76% accuracy across a 1M context window. Compaction loses 60-70% of your conversation. Token Optimizer tracks the degradation, checkpoints your decisions before compaction fires, and tells you what to fix.
 </p>
 
-```
-$ python3 measure.py quick
-
-TOKEN OPTIMIZER: QUICK SCAN
-========================================
-  Context window:      1,000,000 tokens (1M, auto-detected Opus 4.6)
-  Startup overhead:    62,400 tokens (6.2%)
-  Usable before degradation: ~437K (50% fill = peak quality zone)
-  Messages before auto-compact: ~153 at typical message size
-
-  DEGRADATION RISK
-    Current startup fill:  6% (62,400) -- PEAK ZONE
-    Quality estimate:      ~96/100 (MRCR-based at this fill level)
-    Next danger zone:      500,000 (50%, "lost in the middle" begins)
-    Auto-compact fires at: ~800,000 (60-70% of context LOST per compaction)
-
-  TOP OFFENDERS
-    1. 58 skills loaded (42 unused in 30 days): 18,200 tokens
-    2. 12 MCP servers (3 with eager-loaded tools): 11,400 tokens
-    3. CLAUDE.md (482 lines): 7,800 tokens
-
-  #1 QUICK WIN
-    Archive 42 unused skills -> save ~12,600 tokens/session
-    Extends peak quality zone by ~12,600 tokens
-
-  COACHING INSIGHT
-    At 1M, Sonnet 4.6 outperforms Opus on multi-hop reasoning
-    (GraphWalks: 73.8 vs 38.7). Consider Sonnet for long code sessions.
-```
+<p align="center">
+  <img src="skills/token-optimizer/assets/hero-terminal.svg" alt="Token Optimizer Quick Scan" width="800">
+</p>
 
 ## Install (3 lines)
 
@@ -77,44 +53,44 @@ At 200K context, that's 25-35% gone. At 1M, it's "only" 5-7%, but the degradatio
 
 Token Optimizer tracks all of this. Quality score, degradation bands, compaction loss, drift detection. Zero context tokens consumed (runs as external Python).
 
+> **"But doesn't removing tokens hurt the model?"** No. Token Optimizer removes structural waste (duplicate configs, unused skill frontmatter, bloated files), not useful context. It also actively *measures* quality: the 7-signal quality score tells you if your session is degrading, and Smart Compaction checkpoints your decisions before auto-compact fires. Most users see quality scores *improve* after optimization because the model has more room for real work.
+
 ---
 
 ### NEW in v2.4: Degradation Intelligence
 
-| Command | What It Does |
+| Command | What You Get |
 |---------|-------------|
-| `quick` | Overhead + degradation risk + top offenders + model coaching. The 10-second health check. |
-| `doctor` | Verify all components installed. Score out of 10 with fix commands. |
-| `drift` | Compare against your last snapshot. See how your setup has grown. |
-| `quality` | 7-signal analysis with MRCR-based degradation bands. |
-| `report` | Full per-component token breakdown. |
-| `/token-optimizer` | Interactive audit with 6 parallel agents. Guided fixes. |
-
-```bash
-python3 $MEASURE_PY quick                # 10-second overview
-python3 $MEASURE_PY doctor               # health check
-python3 $MEASURE_PY drift                # drift since last snapshot
-python3 $MEASURE_PY quality current      # session quality
-python3 $MEASURE_PY report               # full report
-```
+| `quick` | **"Am I in trouble?"** 10-second answer: context health, degradation risk, biggest token offenders, which model to use. |
+| `doctor` | **"Is everything installed correctly?"** Score out of 10. Broken hooks, missing components, exact fix commands. |
+| `drift` | **"Has my setup grown?"** Side-by-side comparison vs your last snapshot. Catches config creep before it costs you. |
+| `quality` | **"How healthy is this session?"** 7-signal analysis of your live conversation. Stale reads, wasted tokens, compaction damage. |
+| `report` | **"Where are my tokens going?"** Full per-component breakdown. Every skill, every MCP server, every config file. |
+| `/token-optimizer` | **"Fix it for me."** Interactive audit with 6 parallel agents. Guided fixes with diffs and backups. |
 
 ### Quality Scoring (7 signals)
 
-| Signal | Weight | What It Catches |
+| Signal | Weight | What It Means For You |
 |--------|--------|----------------|
-| **Context fill degradation** | 20% | MRCR-based quality estimate from fill level |
-| **Stale reads** | 20% | Files edited since reading (wasted context) |
-| **Bloated results** | 20% | Tool outputs never referenced again |
-| **Compaction depth** | 15% | Each compaction: 60-70% context lost |
-| **Duplicates** | 10% | Repeated system-reminder injections |
-| **Decision density** | 8% | Ratio of substantive to filler messages |
-| **Agent efficiency** | 7% | Subagent result tokens vs dispatch overhead |
+| **Context fill** | 20% | How close are you to the degradation cliff? Based on published MRCR benchmarks. |
+| **Stale reads** | 20% | Files you read earlier have changed. Your AI is working with outdated info. |
+| **Bloated results** | 20% | Tool outputs that were never used. Wasting context on noise. |
+| **Compaction depth** | 15% | Each compaction loses 60-70% of your conversation. After 2: 88% gone. |
+| **Duplicates** | 10% | The same system reminders injected over and over. Pure waste. |
+| **Decision density** | 8% | Are you having a real conversation or is it mostly overhead? |
+| **Agent efficiency** | 7% | Are your subagents pulling their weight or just burning tokens? |
 
 Degradation bands in the status bar:
 - Green (<50% fill): peak quality zone
 - Yellow (50-70%): degradation starting
 - Orange (70-80%): quality dropping
 - Red (80%+): severe, consider /clear
+
+### What Degradation Actually Looks Like
+
+This is a real session. 708 messages, 2 compactions, 88% of the original context gone. Without the quality score, you'd have no idea.
+
+![Real session quality breakdown](skills/token-optimizer/assets/quality-example.svg)
 
 ### Smart Compaction
 
@@ -153,13 +129,13 @@ Every message you send to Claude Code re-sends everything: system prompt, tool d
 
 Prompt caching makes this [cheap](https://code.claude.com/docs/en/costs) (90% cost reduction). But cheap doesn't mean small. Those tokens still fill your context window, count toward rate limits, and degrade output quality.
 
-The more you've customized Claude Code, the worse it gets.
+The more you've customized Claude Code, the worse it gets. And at 1M, the real problem isn't startup overhead, it's the degradation curve as you fill the window.
 
-![Where your context window goes](skills/token-optimizer/assets/user-profiles.svg)
+![What happens inside a 1M session](skills/token-optimizer/assets/user-profiles.svg)
 
 ### Where it all goes
 
-**Fixed overhead** (everyone pays): System prompt (~3K tokens) plus built-in tool definitions (12-17K tokens). About 8-10% of your 200K window.
+**Fixed overhead** (everyone pays): System prompt (~3K tokens) plus built-in tool definitions (12-17K tokens). About 8-10% at 200K, or 1.5-2% at 1M.
 
 **Autocompact buffer**: ~30-35K tokens (~16%) reserved for compaction headroom.
 
@@ -169,29 +145,11 @@ The more you've customized Claude Code, the worse it gets.
 
 ## What This Does
 
-One command. Six parallel agents audit your entire setup. Prioritized fixes with exact token savings.
+One command. Six parallel agents audit your entire setup. Prioritized fixes with exact token savings. Everything backed up before any change.
 
-```
-> /token-optimizer
+![How Token Optimizer works](skills/token-optimizer/assets/how-it-works.svg)
 
-[Token Optimizer] Backing up config...
-Dispatching 6 audit agents...
-
-YOUR SETUP
-Per-message overhead:  ~43,000 tokens
-Context used:          38% before your first message
-
-QUICK WINS
-  Slim CLAUDE.md + MEMORY.md:      -5,200 tokens/msg
-  Archive unused skills + commands: -4,800 tokens/msg
-  Prune MCP + add file exclusion:    -5,000 tokens/msg
-
-Total: ~15,000 tokens/msg recovered
-
-Ready to implement? Everything backed up first.
-```
-
-Everything gets backed up before any change. You see diffs. You approve each fix. Nothing irreversible.
+You see diffs. You approve each fix. Nothing irreversible.
 
 ### What it audits
 
@@ -238,126 +196,62 @@ python3 $MEASURE_PY setup-hook             # install
 
 Adds a SessionEnd hook that collects usage stats after each session (~2 seconds, all data local).
 
-## Usage Analytics
+## Usage Analytics: See What's Actually Being Used
 
-### Usage Trends
+**Trends**: Which skills do you actually invoke vs just having installed? Which models are you using? How has your overhead changed over time?
 
-```bash
-python3 $MEASURE_PY trends
-python3 $MEASURE_PY trends --days 7
-python3 $MEASURE_PY trends --json
-```
-
-Shows skills usage (installed vs actually invoked), model mix, daily breakdown.
-
-### Session Health
+**Session Health**: Catches stale sessions (24h+), zombie sessions (48h+), and outdated configurations before they cause problems.
 
 ```bash
-python3 $MEASURE_PY health
+python3 $MEASURE_PY trends              # usage patterns over time
+python3 $MEASURE_PY health              # session hygiene check
 ```
 
-Detects stale sessions (24h+), zombie sessions (48h+), outdated versions, automated processes.
-
-## Coach Mode
+## Coach Mode: Not Sure Where to Start?
 
 ```
 > /token-coach
 ```
 
-One question: "What's your goal today?" Then architecture guidance, pattern detection with named anti-patterns, multi-agent design patterns, and a prioritized action plan.
-
-8 named anti-patterns, multi-agent design patterns, hard numbers. Coach tab in the dashboard.
-
-```bash
-python3 $MEASURE_PY coach --json          # Full JSON output
-python3 $MEASURE_PY coach --focus skills   # Focus on skill patterns
-python3 $MEASURE_PY coach --focus agentic  # Focus on multi-agent patterns
-```
+Tell it your goal. Get back specific, prioritized fixes with exact token savings. Detects 8 named anti-patterns (The Kitchen Sink, The Hoarder, The Monolith...) and recommends multi-agent design patterns that actually save context.
 
 ## v2.0+: Active Session Intelligence
 
-### Smart Compaction
+### Smart Compaction: Don't Lose Your Work
+
+When auto-compact fires, 60-70% of your conversation vanishes. Decisions, error-fix sequences, agent state: gone. Smart Compaction saves all of it as checkpoints before compaction, then restores what the summary dropped.
 
 ```bash
-python3 $MEASURE_PY setup-smart-compact --dry-run   # preview
-python3 $MEASURE_PY setup-smart-compact              # install
-python3 $MEASURE_PY setup-smart-compact --status     # check
-python3 $MEASURE_PY setup-smart-compact --uninstall  # remove
+python3 $MEASURE_PY setup-smart-compact    # one-time install
 ```
 
-Captures: decisions and reasoning, modified files, error-fix sequences, open questions, agent dispatch state. All stored as plain markdown in `~/.claude/token-optimizer/checkpoints/`.
+### Live Quality Bar: Know Before It's Too Late
 
-### Context Quality Analyzer
+A glance at your terminal tells you if you're in trouble. Colors shift from green to red as quality degrades.
+
+![Status Bar Degradation](skills/token-optimizer/assets/status-bar.svg)
 
 ```bash
-python3 $MEASURE_PY quality current
+python3 $MEASURE_PY setup-quality-bar      # one-time install
 ```
 
-```
-Context Quality Report
-========================================
-Content quality:     74/100 (Good)
-Degradation band:    PEAK ZONE (34% fill, ~91/100 MRCR)
-Messages analyzed:   156
-Decisions captured:  8
+### Session Continuity: Pick Up Where You Left Off
 
-Issues found:
-   23 stale file reads    (14,000 tokens est.)
-    3 bloated results     ( 8,000 tokens est.)
-    2 compaction(s) (~88% cumulative context loss)
-```
+Sessions auto-checkpoint on end, /clear, and crashes. Start a new session on the same topic and it injects the relevant context automatically.
 
-### Live Quality Bar
+## All Commands
 
-```
-Opus 4.6 | my-project ████████░░ 43% | Q:74 Compacts:2(~88% lost)
-```
-
-Degradation-aware colors: green (peak), yellow (degrading), orange (dropping), red (severe).
+Standalone Python script. No dependencies. Python 3.8+. Zero context tokens consumed.
 
 ```bash
-python3 $MEASURE_PY setup-quality-bar --dry-run   # preview
-python3 $MEASURE_PY setup-quality-bar              # install
-```
-
-### Session Continuity
-
-Sessions auto-checkpoint on end, /clear, and crashes. New sessions pick up via keyword-matched context injection.
-
-| Variable | Default | Controls |
-|----------|---------|---------|
-| `TOKEN_OPTIMIZER_CHECKPOINT_TTL` | 300 (5 min) | Max age for post-compact restore |
-| `TOKEN_OPTIMIZER_CHECKPOINT_FILES` | 10 | Max checkpoint files kept |
-| `TOKEN_OPTIMIZER_CHECKPOINT_RETENTION_DAYS` | 7 | Cleanup age |
-| `TOKEN_OPTIMIZER_RELEVANCE_THRESHOLD` | 0.3 | Keyword overlap for restore |
-
-## Measurement Tool
-
-Standalone script. No dependencies. Python 3.8+.
-
-```bash
-# Auto-detect path:
-MEASURE_PY=""
-for f in ~/.claude/skills/token-optimizer/scripts/measure.py \
-         ~/.claude/plugins/cache/*/token-optimizer/*/skills/token-optimizer/scripts/measure.py; do
-  [ -f "$f" ] && MEASURE_PY="$f" && break
-done
-[ -z "$MEASURE_PY" ] && { echo "measure.py not found. Is Token Optimizer installed?"; exit 1; }
-```
-
-```bash
-python3 $MEASURE_PY quick                # Quick scan with degradation bands
-python3 $MEASURE_PY doctor               # Health check (10 checks)
-python3 $MEASURE_PY drift                # Drift report vs last snapshot
-python3 $MEASURE_PY report               # Full token report
-python3 $MEASURE_PY quality current      # Session quality analysis
-python3 $MEASURE_PY dashboard            # Interactive dashboard
-python3 $MEASURE_PY trends               # Usage trends
-python3 $MEASURE_PY coach                # Coaching data
-python3 $MEASURE_PY collect              # Collect sessions to SQLite
-
-# Global flag: override context window detection
-python3 $MEASURE_PY quick --context-size 1000000
+python3 $MEASURE_PY quick                # Am I in trouble? (start here)
+python3 $MEASURE_PY doctor               # Is everything installed right?
+python3 $MEASURE_PY drift                # Has my setup grown since last check?
+python3 $MEASURE_PY quality current      # How healthy is this session?
+python3 $MEASURE_PY report               # Where are my tokens going?
+python3 $MEASURE_PY dashboard            # Visual dashboard (HTML)
+python3 $MEASURE_PY trends               # What's actually being used?
+python3 $MEASURE_PY collect              # Build usage database
 ```
 
 ## What's Inside
