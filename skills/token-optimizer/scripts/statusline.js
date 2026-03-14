@@ -118,9 +118,9 @@ process.stdin.on('end', () => {
           if (score >= 85) {
             qScore = `${SEP}\x1b[32mContextQ:${score}${RESET}`;
           } else if (score >= 70) {
-            qScore = `${SEP}${DIM}ContextQ:${score}${RESET}`;
-          } else if (score >= 50) {
             qScore = `${SEP}\x1b[33mContextQ:${score}${RESET}`;
+          } else if (score >= 50) {
+            qScore = `${SEP}\x1b[38;5;208mContextQ:${score}${RESET}`;
           } else {
             qScore = `${SEP}\x1b[31mContextQ:${score}${RESET}`;
           }
@@ -128,11 +128,15 @@ process.stdin.on('end', () => {
 
         // Compaction count with cumulative loss (read from quality cache, single source of truth)
         const c = q.compactions;
-        if (c != null && c > 0) {
-          const lossPct = q.breakdown?.compaction_depth?.cumulative_loss_pct;
-          const loss = lossPct ? `~${Math.round(lossPct)}%` : (c >= 3 ? '~95%' : c >= 2 ? '~88%' : '~65%');
-          const color = c <= 2 ? '\x1b[33m' : '\x1b[31m';
-          sessionInfo = `${SEP}${color}Compacts:${c}(${loss} lost)${RESET}`;
+        if (c != null) {
+          if (c > 0) {
+            const lossPct = q.breakdown?.compaction_depth?.cumulative_loss_pct;
+            const loss = lossPct ? `~${Math.round(lossPct)}%` : (c >= 3 ? '~95%' : c >= 2 ? '~88%' : '~65%');
+            const color = c <= 2 ? '\x1b[33m' : '\x1b[31m';
+            sessionInfo = `${SEP}${color}Compacts:${c}(${loss} lost)${RESET}`;
+          } else {
+            sessionInfo = `${SEP}\x1b[32mCompacts:0${RESET}`;
+          }
         }
       }
     } catch (e) {}
