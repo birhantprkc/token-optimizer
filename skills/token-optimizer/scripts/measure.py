@@ -5167,6 +5167,7 @@ def _parse_jsonl_for_quality(filepath):
                                     decisions.append((idx, snippet))
 
                             elif block.get("type") == "tool_use":
+                                is_substantive = True  # tool invocations ARE decisions
                                 tool_name = block.get("name", "")
                                 inp = block.get("input", {})
 
@@ -5339,7 +5340,7 @@ def compute_quality_score(quality_data):
         if live_fill_path.exists():
             live = json.loads(live_fill_path.read_text(encoding="utf-8"))
             age = time.time() - live.get("timestamp", 0) / 1000  # JS timestamp is ms
-            if age < 30:
+            if age < 10:
                 fill_pct = live["used_percentage"] / 100.0
     except (json.JSONDecodeError, OSError, KeyError):
         pass

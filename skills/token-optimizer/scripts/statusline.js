@@ -89,8 +89,9 @@ process.stdin.on('end', () => {
         }
       }
 
-      // Fall back to most recently modified per-session cache
-      if (!q) {
+      // Fall back to most recently modified per-session cache ONLY if we don't have a session_id
+      // (if we have a session_id but no matching cache, the SessionStart hook will create it shortly)
+      if (!q && !sessionId) {
         try {
           const files = fs.readdirSync(cacheDir)
             .filter(f => f.startsWith('quality-cache-') && f.endsWith('.json'))
