@@ -1,5 +1,5 @@
 ---
-name: dashboard
+name: token-dashboard
 description: Open the Token Optimizer dashboard. Collects latest session data, regenerates the dashboard, and opens it in your browser.
 ---
 
