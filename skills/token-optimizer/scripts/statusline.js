@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Token Optimizer - Claude Code Status Line
-// Shows: model | effort | project | context bar used% | ContextQ:score | Compacts:N(loss)
+// Shows: model | effort | project | context bar used% | ContextQ:score (duration) | Compacts:N(loss) | Agents
 //
 // Install: python3 measure.py setup-quality-bar
 // The quality score is updated by a UserPromptSubmit hook every ~2 minutes.
@@ -152,8 +152,43 @@ process.stdin.on('end', () => {
       }
     } catch (e) {}
 
+    // Session duration - show only when quality < 75 (contextual warning)
+    let duration = '';
+    if (q && q.session_start_ts && q.score != null && q.score < 75) {
+      const elapsed = Math.floor((Date.now() / 1000) - q.session_start_ts);
+      if (elapsed > 0) {
+        const h = Math.floor(elapsed / 3600);
+        const m = Math.floor((elapsed % 3600) / 60);
+        const dur = h > 0 ? `${h}h${m}m` : `${m}m`;
+        duration = ` ${DIM}(${dur})${RESET}`;
+      }
+    }
+
+    // Active agents - show running agents with model
+    // Strip ANSI escape codes from agent data (defense-in-depth against JSONL injection)
+    const stripAnsi = s => String(s).replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/[\x00-\x1f]/g, '');
+    let agents = '';
+    if (q && q.active_agents && q.active_agents.length > 0) {
+      const running = q.active_agents.filter(a => a.status === 'running');
+      if (running.length > 0) {
+        const agentParts = running.slice(0, 3).map(a => {
+          const m = stripAnsi(a.model || '?');
+          const desc = stripAnsi(a.description || '');
+          let elapsed = '';
+          if (a.start_time) {
+            try {
+              const secs = Math.floor((Date.now() - new Date(a.start_time).getTime()) / 1000);
+              elapsed = secs >= 60 ? `${Math.floor(secs / 60)}m${secs % 60}s` : `${secs}s`;
+            } catch (e) {}
+          }
+          return `\x1b[33m${m}\x1b[0m:${desc}${elapsed ? '(' + elapsed + ')' : ''}`;
+        });
+        agents = `${SEP}Agents: ${agentParts.join(' ')}`;
+      }
+    }
+
     const dirname = path.basename(dir);
-    process.stdout.write(`${DIM}${model}${RESET}${effort}${SEP}${DIM}${dirname}${RESET}${ctx}${qScore}${sessionInfo}`);
+    process.stdout.write(`${DIM}${model}${RESET}${effort}${SEP}${DIM}${dirname}${RESET}${ctx}${qScore}${duration}${sessionInfo}${agents}`);
   } catch (e) {
     // Silent fail - never break the status line
   }

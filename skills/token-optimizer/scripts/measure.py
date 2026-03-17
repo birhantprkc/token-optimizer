@@ -6900,6 +6900,83 @@ def _write_quality_cache(cache_path, result):
         return False
 
 
+def _extract_session_start_ts(filepath):
+    """Extract the first timestamp from a JSONL session file. Returns epoch seconds or None."""
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                    ts_str = record.get("timestamp")
+                    if ts_str:
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        return int(ts.timestamp())
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    continue
+    except (PermissionError, OSError):
+        pass
+    return None
+
+
+def _extract_active_agents(filepath):
+    """Extract currently running subagents from a JSONL session transcript.
+
+    Scans for Task/Agent tool_use dispatches and their corresponding
+    tool_result completions (which appear in user-type records).
+    Returns only agents that are still running (no result yet).
+    """
+    dispatched = {}  # tool_use_id -> {model, description, start_time}
+    completed = set()  # tool_use_ids that have results
+
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                rec_type = record.get("type")
+                msg = record.get("message", {})
+                content = msg.get("content", []) if isinstance(msg, dict) else []
+                if not isinstance(content, list):
+                    continue
+
+                ts_str = record.get("timestamp")
+
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+
+                    # Agent dispatch (in assistant messages)
+                    if rec_type == "assistant" and block.get("type") == "tool_use" and block.get("name") in ("Task", "Agent"):
+                        tool_id = block.get("id", "")
+                        inp = block.get("input", {})
+                        dispatched[tool_id] = {
+                            "model": inp.get("model", ""),
+                            "description": (inp.get("description") or inp.get("prompt", ""))[:20],
+                            "start_time": ts_str,
+                        }
+
+                    # Tool result (in user messages, not assistant)
+                    if block.get("type") == "tool_result":
+                        result_id = block.get("tool_use_id", "")
+                        if result_id in dispatched:
+                            completed.add(result_id)
+
+    except (PermissionError, OSError):
+        pass
+
+    # Return only agents still running, most recent last, cap at 5
+    running = [
+        {"model": info["model"], "description": info["description"],
+         "start_time": info["start_time"], "status": "running"}
+        for tid, info in dispatched.items()
+        if tid not in completed
+    ]
+    return running[-5:]
+
+
 def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_jsonl=None, force=False):
     """Run quality analysis and write score to cache file for status line.
 
@@ -6966,6 +7043,10 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
     cfd = result.get("breakdown", {}).get("context_fill_degradation", {})
     result["degradation_band"] = cfd.get("band", "")
     result["fill_pct"] = cfd.get("fill_pct", 0)
+
+    # Session duration + active agents for statusline (v2.6)
+    result["session_start_ts"] = _extract_session_start_ts(filepath)
+    result["active_agents"] = _extract_active_agents(filepath)
 
     if not _write_quality_cache(cache_path, result):
         return None
