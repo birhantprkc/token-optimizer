@@ -2747,6 +2747,33 @@ var DB = (function() {
     }
   }
 
+  function _updateManageFileBar() {
+    var cmds = window._pendingManageCmds || {};
+    var keys = Object.keys(cmds);
+    var bar = document.getElementById('manage-file-bar');
+    if (keys.length === 0) {
+      if (bar) bar.style.transform = 'translateX(-50%) translateY(100%)';
+      return;
+    }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'manage-file-bar';
+      bar.style.cssText = 'position:fixed;bottom:0;left:50%;transform:translateX(-50%) translateY(100%);background:var(--c-surface);border:1px solid var(--c-accent-cyan);border-bottom:none;border-radius:12px 12px 0 0;padding:16px 32px;display:flex;align-items:center;gap:24px;z-index:150;transition:transform 0.3s;box-shadow:0 -4px 30px rgba(0,240,255,0.15);';
+      bar.innerHTML = '<span id="mfb-count" style="font-family:var(--font-mono);font-size:16px;color:var(--c-accent-cyan);text-shadow:0 0 8px rgba(0,240,255,0.6)"></span><button id="mfb-copy" style="background:var(--c-accent-cyan);color:var(--c-bg);border:none;padding:10px 24px;border-radius:8px;font-family:var(--font-mono);font-size:15px;font-weight:500;cursor:pointer;">Copy All to Clipboard</button>';
+      document.body.appendChild(bar);
+      document.getElementById('mfb-copy').addEventListener('click', function() {
+        var c = window._pendingManageCmds || {};
+        var k = Object.keys(c);
+        if (k.length === 0) return;
+        var header = '# Token Optimizer: ' + k.length + ' change' + (k.length > 1 ? 's' : '') + '\n# Run these commands in your terminal\n\n';
+        var all = header + k.map(function(n) { return c[n]; }).join('\n');
+        copyHookCmd(all);
+      });
+    }
+    document.getElementById('mfb-count').textContent = keys.length + ' change' + (keys.length > 1 ? 's' : '') + ' ready';
+    bar.style.transform = 'translateX(-50%) translateY(0)';
+  }
+
   function renderManage() {
     var el = document.getElementById('view-manage');
     if (!el) return;
@@ -2949,24 +2976,28 @@ var DB = (function() {
           });
 
         } else {
-          // File mode: clipboard fallback
+          // File mode: accumulate changes, copy all at once
           var cmd = e.target.dataset.manageCmd;
-          copyHookCmd(cmd);
+          if (!window._pendingManageCmds) window._pendingManageCmds = {};
+          var isOff = (mType === 'skill-off' || mType === 'mcp-off');
+          if (isOff) {
+            window._pendingManageCmds[mName] = cmd;
+          } else {
+            delete window._pendingManageCmds[mName];
+          }
           if (row) {
-            row.style.opacity = '0.5';
+            row.style.opacity = isOff ? '0.5' : '1';
             var existing = row.querySelector('.hook-pending');
-            if (!existing) {
+            if (existing) existing.remove();
+            if (isOff) {
               var badge = document.createElement('span');
               badge.className = 'hook-pending';
               badge.style.cssText = 'font-size:11px;color:#ff9f43;margin-left:8px;display:block;margin-top:4px;';
-              var isOff = (mType === 'skill-off' || mType === 'mcp-off');
-              badge.textContent = isOff
-                ? 'Disabled — paste command in terminal to apply, then regenerate.'
-                : 'Re-enabled — paste command in terminal to confirm.';
-              badge.style.color = isOff ? '#ff9f43' : '#2ecc71';
+              badge.textContent = 'Queued for removal';
               row.querySelector('.hook-info').appendChild(badge);
             }
           }
+          _updateManageFileBar();
         }
       });
     });

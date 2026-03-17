@@ -1568,6 +1568,48 @@ h1, h2, h3, h4 { font-weight: 400; }
 .tt-value { color: var(--c-accent-cyan); font-size: 16px; font-weight: 500; text-shadow: var(--glow-text); }
 .tt-secondary { color: var(--c-text-dim); font-size: 12px; margin-top: 2px; }
 
+/* PENDING CHANGES BAR */
+.manage-pending-bar {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%) translateY(100%);
+  background: var(--c-surface);
+  border: 1px solid var(--c-accent-cyan);
+  border-bottom: none;
+  border-radius: 12px 12px 0 0;
+  padding: 16px 32px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  z-index: 150;
+  transition: transform 0.3s ease;
+  box-shadow: 0 -4px 30px rgba(0, 240, 255, 0.15);
+}
+.manage-pending-bar.visible { transform: translateX(-50%) translateY(0); }
+.manage-pending-bar span {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--c-accent-cyan);
+  text-shadow: var(--glow-text);
+}
+.manage-pending-bar button {
+  background: var(--c-accent-cyan);
+  color: var(--c-bg);
+  border: none;
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.manage-pending-bar button:hover {
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.5);
+  transform: scale(1.02);
+}
+
 /* TOAST */
 .toast {
   position: fixed;
@@ -1800,22 +1842,60 @@ function renderJS(): string {
     });
   });
 
-  // Manage toggles: copy command on toggle, stay in new position
+  // Manage toggles: accumulate changes, copy all at once
+  var pendingChanges = {};
+
+  function updatePendingBar() {
+    var bar = document.getElementById('manage-pending-bar');
+    var keys = Object.keys(pendingChanges);
+    if (keys.length === 0) {
+      if (bar) bar.classList.remove('visible');
+      return;
+    }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'manage-pending-bar';
+      bar.className = 'manage-pending-bar';
+      bar.innerHTML = '<span id="pending-count"></span><button id="pending-copy-btn">Copy All to Clipboard</button>';
+      document.body.appendChild(bar);
+      document.getElementById('pending-copy-btn').addEventListener('click', copyAllPending);
+    }
+    document.getElementById('pending-count').textContent = keys.length + ' change' + (keys.length > 1 ? 's' : '') + ' ready';
+    bar.classList.add('visible');
+  }
+
+  function copyAllPending() {
+    var keys = Object.keys(pendingChanges);
+    if (keys.length === 0) return;
+    var allCmds = keys.map(function(k) { return pendingChanges[k]; }).join('\\n');
+    var header = '# Token Optimizer: ' + keys.length + ' change' + (keys.length > 1 ? 's' : '') + '\\n# Paste this into your agent chat and ask it to run these commands\\n\\n';
+    var fullText = header + allCmds;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(fullText).then(function() {
+        showToast(keys.length + ' command' + (keys.length > 1 ? 's' : '') + ' copied! Paste into your agent chat.');
+      }).catch(function() {
+        fallbackCopy(fullText, null);
+        showToast(keys.length + ' command' + (keys.length > 1 ? 's' : '') + ' copied!');
+      });
+    } else {
+      fallbackCopy(fullText, null);
+      showToast(keys.length + ' command' + (keys.length > 1 ? 's' : '') + ' copied!');
+    }
+  }
+
   document.querySelectorAll('.manage-toggle input').forEach(function(input) {
     input.addEventListener('change', function() {
       var cmd = this.getAttribute('data-manage-cmd');
+      var name = this.getAttribute('data-manage-name') || cmd;
       if (!cmd) return;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(cmd).then(function() {
-          showToast('Copied! Paste into your agent chat to apply.');
-        }).catch(function() {
-          fallbackCopy(cmd, null);
-          showToast('Copied! Paste into your agent chat to apply.');
-        });
+      if (this.checked) {
+        // Toggled ON = restore/enable, remove from pending if it was there
+        delete pendingChanges[name];
       } else {
-        fallbackCopy(cmd, null);
-        showToast('Copied! Paste into your agent chat to apply.');
+        // Toggled OFF = archive/disable, add to pending
+        pendingChanges[name] = cmd;
       }
+      updatePendingBar();
     });
   });
 
