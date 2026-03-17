@@ -386,7 +386,7 @@ export function auditContext(openclawDir: string): ContextAudit {
 
   // Core system prompt (estimated, not user-editable)
   components.push({
-    name: "Core system prompt",
+    name: "Core system prompt (est.)",
     path: "(built-in)",
     tokens: 15000,
     category: "system",

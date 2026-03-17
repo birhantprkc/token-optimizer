@@ -151,8 +151,8 @@ function scoreSessionLength(runs: AgentRun[]): QualitySignal {
     return {
       name: "Session Length Risk",
       weight: 0.20,
-      score: 100,
-      description: "No sessions to evaluate.",
+      score: 0,
+      description: "Insufficient data. Run some sessions first.",
     };
   }
 
@@ -184,8 +184,8 @@ function scoreModelRouting(runs: AgentRun[]): QualitySignal {
     return {
       name: "Model Routing",
       weight: 0.20,
-      score: 100,
-      description: "No sessions to evaluate.",
+      score: 0,
+      description: "Insufficient data. Run some sessions first.",
     };
   }
 
@@ -232,8 +232,8 @@ function scoreEmptyRuns(runs: AgentRun[]): QualitySignal {
     return {
       name: "Empty Run Ratio",
       weight: 0.20,
-      score: 100,
-      description: "No sessions to evaluate.",
+      score: 0,
+      description: "Insufficient data. Run some sessions first.",
     };
   }
 
@@ -267,8 +267,8 @@ function scoreOutcomeHealth(runs: AgentRun[]): QualitySignal {
     return {
       name: "Outcome Health",
       weight: 0.15,
-      score: 100,
-      description: "No sessions to evaluate.",
+      score: 0,
+      description: "Insufficient data. Run some sessions first.",
     };
   }
 
