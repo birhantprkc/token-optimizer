@@ -63,13 +63,23 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-2.0-flash-lite": 1_000_000,
   // DeepSeek
   "deepseek-v3": 128_000,
-  "deepseek-r1": 64_000,
-  // Other
+  "deepseek-r1": 128_000,
+  // Qwen
   "qwen3": 128_000,
   "qwen3-mini": 128_000,
+  "qwen-coder": 128_000,
+  // Mistral
   "mistral-large": 262_000,
   "mistral-small": 128_000,
+  // xAI
   "grok-4": 131_000,
+  // Other
+  "kimi-k2.5": 128_000,
+  "minimax-2": 128_000,
+  "glm-4.7": 128_000,
+  "glm-4.7-flash": 128_000,
+  "mimo-flash": 128_000,
+  "o3-pro": 200_000,
   local: 128_000,
 };
 

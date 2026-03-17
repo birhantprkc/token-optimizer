@@ -23,7 +23,8 @@ export interface ContextComponent {
 export interface SkillDetail {
   name: string;
   path: string;
-  tokens: number;
+  tokens: number;         // Startup overhead (~100 tok description loaded per message)
+  fullFileTokens: number; // Full SKILL.md token count (loaded only when invoked)
   description: string;
   isArchived: boolean;
 }
@@ -135,11 +136,13 @@ function scanSkillsIndividual(openclawDir: string): SkillDetail[] {
         const content = readFileContent(skillFile);
         if (!content) continue;
 
+        const desc = extractDescription(content);
         results.push({
           name: entry.name,
           path: skillFile,
-          tokens: estimateTokens(content),
-          description: extractDescription(content),
+          tokens: Math.min(estimateTokens(desc), 150) || 100, // ~100 tok description loaded per message
+          fullFileTokens: estimateTokens(content),
+          description: desc,
           isArchived: false,
         });
       }
@@ -158,11 +161,13 @@ function scanSkillsIndividual(openclawDir: string): SkillDetail[] {
         const skillFile = path.join(archiveDir, entry.name, "SKILL.md");
         const content = readFileContent(skillFile);
 
+        const desc = content ? extractDescription(content) : "";
         results.push({
           name: entry.name,
           path: skillFile,
-          tokens: content ? estimateTokens(content) : 0,
-          description: content ? extractDescription(content) : "",
+          tokens: 0, // Archived = not loaded = zero overhead
+          fullFileTokens: content ? estimateTokens(content) : 0,
+          description: desc,
           isArchived: true,
         });
       }

@@ -42,8 +42,12 @@ function detectHeartbeatModelWaste(
   );
   if (heartbeats.length === 0) return [];
 
+  const expensiveModels = new Set([
+    "opus", "sonnet", "gpt-5.4", "gpt-5.2", "gpt-5", "gpt-4.1",
+    "gpt-4o", "o3", "o3-pro", "gemini-3-pro", "gemini-2.5-pro", "grok-4",
+  ]);
   const expensive = heartbeats.filter(
-    (r) => r.model === "opus" || r.model === "sonnet"
+    (r) => expensiveModels.has(r.model)
   );
   if (expensive.length === 0) return [];
 

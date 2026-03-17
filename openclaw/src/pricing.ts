@@ -30,6 +30,7 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   "gpt-4o-mini":   { input: 0.15 / 1e6,  output: 0.6 / 1e6,   cacheRead: 0.075 / 1e6, cacheWrite: 0 },
   // OpenAI reasoning (o3 is $2/$8, NOT $0.40/$1.60 which was batch pricing)
   "o3":            { input: 2.0 / 1e6,   output: 8.0 / 1e6,   cacheRead: 0.5 / 1e6,   cacheWrite: 0 },
+  "o3-pro":        { input: 20.0 / 1e6,  output: 80.0 / 1e6,  cacheRead: 0,           cacheWrite: 0 },
   "o3-mini":       { input: 1.1 / 1e6,   output: 4.4 / 1e6,   cacheRead: 0,           cacheWrite: 0 },
   "o4-mini":       { input: 1.1 / 1e6,   output: 4.4 / 1e6,   cacheRead: 0,           cacheWrite: 0 },
   // Google Gemini
@@ -149,15 +150,13 @@ export function normalizeModelName(modelId: string): string | null {
   if (m.includes("sonnet")) return "sonnet";
   if (m.includes("haiku")) return "haiku";
 
-  // OpenAI GPT-5 family (check specific before general)
+  // OpenAI GPT-5 family (specific before general, order matters)
   if (m.includes("gpt-5") && m.includes("nano")) return "gpt-5-nano";
   if (m.includes("gpt-5") && m.includes("mini")) return "gpt-5-mini";
   if (m.includes("gpt-5.4")) return "gpt-5.4";
   if (m.includes("gpt-5.2")) return "gpt-5.2";
-  if (m.includes("gpt-5")) return "gpt-5";
-
-  // OpenAI GPT-5.1
   if (m.includes("gpt-5.1")) return "gpt-5.1";
+  if (m.includes("gpt-5")) return "gpt-5";
 
   // OpenAI GPT-4 family
   if (m.includes("gpt-4.1") && m.includes("nano")) return "gpt-4.1-nano";
@@ -169,7 +168,7 @@ export function normalizeModelName(modelId: string): string | null {
   // OpenAI reasoning
   if (m.includes("o4-mini")) return "o4-mini";
   if (m.includes("o3-mini")) return "o3-mini";
-  if (m.includes("o3-pro")) return "o3"; // o3-pro is different but rare
+  if (m.includes("o3-pro")) return "o3-pro";
   if (m === "o3" || m.startsWith("o3-")) return "o3";
 
   // Google Gemini (specific before general)
@@ -177,10 +176,10 @@ export function normalizeModelName(modelId: string): string | null {
   if (m.includes("2.0") && m.includes("flash")) return "gemini-2.0-flash";
   if (m.includes("flash-lite") || m.includes("flash_lite")) return "gemini-flash-lite";
   if (m.includes("gemini") && m.includes("3.1") && m.includes("pro")) return "gemini-3.1-pro";
-  if (m.includes("gemini") && m.includes("3") && m.includes("flash")) return "gemini-3-flash";
-  if (m.includes("gemini") && m.includes("3") && m.includes("pro")) return "gemini-3-pro";
   if (m.includes("gemini") && m.includes("2.5") && m.includes("flash")) return "gemini-2.5-flash";
   if (m.includes("gemini") && m.includes("2.5") && m.includes("pro")) return "gemini-2.5-pro";
+  if (m.includes("gemini-3") && m.includes("flash")) return "gemini-3-flash";
+  if (m.includes("gemini-3") && m.includes("pro")) return "gemini-3-pro";
 
   // DeepSeek
   if (m.includes("deepseek") && (m.includes("r1") || m.includes("reasoner"))) return "deepseek-r1";
