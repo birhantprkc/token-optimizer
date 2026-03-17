@@ -840,7 +840,7 @@ function renderManage(data: DashboardData): string {
       <div class="section-header">
         <div class="label">Control Panel</div>
         <h1>Manage</h1>
-        <p>Toggle skills and MCP servers on/off to optimize context overhead.</p>
+        <p>Toggle skills and MCP servers on/off. Commands are copied to clipboard for you to paste into your agent chat.</p>
       </div>
       <div class="empty-state">No OpenClaw config found.</div>
     </div>`;
@@ -857,7 +857,7 @@ function renderManage(data: DashboardData): string {
     <div class="section-header">
       <div class="label">Control Panel</div>
       <h1>Manage</h1>
-      <p>Toggle items to copy the archive/restore command. Run it in your terminal to apply.</p>
+      <p>Flip a toggle to copy the command, then <strong>paste it into your agent chat</strong> so the agent can apply the change for you.</p>
     </div>
 
     <div class="card">
@@ -931,7 +931,7 @@ function renderManage(data: DashboardData): string {
     ` : ""}
 
     <div style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-top:var(--s-3)">
-      Toggles copy the archive/restore command to your clipboard. Run it in your terminal, then regenerate the dashboard.
+      Flip a toggle to copy the command. Paste it into your agent chat and ask the agent to run it. The agent will apply the change and can regenerate this dashboard after.
     </div>
   </div>`;
 }
@@ -1778,7 +1778,7 @@ function renderJS(): string {
       setTimeout(function() { self.checked = !self.checked; }, 300);
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(cmd).then(function() {
-          showToast('Copied: ' + name);
+          showToast('Copied! Paste into your agent chat to apply.');
         });
       }
     });
