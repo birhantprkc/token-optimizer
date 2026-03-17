@@ -1,6 +1,6 @@
 # Token Optimizer for OpenClaw
 
-Find the ghost tokens. Audit your OpenClaw setup, see where 15-20% of your context goes (up to 87% on smaller models), and fix it.
+Find the ghost tokens. Audit your OpenClaw setup, see where your context goes, fix it.
 
 ## How Much Context Are You Losing?
 
