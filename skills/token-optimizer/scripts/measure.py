@@ -6917,22 +6917,18 @@ def _quality_cache_path_for(filepath=None):
 
 
 def _write_quality_cache(cache_path, result):
-    """Atomically write result dict to cache_path + global fallback. Returns True on success."""
+    """Atomically write result dict to per-session cache. Returns True on success.
+
+    Previously also wrote a global fallback (quality-cache.json), but that caused
+    cross-session data pollution. The statusline now reads only the per-session cache
+    matched by session_id, so the global fallback is no longer needed.
+    """
     QUALITY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         fd, tmp_path = tempfile.mkstemp(dir=str(QUALITY_CACHE_DIR), suffix=".json")
         with os.fdopen(fd, "w") as f:
             json.dump(result, f)
         os.replace(tmp_path, str(cache_path))
-        # Always update the global fallback so the status line can read it
-        if str(cache_path) != str(QUALITY_CACHE_PATH):
-            try:
-                fd2, tmp2 = tempfile.mkstemp(dir=str(QUALITY_CACHE_DIR), suffix=".json")
-                with os.fdopen(fd2, "w") as f2:
-                    json.dump(result, f2)
-                os.replace(tmp2, str(QUALITY_CACHE_PATH))
-            except OSError:
-                pass
         return True
     except OSError:
         try:
