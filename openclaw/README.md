@@ -9,14 +9,19 @@ Opus 4.6 drops from 93% to 76% accuracy across a 1M context window. Compaction l
 ## Install
 
 ```sh
-openclaw plugins install token-optimizer-openclaw
+# From GitHub (recommended)
+openclaw plugins install github:alexgreensh/token-optimizer
+
+# From ClawHub
+openclaw plugins install token-optimizer
 ```
 
 Or from source:
 
 ```sh
-cd openclaw && npm install && npm run build
-openclaw plugins install ./openclaw
+git clone https://github.com/alexgreensh/token-optimizer
+cd token-optimizer/openclaw && npm install && npm run build
+openclaw plugins install ./
 ```
 
 ## What It Does

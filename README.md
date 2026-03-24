@@ -329,7 +329,16 @@ Using Claude Code in the VS Code extension? Most of Token Optimizer works identi
 Native TypeScript plugin for OpenClaw agent systems. Zero Python dependency. Works with any model (Claude, GPT-5, Gemini, DeepSeek, local via Ollama). Reads your OpenClaw pricing config for accurate cost tracking, falls back to built-in rates for 20+ models.
 
 ```bash
-openclaw plugins install token-optimizer-openclaw
+# From GitHub (recommended)
+openclaw plugins install github:alexgreensh/token-optimizer
+
+# From ClawHub
+openclaw plugins install token-optimizer
+
+# From source
+git clone https://github.com/alexgreensh/token-optimizer
+cd token-optimizer/openclaw && npm install && npm run build
+openclaw plugins install ./
 ```
 
 Inside OpenClaw, run `/token-optimizer` for a guided audit with coaching.

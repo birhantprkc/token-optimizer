@@ -1,6 +1,6 @@
 {
   "name": "token-optimizer",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Find the ghost tokens. Audit your OpenClaw setup, see where context goes, fix it.",
   "entry": "dist/index.js",
   "skills": ["skills/token-optimizer"],
@@ -12,5 +12,5 @@
     "session:compact:after",
     "session:end"
   ],
-  "minOpenClawVersion": "0.8.0"
+  "minOpenClawVersion": "2026.3.0"
 }
