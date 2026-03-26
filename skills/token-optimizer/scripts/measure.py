@@ -8092,8 +8092,22 @@ def _cleanup_checkpoints():
 
 # ========== Hook Setup: Smart Compaction (v2.0) ==========
 
+def _is_running_from_plugin_cache():
+    """Check if this script is running from a Claude Code plugin cache directory."""
+    resolved = str(Path(__file__).resolve())
+    return "/plugins/cache/" in resolved
+
+
 def _get_measure_py_path():
-    """Get the path to this measure.py script."""
+    """Get the path to this measure.py script.
+
+    When running from a plugin cache, returns a ${CLAUDE_PLUGIN_ROOT}-based
+    path so that settings.json hooks survive version upgrades. Otherwise
+    returns the resolved absolute path.
+    """
+    if _is_running_from_plugin_cache():
+        # Use the variable that Claude Code resolves dynamically per version
+        return "${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py"
     return str(Path(__file__).resolve())
 
 
@@ -8566,7 +8580,13 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
 
 
 def _get_statusline_path():
-    """Get the path to the bundled statusline.js script."""
+    """Get the path to the bundled statusline.js script.
+
+    Uses ${CLAUDE_PLUGIN_ROOT} when running from plugin cache, same as
+    _get_measure_py_path().
+    """
+    if _is_running_from_plugin_cache():
+        return "${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/statusline.js"
     return str(Path(__file__).resolve().parent / "statusline.js")
 
 
