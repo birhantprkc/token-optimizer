@@ -119,14 +119,57 @@ def _looks_like_failure(returncode, stderr):
     return False
 
 
+# Error markers in scripts/languages the English-keyword handlers would
+# otherwise drop. Any line matching one of these is re-injected through the
+# same preservation path credentials use, so a foreign-language error
+# surfaces even when the compression handler speaks only English. Covers
+# the 16 languages most commonly emitted by lint/build/test/container
+# toolchains; falls back to the generic _ERROR_STDERR_PATTERNS for anything
+# else.
+_FOREIGN_ERROR_PATTERNS = [
+    re.compile(r"\bfout\b", re.I),             # Dutch
+    re.compile(r"\bfel\b", re.I),              # Swedish
+    re.compile(r"\bvirhe\b", re.I),            # Finnish
+    re.compile(r"\bhiba\b", re.I),             # Hungarian
+    re.compile(r"\bhata\b", re.I),             # Turkish
+    re.compile(r"\berro\b", re.I),             # Portuguese / Spanish
+    re.compile(r"\bblad\b", re.I),             # Polish
+    re.compile(r"l\u1ed7i\s*[:：]", re.I),     # Vietnamese
+    re.compile(r"\u0e02\u0e49\u0e2d\u0e1c\u0e34\u0e14\u0e1e\u0e25\u0e32\u0e14"),  # Thai
+    re.compile(r"\u05e9\u05d2\u05d9\u05d0\u05d4"),                                # Hebrew
+    re.compile(r"\u062e\u0637\u0623"),                                            # Arabic
+    re.compile(r"\u062e\u0637\u0627"),                                            # Persian
+]
+
+
 def _find_preserved_lines(text):
-    """Find line indices containing credentials/tokens (PRE-compression scan)."""
+    """Find line indices that must survive compression (credentials + errors).
+
+    Two scans run here:
+      1. Token patterns (credentials) — never drop a line carrying a secret.
+      2. Foreign-language error markers — the English-keyword handlers below
+         will happily drop a Dutch "fout:" line because it does not contain
+         "error"/"failed"/etc. We flag it here so the re-injection path
+         brings it back after compression runs.
+    """
     preserved = set()
     for i, line in enumerate(text.splitlines()):
         for pat in _TOKEN_PATTERNS:
             if pat.search(line):
                 preserved.add(i)
                 break
+        else:
+            # Only scan error patterns when the line did not already match
+            # a credential pattern (small optimization).
+            for pat in _ERROR_STDERR_PATTERNS:
+                if pat.search(line):
+                    preserved.add(i)
+                    break
+            else:
+                for pat in _FOREIGN_ERROR_PATTERNS:
+                    if pat.search(line):
+                        preserved.add(i)
+                        break
     return preserved
 
 
@@ -149,7 +192,15 @@ def _compress_git_status(output):
             branch = line.replace("On branch ", "").strip()
         elif "ahead" in line or "behind" in line:
             ahead_behind = line.strip().lstrip("(").rstrip(")")
-        elif "nothing to commit" in line:
+        elif line.strip() in (
+            "nothing to commit, working tree clean",
+            "nothing to commit (working directory clean)",
+            "nothing to commit, working directory clean",
+        ):
+            # Anchored equality check: the string "nothing to commit" can
+            # legitimately appear inside a filename under "Untracked files:"
+            # (e.g. `nothing to commit.txt`). A substring match there would
+            # falsely report the tree clean and hide real untracked work.
             return f"branch: {branch}, clean{f' ({ahead_behind})' if ahead_behind else ''}"
         elif "Changes to be committed:" in line:
             section = "staged"
@@ -396,6 +447,13 @@ def _compress_build(output):
         "found 0 error", "0 errors", "0 warnings", "no errors",
         "no warnings", "0 problems",
     )
+    # "Found N errors" (N > 0) is an aggregate summary, not an individual
+    # error line. Counting it as an error inflates the handler's "N
+    # error/warning lines" header. We detect it via a regex and route to
+    # the summary bucket.
+    found_n_errors_re = re.compile(r"^found\s+\d+\s+(error|warning|problem)s?", re.I)
+    # "Errors  Files" style tsc trailing column headers are also summary.
+    error_header_res = re.compile(r"^(errors?\s+files?|errors?\s+warnings?)$", re.I)
 
     errors = []
     summaries = []
@@ -406,6 +464,9 @@ def _compress_build(output):
             continue
         low = stripped.lower()
         if any(pat in low for pat in clean_summary_patterns):
+            summaries.append(stripped)
+            continue
+        if found_n_errors_re.match(low) or error_header_res.match(low):
             summaries.append(stripped)
             continue
         if any(kw in low for kw in error_kw):
