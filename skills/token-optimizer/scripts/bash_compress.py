@@ -291,6 +291,42 @@ _LINT_CODE_PATTERNS = [
 ]
 
 
+def _compress_logs(output):
+    """Compress log-like output (tail/cat/journalctl).
+
+    Detects runs of adjacent duplicate lines and collapses them to a single
+    line plus a "(xN)" marker. Only activates when the duplicate rate is at
+    least 30% of the input, so normal mixed logs pass through raw. Credentials
+    appearing inside log lines are preserved through the pre-compression token
+    scan; the re-injection path also guarantees at least one verbatim copy of
+    a deduped line containing a credential survives.
+    """
+    lines = output.splitlines()
+    if len(lines) < 20:
+        return output  # short logs: not worth the compression risk
+
+    collapsed = []
+    dup_removed = 0
+    i = 0
+    while i < len(lines):
+        current = lines[i]
+        run = 1
+        while i + run < len(lines) and lines[i + run] == current:
+            run += 1
+        if run > 1:
+            collapsed.append(f"{current}  (x{run})")
+            dup_removed += run - 1
+        else:
+            collapsed.append(current)
+        i += run
+
+    # Require meaningful dup density before accepting the compression.
+    if dup_removed < max(10, len(lines) // 3):
+        return output
+
+    return "\n".join(collapsed)
+
+
 def _compress_lint(output):
     """Compress lint output (eslint/ruff/flake8/rubocop/shellcheck/biome/pylint/golangci-lint).
 
@@ -413,6 +449,11 @@ def _detect_pattern(command_str):
         return "lint"
     elif cmd == "golangci-lint" and subcmd == "run":
         return "lint"
+    # v5.1 logs handler (read-only log inspection)
+    elif cmd in ("tail", "journalctl"):
+        return "logs"
+    elif cmd == "cat" and subcmd and subcmd.endswith(".log"):
+        return "logs"
 
     return None
 
@@ -426,6 +467,7 @@ _PATTERN_HANDLERS = {
     "npm_install": _compress_npm_install,
     "ls": _compress_ls,
     "lint": _compress_lint,
+    "logs": _compress_logs,
 }
 
 

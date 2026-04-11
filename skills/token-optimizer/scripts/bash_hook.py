@@ -37,6 +37,8 @@ _WHITELIST_SINGLE = frozenset({
     "git", "pytest", "py.test", "jest", "vitest", "rspec", "ls", "find",
     # v5.1 lint handlers (read-only static analysis)
     "eslint", "flake8", "pylint", "shellcheck", "rubocop",
+    # v5.1 logs handler (read-only log inspection)
+    "tail", "journalctl",
 })
 _WHITELIST_COMPOUND = {
     ("git", "status"), ("git", "log"), ("git", "diff"), ("git", "show"), ("git", "branch"),
