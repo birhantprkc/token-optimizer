@@ -123,19 +123,26 @@ def _looks_like_failure(returncode, stderr):
 # Error markers in scripts/languages the English-keyword handlers would
 # otherwise drop. Any line matching one of these is re-injected through the
 # same preservation path credentials use, so a foreign-language error
-# surfaces even when the compression handler speaks only English. Covers
-# the 16 languages most commonly emitted by lint/build/test/container
-# toolchains; falls back to the generic _ERROR_STDERR_PATTERNS for anything
-# else.
+# surfaces even when the compression handler speaks only English.
+#
+# Latin-script entries require a trailing colon so short Latin tokens that
+# also appear in English tech vocabulary do not false-positive. FOUT
+# (Flash Of Unstyled Text) in web-perf output, FEL in Free Electron Laser
+# toolchains, and Hata propagation model references are common enough
+# that a bare word boundary would preserve unrelated lines and inflate
+# the compressed output.
+#
+# CJK-script entries stay as literal character sequences since those
+# characters do not collide with English tech tokens.
 _FOREIGN_ERROR_PATTERNS = [
-    re.compile(r"\bfout\b", re.I),             # Dutch
-    re.compile(r"\bfel\b", re.I),              # Swedish
-    re.compile(r"\bvirhe\b", re.I),            # Finnish
-    re.compile(r"\bhiba\b", re.I),             # Hungarian
-    re.compile(r"\bhata\b", re.I),             # Turkish
-    re.compile(r"\berro\b", re.I),             # Portuguese / Spanish
-    re.compile(r"\bblad\b", re.I),             # Polish
-    re.compile(r"l\u1ed7i\s*[:：]", re.I),     # Vietnamese
+    re.compile(r"\bfout\s*[:：]", re.I),        # Dutch
+    re.compile(r"\bfel\s*[:：]", re.I),         # Swedish
+    re.compile(r"\bvirhe\s*[:：]", re.I),       # Finnish
+    re.compile(r"\bhiba\s*[:：]", re.I),        # Hungarian
+    re.compile(r"\bhata\s*[:：]", re.I),        # Turkish
+    re.compile(r"\berro\s*[:：]", re.I),        # Portuguese / Spanish
+    re.compile(r"\bblad\s*[:：]", re.I),        # Polish
+    re.compile(r"l\u1ed7i\s*[:：]", re.I),      # Vietnamese
     re.compile(r"\u0e02\u0e49\u0e2d\u0e1c\u0e34\u0e14\u0e1e\u0e25\u0e32\u0e14"),  # Thai
     re.compile(r"\u05e9\u05d2\u05d9\u05d0\u05d4"),                                # Hebrew
     re.compile(r"\u062e\u0637\u0623"),                                            # Arabic
@@ -443,7 +450,11 @@ def _compress_build(output):
     # "Found 0 errors" / "0 warnings" / "no errors" are CLEAN signals that
     # happen to contain an error_kw substring. Treat them as summary,
     # not as error/warning, so a clean build is not reported with a
-    # misleading "1 error/warning lines" header.
+    # misleading "1 error/warning lines" header. The match is
+    # left-anchored so a real error line like
+    # `error TS2322: Expected 'no errors' but found 'undefined'` is not
+    # mis-routed to the summary bucket, and so a line like
+    # `10 errors in 5 files` cannot match the `0 errors` prefix.
     clean_summary_patterns = (
         "found 0 error", "0 errors", "0 warnings", "no errors",
         "no warnings", "0 problems",
@@ -464,7 +475,7 @@ def _compress_build(output):
         if not stripped:
             continue
         low = stripped.lower()
-        if any(pat in low for pat in clean_summary_patterns):
+        if any(low.startswith(pat) for pat in clean_summary_patterns):
             summaries.append(stripped)
             continue
         if found_n_errors_re.match(low) or error_header_res.match(low):
@@ -794,6 +805,19 @@ def _detect_pattern(command_str):
 
     if cmd == "git":
         if subcmd in ("status",):
+            # Only the default human-readable format is parseable. Any
+            # flag that switches to machine-readable output (--porcelain
+            # v1/v2, --short/-s, -z) routes to raw so the handler does not
+            # swallow file lists it cannot recognise.
+            git_args = tokens[cmd_start + 2:]
+            for arg in git_args:
+                if arg.startswith("--porcelain") or arg.startswith("--short"):
+                    return None
+                # Short-flag clusters (-s, -sb, -bs, -z, -sz): any
+                # cluster containing s or z changes the output format.
+                if arg.startswith("-") and not arg.startswith("--"):
+                    if "s" in arg[1:] or "z" in arg[1:]:
+                        return None
             return "git_status"
         elif subcmd in ("log",):
             return "git_log"
@@ -938,16 +962,23 @@ def compress(command_str, raw_output, returncode=0, stderr=""):
     except Exception:
         return cleaned  # fail open
 
-    # Re-inject preserved lines that were stripped by compression
+    # Re-inject preserved lines that were stripped by compression.
+    # Uses exact-line membership (not substring) so a short preserved
+    # line that happens to be contained inside a longer compressed line
+    # is still emitted on its own rather than silently folded into the
+    # larger line.
     if preserved_lines:
         original_lines = cleaned.splitlines()
-        compressed_text = compressed
+        compressed_line_set = set(compressed.splitlines())
+        appended: list[str] = []
         for line_idx in preserved_lines:
             if line_idx < len(original_lines):
                 preserved_line = original_lines[line_idx]
-                if preserved_line not in compressed_text:
-                    compressed_text += f"\n{preserved_line}"
-        compressed = compressed_text
+                if preserved_line not in compressed_line_set:
+                    appended.append(preserved_line)
+                    compressed_line_set.add(preserved_line)
+        if appended:
+            compressed = compressed + "\n" + "\n".join(appended)
 
     # Check if compression actually saved enough (10% minimum via bytes/4)
     # We use 10% rather than 30% because even modest truncation (e.g., ls with 60 entries)

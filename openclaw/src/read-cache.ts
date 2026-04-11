@@ -358,6 +358,12 @@ export function handleReadBefore(event: ToolEventData): { block: boolean; messag
   const entry = cache.files[filePath];
   const offset = event.toolInput.offset ?? 0;
   const limit = event.toolInput.limit ?? 0;
+  // Delta Mode only runs against explicit full-file reads. A read that
+  // carries a non-default offset or limit is an intentionally narrow
+  // pull (e.g. to avoid a secret section or stay under a window budget),
+  // and serving it a whole-file diff on re-read would silently bypass
+  // that scope.
+  const isFullFileRead = offset === 0 && limit === 0;
 
   if (!entry) {
     // First read: cache it
@@ -375,9 +381,10 @@ export function handleReadBefore(event: ToolEventData): { block: boolean; messag
 
     // v5 Delta Mode: seed the memory-only content cache so a follow-up
     // read from the SAME session can be served as a diff. Only activates
-    // when the feature is on AND the file fits the 50KB budget. Keyed
-    // by session so session B never sees session A's cached content.
-    if (isV5Enabled("delta_read")) {
+    // when the feature is on, the file fits the 50KB budget, and the
+    // caller asked for the whole file. Keyed by session so session B
+    // never sees session A's cached content.
+    if (isV5Enabled("delta_read") && isFullFileRead) {
       try {
         const stat = fs.statSync(filePath);
         if (stat.size <= DELTA_CACHE_MAX_BYTES) {
@@ -414,6 +421,7 @@ export function handleReadBefore(event: ToolEventData): { block: boolean; messag
     const sessionCached = getDeltaCache(sessionId, filePath);
     const deltaEligible =
       isV5Enabled("delta_read") &&
+      isFullFileRead &&
       rangeMatch &&
       !mtimeMatch &&
       sessionCached !== undefined;
@@ -468,8 +476,11 @@ export function handleReadBefore(event: ToolEventData): { block: boolean; messag
     entry.digest = "";
     saveCache(agentId, sessionId, cache);
 
-    // Update the delta cache with the fresh content when delta_read is on.
-    if (isV5Enabled("delta_read")) {
+    // Update the delta cache with the fresh content when delta_read is on
+    // AND the caller asked for a full-file read. Narrow reads never feed
+    // the delta cache so a follow-up full-file read cannot inherit stale
+    // scope from a previous narrow request.
+    if (isV5Enabled("delta_read") && isFullFileRead) {
       try {
         const stat = fs.statSync(filePath);
         if (stat.size <= DELTA_CACHE_MAX_BYTES) {
@@ -481,6 +492,11 @@ export function handleReadBefore(event: ToolEventData): { block: boolean; messag
       } catch {
         deleteDeltaCache(sessionId, filePath);
       }
+    } else if (!isFullFileRead) {
+      // Narrow reads evict any previously cached delta content so a
+      // subsequent full-file read cannot be served a stale diff whose
+      // provenance predates the narrow request.
+      deleteDeltaCache(sessionId, filePath);
     }
 
     logDecision("allow", filePath, "file_modified_or_different_range", sessionId);
