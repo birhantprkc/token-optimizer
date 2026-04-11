@@ -12,6 +12,7 @@ venv/
 snapshots/
 .pytest_cache/
 FIELD_NOTES.md
+compound-engineering.local.md
 private-review/
 docs/turboquant-enhancements.md
 docs/internal/
