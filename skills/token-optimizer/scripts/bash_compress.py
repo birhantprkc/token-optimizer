@@ -291,6 +291,61 @@ _LINT_CODE_PATTERNS = [
 ]
 
 
+def _compress_build(output):
+    """Compress JS/TS/Go build output (tsc/webpack/esbuild/vite/next/go build).
+
+    Keeps lines that look like errors, warnings, or final summary markers.
+    Drops the bulk of bundler chatter (asset lists, file size tables,
+    incremental compile stats) unless there is no error/warning signal at
+    all — in which case we fall back to a short "build finished cleanly"
+    marker so the caller still knows the build ran.
+    """
+    lines = output.splitlines()
+    if len(lines) < 20:
+        return output
+
+    error_kw = ("error", "warning", "failed", "fatal", " tsc ", " ts(")
+    summary_kw = (
+        "compiled successfully", "built in", "build finished",
+        "build completed", "done in", "errors", "warnings",
+        "bundled ", "chunk ", "emitted ", "hash:", "version:",
+    )
+
+    errors = []
+    summaries = []
+    total_kept = 0
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        low = stripped.lower()
+        if any(kw in low for kw in error_kw):
+            errors.append(stripped)
+            total_kept += 1
+            if total_kept > 80:  # bound even on pathological error dumps
+                break
+        elif any(kw in low for kw in summary_kw):
+            summaries.append(stripped)
+
+    if not errors and not summaries:
+        # No recognisable signal — fall back to a tiny marker so caller
+        # still sees SOMETHING, but the compression ratio gate will reject
+        # if the raw was too short for this to be worth anything.
+        return "[build output: no errors or warnings detected; output elided]"
+
+    parts = []
+    if errors:
+        parts.append(f"{len(errors)} error/warning lines:")
+        parts.extend(errors[:40])
+        if len(errors) > 40:
+            parts.append(f"... ({len(errors) - 40} more errors/warnings)")
+    if summaries:
+        parts.append("")
+        parts.extend(summaries[-5:])
+
+    return "\n".join(parts)
+
+
 def _compress_list(output):
     """Compress long listing commands (pip list / npm ls / docker ps / brew list).
 
@@ -616,6 +671,13 @@ def _detect_pattern(command_str):
     # v5.1 progress handler (docker build, docker pull)
     elif cmd == "docker" and subcmd in ("build", "pull"):
         return "progress"
+    # v5.1 build handler
+    elif cmd in ("tsc", "webpack", "esbuild"):
+        return "build"
+    elif cmd in ("vite", "next") and subcmd == "build":
+        return "build"
+    elif cmd == "go" and subcmd == "build":
+        return "build"
     # v5.1 list handler
     elif cmd in ("pip", "pip3") and subcmd == "list":
         return "list"
@@ -644,6 +706,7 @@ _PATTERN_HANDLERS = {
     "tree": _compress_tree,
     "progress": _compress_progress,
     "list": _compress_list,
+    "build": _compress_build,
 }
 
 

@@ -41,6 +41,8 @@ _WHITELIST_SINGLE = frozenset({
     "tail", "journalctl",
     # v5.1 tree handler (read-only directory tree)
     "tree",
+    # v5.1 build handler (type-check / bundler builds — read-only compile)
+    "tsc", "webpack", "esbuild",
 })
 _WHITELIST_COMPOUND = {
     ("git", "status"), ("git", "log"), ("git", "diff"), ("git", "show"), ("git", "branch"),
@@ -63,6 +65,10 @@ _WHITELIST_COMPOUND = {
     ("pnpm", "list"),
     ("docker", "ps"),
     ("brew", "list"),
+    # v5.1 build handlers (multi-word build commands)
+    ("vite", "build"),
+    ("next", "build"),
+    ("go", "build"),
 }
 
 # Git write commands that should NOT be compressed
