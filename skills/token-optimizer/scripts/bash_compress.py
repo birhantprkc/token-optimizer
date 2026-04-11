@@ -45,10 +45,41 @@ _TOKEN_PATTERNS = [
 # ANSI escape code pattern
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\]8;[^\x07]*\x07[^\x1b]*\x1b\]8;;\x07")
 
+# Stderr patterns that indicate failure even with exit code 0 (linters often
+# emit errors on stderr but exit 0 because they only reported warnings).
+_ERROR_STDERR_PATTERNS = [
+    re.compile(r"\berror\s*:", re.I),
+    re.compile(r"\bfatal\s*:", re.I),
+    re.compile(r"\bpanic\s*:", re.I),
+    re.compile(r"\bFAILED\b"),
+    re.compile(r"\bTraceback\b"),
+]
+
 
 def _strip_ansi(text):
     """Remove ANSI escape codes. Preserve URL text from OSC 8 hyperlinks."""
     return _ANSI_RE.sub("", text)
+
+
+def _looks_like_failure(returncode, stderr):
+    """Return True when the command should not have its output compressed.
+
+    Triggers on non-zero exit, OR on exit code 0 with an error pattern on
+    stderr (common for linters that print "error:" on stderr while exiting 0).
+    Fail-open: on any surprise, treat as non-failure so the normal compression
+    path still runs.
+    """
+    try:
+        if returncode not in (0, None):
+            return True
+        if not stderr:
+            return False
+        for pat in _ERROR_STDERR_PATTERNS:
+            if pat.search(stderr):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _find_preserved_lines(text):
@@ -315,12 +346,19 @@ _PATTERN_HANDLERS = {
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def compress(command_str, raw_output):
+def compress(command_str, raw_output, returncode=0, stderr=""):
     """Compress CLI output based on command pattern.
 
     Returns compressed output. On any issue, returns raw output.
     Token preservation scan runs FIRST on raw output.
+
+    Tee-on-failure: if the command failed (non-zero exit) or printed error
+    patterns on stderr even with exit 0, return raw output verbatim. Never
+    compress failure output — the user needs the full signal to debug.
     """
+    if _looks_like_failure(returncode, stderr):
+        return raw_output  # fail-open tee: full output, unchanged
+
     if not raw_output or len(raw_output) < 100:
         return raw_output  # too small to bother
 
@@ -383,11 +421,16 @@ def main():
             text=True,
             timeout=60,
         )
-        raw_output = result.stdout
-        if result.stderr:
-            raw_output += result.stderr
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        raw_output = stdout + stderr
 
-        compressed = compress(command_str, raw_output)
+        compressed = compress(
+            command_str,
+            raw_output,
+            returncode=result.returncode,
+            stderr=stderr,
+        )
 
         # Buffer completely, then write
         sys.stdout.write(compressed)
