@@ -206,7 +206,14 @@ export function getCompressionSummary(days = 30): CompressionSummary {
   };
 }
 
-/** Prune events older than `days`. Used by a background maintenance task. */
+/** Prune events older than `days`. Used by a background maintenance task.
+ *
+ * Atomic replace via tmp-file + rename so a concurrent `logCompressionEvent`
+ * append during the prune window lands either in the pre-prune file (and
+ * gets replaced) or against the post-prune file (and survives). Without
+ * the atomic swap, an append that races with the read-filter-writeFileSync
+ * sequence would be silently dropped.
+ */
 export function pruneOldEvents(days = 90): number {
   if (!fs.existsSync(TELEMETRY_PATH)) return 0;
   try {
@@ -229,10 +236,12 @@ export function pruneOldEvents(days = 90): number {
       }
       kept.push(trimmed);
     }
-    fs.writeFileSync(TELEMETRY_PATH, kept.join("\n") + (kept.length ? "\n" : ""), {
+    const tmp = TELEMETRY_PATH + ".tmp";
+    fs.writeFileSync(tmp, kept.join("\n") + (kept.length ? "\n" : ""), {
       encoding: "utf8",
       mode: 0o600,
     });
+    fs.renameSync(tmp, TELEMETRY_PATH);
     return dropped;
   } catch {
     return 0;

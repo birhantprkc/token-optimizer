@@ -388,6 +388,14 @@ def _compress_build(output):
         "build completed", "done in", "errors", "warnings",
         "bundled ", "chunk ", "emitted ", "hash:", "version:",
     )
+    # "Found 0 errors" / "0 warnings" / "no errors" are CLEAN signals that
+    # happen to contain an error_kw substring. Treat them as summary,
+    # not as error/warning, so a clean build is not reported with a
+    # misleading "1 error/warning lines" header.
+    clean_summary_patterns = (
+        "found 0 error", "0 errors", "0 warnings", "no errors",
+        "no warnings", "0 problems",
+    )
 
     errors = []
     summaries = []
@@ -397,6 +405,9 @@ def _compress_build(output):
         if not stripped:
             continue
         low = stripped.lower()
+        if any(pat in low for pat in clean_summary_patterns):
+            summaries.append(stripped)
+            continue
         if any(kw in low for kw in error_kw):
             errors.append(stripped)
             total_kept += 1
@@ -646,13 +657,16 @@ def _compress_lint(output):
             continue
         matched_code = None
         for pat in _LINT_CODE_PATTERNS:
-            m = pat.search(stripped)
-            if m:
+            # Walk every match of this pattern on the line so a blocked
+            # candidate (e.g. CVE2024) does not shadow a real lint code
+            # (e.g. E501) that appears later in the same line.
+            for m in pat.finditer(stripped):
                 candidate = m.group(1)
-                # Reject non-lint prefixes (CVE2024, HTTP404, ISO9001, etc.)
                 if candidate.startswith(_LINT_CODE_BLOCKLIST_PREFIXES):
                     continue
                 matched_code = candidate
+                break
+            if matched_code:
                 break
         if matched_code:
             counts[matched_code] = counts.get(matched_code, 0) + 1
