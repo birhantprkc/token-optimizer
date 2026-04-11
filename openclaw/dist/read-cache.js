@@ -51,6 +51,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.clearDeltaCacheForSession = clearDeltaCacheForSession;
 exports.handleReadBefore = handleReadBefore;
 exports.handleWriteAfter = handleWriteAfter;
 exports.clearCache = clearCache;
@@ -67,12 +68,54 @@ const HOME = os.homedir();
 const CACHE_DIR = path.join(HOME, ".openclaw", "token-optimizer", "read-cache");
 const MAX_CACHE_ENTRIES = 500;
 const MAX_CONTEXTIGNORE_PATTERNS = 200;
-// v5 Delta Mode: memory-only content cache keyed by filePath. Capped per
-// entry at 50KB so an unbounded file read can never park 10MB of content in
-// process memory. Lost on gateway restart by design — the cost of a cold
-// cache after restart is one extra full re-read, which is acceptable.
+// v5 Delta Mode: memory-only content cache keyed by sessionId + filePath.
+// Per-entry cap at 50KB. Per-map cap at 100 entries with LRU eviction so a
+// long-running gateway that reads hundreds of distinct files cannot leak
+// memory. Session-scoped keys prevent cross-session leaks: session B can
+// never see content that session A cached, even on the same file. Lost on
+// gateway restart by design — the cost of a cold cache is one extra full
+// re-read, which is acceptable.
 const DELTA_CACHE_MAX_BYTES = 50 * 1024;
+const DELTA_CACHE_MAX_ENTRIES = 100;
 const _deltaContentCache = new Map();
+function deltaCacheKey(sessionId, filePath) {
+    return `${sessionId}::${filePath}`;
+}
+function setDeltaCache(sessionId, filePath, entry) {
+    const key = deltaCacheKey(sessionId, filePath);
+    // Re-insertion moves the key to the end of the Map iteration order, so
+    // we delete-then-set to refresh position on an overwrite.
+    if (_deltaContentCache.has(key)) {
+        _deltaContentCache.delete(key);
+    }
+    _deltaContentCache.set(key, entry);
+    // LRU eviction: drop oldest insertions until the cap holds.
+    while (_deltaContentCache.size > DELTA_CACHE_MAX_ENTRIES) {
+        const oldestKey = _deltaContentCache.keys().next().value;
+        if (oldestKey === undefined)
+            break;
+        _deltaContentCache.delete(oldestKey);
+    }
+}
+function getDeltaCache(sessionId, filePath) {
+    return _deltaContentCache.get(deltaCacheKey(sessionId, filePath));
+}
+function deleteDeltaCache(sessionId, filePath) {
+    _deltaContentCache.delete(deltaCacheKey(sessionId, filePath));
+}
+/**
+ * Drop every delta cache entry for a session. Exported so index.ts can
+ * wire this into agent:stop / session:end events if OpenClaw ever exposes
+ * them. Safe to call on an unknown sessionId (no-op).
+ */
+function clearDeltaCacheForSession(sessionId) {
+    const prefix = `${sessionId}::`;
+    for (const key of Array.from(_deltaContentCache.keys())) {
+        if (key.startsWith(prefix)) {
+            _deltaContentCache.delete(key);
+        }
+    }
+}
 const BINARY_EXTENSIONS = new Set([
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg",
     ".pdf", ".wasm", ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
@@ -321,14 +364,15 @@ function handleReadBefore(event) {
         saveCache(agentId, sessionId, cache);
         logDecision("allow", filePath, "first_read", sessionId);
         // v5 Delta Mode: seed the memory-only content cache so a follow-up
-        // read can be served as a diff. Only activates when the feature is
-        // on AND the file fits the 50KB budget.
+        // read from the SAME session can be served as a diff. Only activates
+        // when the feature is on AND the file fits the 50KB budget. Keyed
+        // by session so session B never sees session A's cached content.
         if ((0, v5_features_1.isV5Enabled)("delta_read")) {
             try {
                 const stat = fs.statSync(filePath);
                 if (stat.size <= DELTA_CACHE_MAX_BYTES) {
                     const content = fs.readFileSync(filePath, "utf-8");
-                    _deltaContentCache.set(filePath, { mtime, content });
+                    setDeltaCache(sessionId, filePath, { mtime, content });
                 }
             }
             catch {
@@ -356,19 +400,19 @@ function handleReadBefore(event) {
         // feature is on, the range is unchanged (delta is line-oriented so
         // offset/limit shifts would produce misleading diffs), the mtime
         // changed, and we have content in the memory cache.
+        const sessionCached = getDeltaCache(sessionId, filePath);
         const deltaEligible = (0, v5_features_1.isV5Enabled)("delta_read") &&
             rangeMatch &&
             !mtimeMatch &&
-            _deltaContentCache.has(filePath);
-        if (deltaEligible) {
+            sessionCached !== undefined;
+        if (deltaEligible && sessionCached) {
             try {
-                const cached = _deltaContentCache.get(filePath);
                 const stat = fs.statSync(filePath);
                 if (stat.size <= DELTA_CACHE_MAX_BYTES) {
                     const newContent = fs.readFileSync(filePath, "utf-8");
-                    const delta = (0, delta_diff_1.computeDelta)(cached.content, newContent);
+                    const delta = (0, delta_diff_1.computeDelta)(sessionCached.content, newContent);
                     // Refresh cache for next delta (only when it still fits the budget)
-                    _deltaContentCache.set(filePath, { mtime: currentMtime, content: newContent });
+                    setDeltaCache(sessionId, filePath, { mtime: currentMtime, content: newContent });
                     // Update the on-disk entry so future calls see the new mtime.
                     entry.mtime = currentMtime;
                     entry.readCount++;
@@ -392,10 +436,10 @@ function handleReadBefore(event) {
                     };
                 }
                 // File grew past the budget — drop the memory cache entry and fall through.
-                _deltaContentCache.delete(filePath);
+                deleteDeltaCache(sessionId, filePath);
             }
             catch {
-                _deltaContentCache.delete(filePath);
+                deleteDeltaCache(sessionId, filePath);
                 // Fall through to the normal mtime-changed path.
             }
         }
@@ -412,14 +456,14 @@ function handleReadBefore(event) {
                 const stat = fs.statSync(filePath);
                 if (stat.size <= DELTA_CACHE_MAX_BYTES) {
                     const content = fs.readFileSync(filePath, "utf-8");
-                    _deltaContentCache.set(filePath, { mtime: currentMtime, content });
+                    setDeltaCache(sessionId, filePath, { mtime: currentMtime, content });
                 }
                 else {
-                    _deltaContentCache.delete(filePath);
+                    deleteDeltaCache(sessionId, filePath);
                 }
             }
             catch {
-                _deltaContentCache.delete(filePath);
+                deleteDeltaCache(sessionId, filePath);
             }
         }
         logDecision("allow", filePath, "file_modified_or_different_range", sessionId);
@@ -481,8 +525,8 @@ function handleWriteAfter(event) {
         delete cache.files[filePath];
         saveCache(event.agentId, event.sessionId, cache);
     }
-    // Keep the v5 delta cache consistent with on-disk truth.
-    _deltaContentCache.delete(filePath);
+    // Keep the v5 delta cache consistent with on-disk truth for this session.
+    deleteDeltaCache(event.sessionId, filePath);
 }
 /**
  * Clear all caches (called on compact).

@@ -16,6 +16,12 @@
  *   - Binary file skip
  *   - .contextignore support (hard block)
  */
+/**
+ * Drop every delta cache entry for a session. Exported so index.ts can
+ * wire this into agent:stop / session:end events if OpenClaw ever exposes
+ * them. Safe to call on an unknown sessionId (no-op).
+ */
+export declare function clearDeltaCacheForSession(sessionId: string): void;
 export interface ReadToolInput {
     file_path?: string;
     offset?: number;

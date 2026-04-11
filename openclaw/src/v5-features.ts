@@ -102,11 +102,15 @@ function readState(): Record<string, boolean> {
 
 function writeState(state: Record<string, boolean>): void {
   try {
-    fs.mkdirSync(V5_DIR, { recursive: true });
-    fs.writeFileSync(V5_STATE_PATH, JSON.stringify(state, null, 2), {
+    fs.mkdirSync(V5_DIR, { recursive: true, mode: 0o700 });
+    // Atomic write: tmp-file + rename so a concurrent read from a second
+    // CLI invocation never sees a torn/partial JSON blob.
+    const tmp = V5_STATE_PATH + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), {
       encoding: "utf8",
       mode: 0o600,
     });
+    fs.renameSync(tmp, V5_STATE_PATH);
   } catch {
     // Never crash the gateway over a toggle failing to persist.
   }

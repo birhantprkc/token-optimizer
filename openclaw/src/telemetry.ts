@@ -50,7 +50,10 @@ const MAX_DETAIL_LEN = 200;
 
 function ensureDir(): void {
   try {
-    fs.mkdirSync(TELEMETRY_DIR, { recursive: true });
+    // 0o700 so the telemetry directory is readable only by the owner on
+    // shared hosts. The JSONL file itself is already created 0o600 on
+    // first append.
+    fs.mkdirSync(TELEMETRY_DIR, { recursive: true, mode: 0o700 });
   } catch {
     // Ignore — the next write attempt will surface the real error via its
     // own try/catch. Never crash the gateway over telemetry setup.

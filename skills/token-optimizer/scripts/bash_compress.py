@@ -50,8 +50,17 @@ _TOKEN_PATTERNS = [
     re.compile(r"(?:postgres|postgresql|mysql|mongodb|mongodb\+srv|redis)://[^:\s/]+:[^@\s]+@", re.I),  # DB URI with password
 ]
 
-# ANSI escape code pattern
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\]8;[^\x07]*\x07[^\x1b]*\x1b\]8;;\x07")
+# ANSI escape code patterns.
+#
+# _ANSI_CSI_RE drops colour/style/cursor escape sequences.
+#
+# _ANSI_OSC8_RE matches a full OSC 8 hyperlink -- opener, label text, closer --
+# and is used with a ``\1`` backreference so the visible label text survives
+# (captured as group 1). The previous combined regex swallowed the label along
+# with the opener/closer, which meant any credential embedded in the visible
+# hyperlink text vanished before the preservation scan ran.
+_ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_ANSI_OSC8_RE = re.compile(r"\x1b\]8;[^\x07]*\x07([^\x1b]*)\x1b\]8;;\x07")
 
 # Stderr patterns that indicate failure even with exit code 0 (linters often
 # emit errors on stderr but exit 0 because they only reported warnings).
@@ -77,8 +86,16 @@ _ERROR_STDERR_PATTERNS = [
 
 
 def _strip_ansi(text):
-    """Remove ANSI escape codes. Preserve URL text from OSC 8 hyperlinks."""
-    return _ANSI_RE.sub("", text)
+    """Remove ANSI escape codes. Preserve visible text from OSC 8 hyperlinks.
+
+    Two-step replace: first collapse OSC 8 hyperlinks to their visible label
+    (via the captured group 1), then drop CSI escape sequences. This keeps
+    any credential that happens to appear inside the visible label text
+    available to the pre-compression preservation scan, instead of dropping
+    it with the surrounding hyperlink structure.
+    """
+    text = _ANSI_OSC8_RE.sub(r"\1", text)
+    return _ANSI_CSI_RE.sub("", text)
 
 
 def _looks_like_failure(returncode, stderr):

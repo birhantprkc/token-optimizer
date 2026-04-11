@@ -195,7 +195,15 @@ function parseArgs() {
                 strategy = s;
         }
         else if (!arg.startsWith("-")) {
-            command = arg;
+            // Only the first positional wins — subsequent positionals (e.g. the
+            // subcommand after `v5`, or a strategy value) are parsed inside the
+            // command handler. Without this guard, `token-optimizer v5 status`
+            // would set command="v5" on the first iteration and immediately
+            // overwrite it with "status" on the second, leaving every v5
+            // subcommand unreachable.
+            if (command === "help") {
+                command = arg;
+            }
         }
     }
     return { command, days, json, snapshot, strategy };
