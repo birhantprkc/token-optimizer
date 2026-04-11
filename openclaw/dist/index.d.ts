@@ -12,6 +12,8 @@ export type { AgentCostBreakdown, DashboardData } from "./dashboard";
 export { generateCoachData } from "./coach";
 export type { CoachData, CoachPattern } from "./coach";
 import { type CheckpointTelemetrySummary } from "./checkpoint-policy";
+export { V5_FEATURES, isV5Enabled, setV5, listV5Features, type V5FeatureId, } from "./v5-features";
+export { logCompressionEvent, getCompressionSummary, pruneOldEvents, type CompressionSummary, type CompressionEvent, } from "./telemetry";
 interface OpenClawApi {
     registerService(name: string, service: Record<string, unknown>): void;
     on(event: string, handler: (...args: unknown[]) => void): void;

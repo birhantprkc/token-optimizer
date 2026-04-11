@@ -41,7 +41,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.detectUnusedSkills = exports.getSkillUsageHistory = exports.extractCostlyPrompts = exports.extractTopic = exports.parseSessionTurns = exports.generateCoachData = void 0;
+exports.detectUnusedSkills = exports.getSkillUsageHistory = exports.extractCostlyPrompts = exports.extractTopic = exports.parseSessionTurns = exports.pruneOldEvents = exports.getCompressionSummary = exports.logCompressionEvent = exports.listV5Features = exports.setV5 = exports.isV5Enabled = exports.V5_FEATURES = exports.generateCoachData = void 0;
 exports.audit = audit;
 exports.scan = scan;
 exports.generateDashboard = generateDashboard;
@@ -64,6 +64,17 @@ const context_audit_1 = require("./context-audit");
 const quality_1 = require("./quality");
 const checkpoint_policy_1 = require("./checkpoint-policy");
 const waste_detectors_1 = require("./waste-detectors");
+const v5_features_1 = require("./v5-features");
+const telemetry_1 = require("./telemetry");
+var v5_features_2 = require("./v5-features");
+Object.defineProperty(exports, "V5_FEATURES", { enumerable: true, get: function () { return v5_features_2.V5_FEATURES; } });
+Object.defineProperty(exports, "isV5Enabled", { enumerable: true, get: function () { return v5_features_2.isV5Enabled; } });
+Object.defineProperty(exports, "setV5", { enumerable: true, get: function () { return v5_features_2.setV5; } });
+Object.defineProperty(exports, "listV5Features", { enumerable: true, get: function () { return v5_features_2.listV5Features; } });
+var telemetry_2 = require("./telemetry");
+Object.defineProperty(exports, "logCompressionEvent", { enumerable: true, get: function () { return telemetry_2.logCompressionEvent; } });
+Object.defineProperty(exports, "getCompressionSummary", { enumerable: true, get: function () { return telemetry_2.getCompressionSummary; } });
+Object.defineProperty(exports, "pruneOldEvents", { enumerable: true, get: function () { return telemetry_2.pruneOldEvents; } });
 function definePluginEntry(options) {
     return options;
 }
@@ -259,6 +270,11 @@ exports.default = definePluginEntry({
             scan,
             generateDashboard,
             doctor,
+            // v5 Active Compression surface
+            listV5Features: v5_features_1.listV5Features,
+            isV5Enabled: v5_features_1.isV5Enabled,
+            setV5: v5_features_1.setV5,
+            getCompressionSummary: telemetry_1.getCompressionSummary,
         });
         // Log on gateway startup
         safeOn(api, "gateway:startup", () => {
@@ -267,6 +283,17 @@ exports.default = definePluginEntry({
             const cleaned = (0, smart_compact_1.cleanupCheckpoints)(7);
             if (cleaned > 0) {
                 api.logger.info(`[token-optimizer] Cleaned ${cleaned} old checkpoint(s)`);
+            }
+            // v5 telemetry hygiene: drop events older than 90 days so the JSONL
+            // file does not grow unbounded across long-running gateways.
+            try {
+                const dropped = (0, telemetry_1.pruneOldEvents)(90);
+                if (dropped > 0) {
+                    api.logger.info(`[token-optimizer] Pruned ${dropped} v5 telemetry event(s) older than 90d`);
+                }
+            }
+            catch {
+                // Never crash the gateway over telemetry cleanup.
             }
         });
         // Log on agent bootstrap

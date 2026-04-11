@@ -48,6 +48,32 @@ import {
   shouldEvaluateRuntimeState,
 } from "./checkpoint-policy";
 import { runAllDetectors, detectUnusedSkills } from "./waste-detectors";
+import {
+  V5_FEATURES,
+  isV5Enabled,
+  setV5,
+  listV5Features,
+  type V5FeatureId,
+} from "./v5-features";
+import {
+  logCompressionEvent,
+  getCompressionSummary,
+  pruneOldEvents,
+} from "./telemetry";
+export {
+  V5_FEATURES,
+  isV5Enabled,
+  setV5,
+  listV5Features,
+  type V5FeatureId,
+} from "./v5-features";
+export {
+  logCompressionEvent,
+  getCompressionSummary,
+  pruneOldEvents,
+  type CompressionSummary,
+  type CompressionEvent,
+} from "./telemetry";
 
 // ---------------------------------------------------------------------------
 // OpenClaw Plugin API types (minimal, avoids external dependency)
@@ -316,6 +342,11 @@ export default definePluginEntry({
       scan,
       generateDashboard,
       doctor,
+      // v5 Active Compression surface
+      listV5Features,
+      isV5Enabled,
+      setV5,
+      getCompressionSummary,
     });
 
     // Log on gateway startup
@@ -328,6 +359,19 @@ export default definePluginEntry({
         api.logger.info(
           `[token-optimizer] Cleaned ${cleaned} old checkpoint(s)`
         );
+      }
+
+      // v5 telemetry hygiene: drop events older than 90 days so the JSONL
+      // file does not grow unbounded across long-running gateways.
+      try {
+        const dropped = pruneOldEvents(90);
+        if (dropped > 0) {
+          api.logger.info(
+            `[token-optimizer] Pruned ${dropped} v5 telemetry event(s) older than 90d`
+          );
+        }
+      } catch {
+        // Never crash the gateway over telemetry cleanup.
       }
     });
 
