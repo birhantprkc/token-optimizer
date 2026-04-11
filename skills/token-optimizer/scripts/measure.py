@@ -7827,33 +7827,92 @@ def _parse_jsonl_for_quality(filepath):
     }
 
 
+_STALE_READ_DISTANCE_THRESHOLD = 120  # ~20-30 turns in record space
+
+
 def detect_stale_reads(quality_data):
-    """Find Read tool calls for files that were later edited.
+    """Find Read tool calls whose content is genuinely outdated in context.
 
-    A read is "stale" if the same file path was later written/edited,
-    meaning the read content in context is outdated.
+    A read is counted as stale ONLY when it represents wasted token budget,
+    not when it is part of a normal edit workflow. The canonical happy path
+    (Read file X, then Edit X a few turns later to incorporate the read
+    content) is NOT stale — the read informed the edit, and is expected.
 
-    Returns: list of (path, read_index, write_index) and estimated waste tokens.
+    Two real stale patterns are detected:
+
+    1. **Re-read after write**: the same file was written earlier in the
+       session and the read is happening again. The context already has
+       the post-write content, so re-reading is wasted tokens. Always
+       counted.
+
+    2. **Far-distance stale**: a read whose corresponding write happens
+       more than ``_STALE_READ_DISTANCE_THRESHOLD`` records later. The
+       read content sat in the working set long enough that the edit
+       is unrelated to it (or is a late-breaking change), and the old
+       snapshot in context is now outdated. Only counted when the read
+       is not followed by a later re-read on the same path.
+
+    Returns: list of (path, read_index, trigger_index) and estimated
+    waste tokens. ``trigger_index`` is the index of the prior write
+    (for re-reads) or the later write (for far-distance stale), so
+    downstream explanations can surface both halves of the pattern.
     """
     reads = quality_data["reads"]
     writes = quality_data["writes"]
-    write_paths = {}
-    for widx, wpath, wts in writes:
-        if wpath not in write_paths:
-            write_paths[wpath] = []
-        write_paths[wpath].append(widx)
+
+    writes_by_path = {}
+    for widx, wpath, _wts in writes:
+        writes_by_path.setdefault(wpath, []).append(widx)
+    for wlist in writes_by_path.values():
+        wlist.sort()
+
+    reads_by_path = {}
+    for ridx, rpath, _rts in reads:
+        reads_by_path.setdefault(rpath, []).append(ridx)
+    for rlist in reads_by_path.values():
+        rlist.sort()
 
     stale = []
     estimated_waste_tokens = 0
-    for ridx, rpath, rts in reads:
-        if rpath in write_paths:
-            later_writes = [w for w in write_paths[rpath] if w > ridx]
-            if later_writes:
-                stale.append((rpath, ridx, later_writes[0]))
-                # Rough estimate: average file read is ~2K tokens
-                estimated_waste_tokens += 2000
+    AVG_READ_TOKENS = 2000
 
-    return {"stale_reads": stale, "count": len(stale), "estimated_waste_tokens": estimated_waste_tokens}
+    for ridx, rpath, _rts in reads:
+        path_writes = writes_by_path.get(rpath, [])
+        if not path_writes:
+            continue
+
+        # 1. Re-read after write — we already modified the file, reading
+        # again is wasted tokens (context already has the post-write view
+        # implicitly via the write itself).
+        prior_writes = [w for w in path_writes if w < ridx]
+        if prior_writes:
+            stale.append((rpath, ridx, prior_writes[-1]))
+            estimated_waste_tokens += AVG_READ_TOKENS
+            continue
+
+        # 2. Far-distance stale — read happened, then the file sat for a
+        # long time before being edited. The original read content is
+        # still sitting in context even though it has drifted. Only flag
+        # when the distance is large; normal Read-then-Edit is NOT stale.
+        later_writes = [w for w in path_writes if w > ridx]
+        if not later_writes:
+            continue
+        first_later_write = later_writes[0]
+        if first_later_write - ridx > _STALE_READ_DISTANCE_THRESHOLD:
+            # Don't double-count: if there is a later re-read of the same
+            # path, the re-read will be flagged on its own iteration.
+            later_reads = [r for r in reads_by_path.get(rpath, []) if r > ridx]
+            if not later_reads:
+                stale.append((rpath, ridx, first_later_write))
+                # Half the waste estimate — the read was still used for
+                # the eventual edit, it just aged in context.
+                estimated_waste_tokens += AVG_READ_TOKENS // 2
+
+    return {
+        "stale_reads": stale,
+        "count": len(stale),
+        "estimated_waste_tokens": estimated_waste_tokens,
+    }
 
 
 def detect_bloated_results(quality_data):
@@ -7949,12 +8008,17 @@ def compute_quality_score(quality_data):
     # Scale to 0-100 score (76 at worst = 0, 98 at best = 100)
     fill_score = max(0, min(100, (fill_quality - 76) / (98 - 76) * 100))
 
-    # 1. Stale reads: score = 100 - (stale_ratio * 200), clamped
+    # 1. Stale reads: soft linear curve. 0% stale -> 100, 100% stale -> 0.
+    # Previous formula (100 - ratio * 200) hit the 0 floor at 50% stale
+    # ratio, which over-penalised sessions with any ratio above half. The
+    # stale_reads signal is also now more conservative (only counts real
+    # wasted reads, not normal Read-then-Edit workflows), so a lighter
+    # scoring curve is both fair and consistent with the tighter detection.
     total_reads = len(quality_data["reads"])
     stale_data = detect_stale_reads(quality_data)
     if total_reads > 0:
         stale_ratio = stale_data["count"] / total_reads
-        stale_score = max(0, min(100, 100 - stale_ratio * 200))
+        stale_score = max(0, min(100, 100 - stale_ratio * 100))
     else:
         stale_score = 100  # No reads = no stale reads
 
@@ -7971,16 +8035,22 @@ def compute_quality_score(quality_data):
     dup_data = detect_duplicates(quality_data)
     dup_score = max(0, min(100, 100 - dup_data["duplicates"] * 10))
 
-    # 4. Compaction depth: more aggressive penalties
+    # 4. Compaction depth: users run /compact to FIX a degraded session,
+    # so the first compact should not tank the quality bar they just acted
+    # to improve. Penalties are now gradient, not cliff-shaped.
+    #   0 compactions -> fresh session, 100
+    #   1 compaction  -> user resolved a fill issue, mild penalty
+    #   2 compactions -> starting to feel the cumulative loss
+    #   3+ compactions-> deep rot, documented behavioural degradation
     compactions = quality_data["compactions"]
     if compactions == 0:
         compaction_score = 100
     elif compactions == 1:
-        compaction_score = 60   # -40 (60-70% context lost)
+        compaction_score = 90
     elif compactions == 2:
-        compaction_score = 25   # -75 (~88% cumulative loss)
+        compaction_score = 65
     else:
-        compaction_score = 0    # 3+: documented behavioral degradation
+        compaction_score = 35
 
     # 5. Decision density: ratio of substantive messages to total
     substantive = sum(1 for _, _, _, s in quality_data["messages"] if s)
