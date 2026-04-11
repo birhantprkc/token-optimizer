@@ -291,6 +291,61 @@ _LINT_CODE_PATTERNS = [
 ]
 
 
+def _tree_line_depth(line):
+    """Return the logical depth of a `tree` output line.
+
+    Walks the 4-character prefix chunks `tree` emits: vertical pipes ("│   "),
+    blanks ("    "), and branch markers ("├── "/"└── "). Each pipe or blank
+    chunk is one level; a branch marker contributes the final +1 for the leaf.
+    Root-level names with no prefix return 0.
+    """
+    i = 0
+    depth = 0
+    while i + 4 <= len(line):
+        chunk = line[i:i + 4]
+        if chunk == "\u2502   " or chunk == "    ":  # "│   " or four spaces
+            depth += 1
+            i += 4
+        elif chunk == "\u251c\u2500\u2500 " or chunk == "\u2514\u2500\u2500 ":  # ├── / └──
+            return depth + 1
+        else:
+            return depth
+    return depth
+
+
+def _compress_tree(output):
+    """Compress the `tree` command: keep entries up to depth 2 plus the summary.
+
+    Depth is inferred from `tree`'s box-drawing prefix. Root (depth 0), direct
+    children (depth 1), and grandchildren (depth 2) are kept; anything deeper
+    is dropped and replaced with a single "(N entries at depth > 2 truncated)"
+    marker. The trailing "N directories, M files" summary line survives
+    because summary lines have depth 0. Credentials appearing in deep file
+    names are preserved by the pre-compression token scan.
+    """
+    lines = output.splitlines()
+    if len(lines) < 20:
+        return output  # not enough to bother
+
+    result = []
+    truncated = 0
+    for line in lines:
+        if not line.strip():
+            result.append(line)
+            continue
+        depth = _tree_line_depth(line)
+        if depth <= 2:
+            result.append(line)
+        else:
+            truncated += 1
+
+    if truncated == 0:
+        return output
+
+    result.append(f"... ({truncated} entries at depth > 2 truncated)")
+    return "\n".join(result)
+
+
 def _compress_logs(output):
     """Compress log-like output (tail/cat/journalctl).
 
@@ -454,6 +509,9 @@ def _detect_pattern(command_str):
         return "logs"
     elif cmd == "cat" and subcmd and subcmd.endswith(".log"):
         return "logs"
+    # v5.1 tree handler
+    elif cmd == "tree":
+        return "tree"
 
     return None
 
@@ -468,6 +526,7 @@ _PATTERN_HANDLERS = {
     "ls": _compress_ls,
     "lint": _compress_lint,
     "logs": _compress_logs,
+    "tree": _compress_tree,
 }
 
 

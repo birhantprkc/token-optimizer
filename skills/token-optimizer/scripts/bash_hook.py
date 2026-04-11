@@ -39,6 +39,8 @@ _WHITELIST_SINGLE = frozenset({
     "eslint", "flake8", "pylint", "shellcheck", "rubocop",
     # v5.1 logs handler (read-only log inspection)
     "tail", "journalctl",
+    # v5.1 tree handler (read-only directory tree)
+    "tree",
 })
 _WHITELIST_COMPOUND = {
     ("git", "status"), ("git", "log"), ("git", "diff"), ("git", "show"), ("git", "branch"),
