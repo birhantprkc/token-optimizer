@@ -504,10 +504,14 @@ export function handleReadBefore(event: ToolEventData): { block: boolean; messag
 
   saveCache(agentId, sessionId, cache);
 
-  // v5 Structure Map Beta telemetry: when the beta flag is on AND we
-  // actually emitted a digest for a redundant read, log the savings.
+  // v5 Structure Map Beta telemetry: only log when we actually built a
+  // fresh digest from file content during this call. On repeat redundant
+  // reads the digest is already cached and contentForTelemetry stays null,
+  // which would make original_tokens = 0 and tokens_saved flip negative on
+  // the v5 dashboard. Skipping these calls keeps the savings card honest.
   if (
     isV5Enabled("structure_map_beta") &&
+    contentForTelemetry !== null &&
     entry.digest &&
     entry.digest !== "(unable to generate digest)"
   ) {
@@ -515,7 +519,7 @@ export function handleReadBefore(event: ToolEventData): { block: boolean; messag
       feature: "structure_map",
       sessionId,
       commandPattern: `Read:${path.basename(filePath)}`,
-      originalText: contentForTelemetry ?? "",
+      originalText: contentForTelemetry,
       compressedText: entry.digest,
       qualityPreserved: true,
       verified: false,

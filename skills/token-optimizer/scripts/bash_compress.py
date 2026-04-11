@@ -48,6 +48,7 @@ _TOKEN_PATTERNS = [
     re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"),  # JWT
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),    # PEM private key header
     re.compile(r"(?:postgres|postgresql|mysql|mongodb|mongodb\+srv|redis)://[^:\s/]+:[^@\s]+@", re.I),  # DB URI with password
+    re.compile(r"https?://[^:\s/@]+:[^@\s]+@", re.I),      # HTTP(S) basic auth in URL (registry/proxy creds)
 ]
 
 # ANSI escape code patterns.
