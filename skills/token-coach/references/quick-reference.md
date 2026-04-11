@@ -87,27 +87,6 @@ Tool Search (default since Jan 2026) reduced total MCP overhead by 85-96%.
 | Skill assigned to subagent | FULL SKILL.md at startup (not progressive) |
 | Agent Teams vs single agent | ~7x token usage (Anthropic docs) |
 
-## Community Benchmarks
-
-| Metric | Value | Source |
-|--------|-------|--------|
-| Autocompact buffer | 33K-45K tokens | GitHub issues, claudefa.st |
-| Tool Search reduction | 85-96% | Anthropic engineering blog |
-| johnlindquist compression | 7,584 to 3,434 tokens (54%) | Community report |
-| Boris Cherny workflow | 259 PRs in 30 days | Progressive CLAUDE.md, plan mode first |
-| SFEIR three-optimization result | 40% total reduction | Plan mode + PreCompact hooks + multi-sessions |
-| ccusage GitHub stars | 11K+ | Community standard for token tracking |
-
-## Competitive Context
-
-| Tool | What It Does | Our Edge |
-|------|-------------|----------|
-| ccusage (11K stars) | Historical token tracking from JSONL logs | We measure config overhead, they measure usage |
-| /context (built-in) | Shows current context fill level | Hides deferred MCP overhead. We show the real picture. |
-| GrepAI | Semantic search replacing brute-force grep | Different problem (search efficiency vs config optimization) |
-| cozempic | Removes "garbage" Anthropic injects | Risky (modifies system prompt). We optimize your config. |
-| token-optimizer-mcp | Caching and compression | Complementary. They cache, we audit and fix. |
-
 ## Community Pain Points (Feb-March 2026)
 
 1. No per-request token visibility (GitHub #29600, #30814)
