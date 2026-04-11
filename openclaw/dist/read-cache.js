@@ -57,6 +57,9 @@ exports.clearCache = clearCache;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const os = __importStar(require("os"));
+const v5_features_1 = require("./v5-features");
+const telemetry_1 = require("./telemetry");
+const delta_diff_1 = require("./delta-diff");
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -64,6 +67,12 @@ const HOME = os.homedir();
 const CACHE_DIR = path.join(HOME, ".openclaw", "token-optimizer", "read-cache");
 const MAX_CACHE_ENTRIES = 500;
 const MAX_CONTEXTIGNORE_PATTERNS = 200;
+// v5 Delta Mode: memory-only content cache keyed by filePath. Capped per
+// entry at 50KB so an unbounded file read can never park 10MB of content in
+// process memory. Lost on gateway restart by design — the cost of a cold
+// cache after restart is one extra full re-read, which is acceptable.
+const DELTA_CACHE_MAX_BYTES = 50 * 1024;
+const _deltaContentCache = new Map();
 const BINARY_EXTENSIONS = new Set([
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg",
     ".pdf", ".wasm", ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
@@ -311,6 +320,21 @@ function handleReadBefore(event) {
         cache.files[filePath] = { mtime, offset, limit, tokensEst, readCount: 1, lastAccess: Date.now() / 1000, digest: "" };
         saveCache(agentId, sessionId, cache);
         logDecision("allow", filePath, "first_read", sessionId);
+        // v5 Delta Mode: seed the memory-only content cache so a follow-up
+        // read can be served as a diff. Only activates when the feature is
+        // on AND the file fits the 50KB budget.
+        if ((0, v5_features_1.isV5Enabled)("delta_read")) {
+            try {
+                const stat = fs.statSync(filePath);
+                if (stat.size <= DELTA_CACHE_MAX_BYTES) {
+                    const content = fs.readFileSync(filePath, "utf-8");
+                    _deltaContentCache.set(filePath, { mtime, content });
+                }
+            }
+            catch {
+                // File unreadable — skip silently; next read will try again.
+            }
+        }
         return null;
     }
     // Check staleness: mtime + range
@@ -327,6 +351,54 @@ function handleReadBefore(event) {
     const mtimeMatch = Math.abs(currentMtime - entry.mtime) < 0.001;
     const rangeMatch = entry.offset === offset && entry.limit === limit;
     if (!(mtimeMatch && rangeMatch)) {
+        // v5 Delta Mode: if we have cached content from the previous read, we
+        // can serve the diff instead of the full file. Only fires when the
+        // feature is on, the range is unchanged (delta is line-oriented so
+        // offset/limit shifts would produce misleading diffs), the mtime
+        // changed, and we have content in the memory cache.
+        const deltaEligible = (0, v5_features_1.isV5Enabled)("delta_read") &&
+            rangeMatch &&
+            !mtimeMatch &&
+            _deltaContentCache.has(filePath);
+        if (deltaEligible) {
+            try {
+                const cached = _deltaContentCache.get(filePath);
+                const stat = fs.statSync(filePath);
+                if (stat.size <= DELTA_CACHE_MAX_BYTES) {
+                    const newContent = fs.readFileSync(filePath, "utf-8");
+                    const delta = (0, delta_diff_1.computeDelta)(cached.content, newContent);
+                    // Refresh cache for next delta (only when it still fits the budget)
+                    _deltaContentCache.set(filePath, { mtime: currentMtime, content: newContent });
+                    // Update the on-disk entry so future calls see the new mtime.
+                    entry.mtime = currentMtime;
+                    entry.readCount++;
+                    entry.lastAccess = Date.now() / 1000;
+                    entry.digest = "";
+                    saveCache(agentId, sessionId, cache);
+                    (0, telemetry_1.logCompressionEvent)({
+                        feature: "delta_read",
+                        sessionId,
+                        commandPattern: `Read:${path.basename(filePath)}`,
+                        originalText: newContent,
+                        compressedText: delta.body,
+                        qualityPreserved: !delta.fallback,
+                        verified: false,
+                        detail: `delta ${delta.summary}${delta.fallback ? " fallback" : ""}`,
+                    });
+                    logDecision("block", filePath, `delta_read_${delta.summary}`, sessionId);
+                    return {
+                        block: true,
+                        message: `[Token Optimizer] Delta read: ${path.basename(filePath)} changed ${delta.summary}\n\n${delta.body}\n\n(Re-request with a different offset/limit to force a full re-read.)`,
+                    };
+                }
+                // File grew past the budget — drop the memory cache entry and fall through.
+                _deltaContentCache.delete(filePath);
+            }
+            catch {
+                _deltaContentCache.delete(filePath);
+                // Fall through to the normal mtime-changed path.
+            }
+        }
         entry.mtime = currentMtime;
         entry.offset = offset;
         entry.limit = limit;
@@ -334,22 +406,56 @@ function handleReadBefore(event) {
         entry.lastAccess = Date.now() / 1000;
         entry.digest = "";
         saveCache(agentId, sessionId, cache);
+        // Update the delta cache with the fresh content when delta_read is on.
+        if ((0, v5_features_1.isV5Enabled)("delta_read")) {
+            try {
+                const stat = fs.statSync(filePath);
+                if (stat.size <= DELTA_CACHE_MAX_BYTES) {
+                    const content = fs.readFileSync(filePath, "utf-8");
+                    _deltaContentCache.set(filePath, { mtime: currentMtime, content });
+                }
+                else {
+                    _deltaContentCache.delete(filePath);
+                }
+            }
+            catch {
+                _deltaContentCache.delete(filePath);
+            }
+        }
         logDecision("allow", filePath, "file_modified_or_different_range", sessionId);
         return null;
     }
     // Redundant read
     entry.readCount++;
     entry.lastAccess = Date.now() / 1000;
+    let contentForTelemetry = null;
     if (!entry.digest) {
         try {
             const content = fs.readFileSync(filePath, "utf-8");
             entry.digest = generateDigest(filePath, content);
+            contentForTelemetry = content;
         }
         catch {
             entry.digest = "(unable to generate digest)";
         }
     }
     saveCache(agentId, sessionId, cache);
+    // v5 Structure Map Beta telemetry: when the beta flag is on AND we
+    // actually emitted a digest for a redundant read, log the savings.
+    if ((0, v5_features_1.isV5Enabled)("structure_map_beta") &&
+        entry.digest &&
+        entry.digest !== "(unable to generate digest)") {
+        (0, telemetry_1.logCompressionEvent)({
+            feature: "structure_map",
+            sessionId,
+            commandPattern: `Read:${path.basename(filePath)}`,
+            originalText: contentForTelemetry ?? "",
+            compressedText: entry.digest,
+            qualityPreserved: true,
+            verified: false,
+            detail: `redundant_read ${entry.readCount}`,
+        });
+    }
     if (mode === "block") {
         logDecision("block", filePath, `redundant_read_${entry.readCount}`, sessionId);
         return {
@@ -375,6 +481,8 @@ function handleWriteAfter(event) {
         delete cache.files[filePath];
         saveCache(event.agentId, event.sessionId, cache);
     }
+    // Keep the v5 delta cache consistent with on-disk truth.
+    _deltaContentCache.delete(filePath);
 }
 /**
  * Clear all caches (called on compact).
