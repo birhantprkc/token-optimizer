@@ -291,6 +291,48 @@ _LINT_CODE_PATTERNS = [
 ]
 
 
+def _compress_list(output):
+    """Compress long listing commands (pip list / npm ls / docker ps / brew list).
+
+    Shows the first ~10 entries verbatim, then a "... N more" placeholder,
+    and preserves any trailing summary line. Header lines (first non-empty
+    line plus common "Name Version" style headers) survive to keep the
+    output interpretable. Short lists (<20 entries) pass through raw.
+    """
+    lines = output.splitlines()
+    non_empty = [ln for ln in lines if ln.strip()]
+    if len(non_empty) < 20:
+        return output
+
+    header_lines = []
+    data_lines = []
+    seen_data = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Detect header separators (all dashes, "Package Version", etc.)
+        if not seen_data and (
+            set(stripped) <= set("-= ")
+            or any(stripped.lower().startswith(prefix) for prefix in (
+                "package", "name ", "container", "image", "repository",
+            ))
+        ):
+            header_lines.append(line)
+            continue
+        seen_data = True
+        data_lines.append(line)
+
+    if len(data_lines) < 20:
+        return output
+
+    keep_count = 10
+    result = list(header_lines)
+    result.extend(data_lines[:keep_count])
+    result.append(f"... ({len(data_lines) - keep_count} more entries, {len(data_lines)} total)")
+    return "\n".join(result)
+
+
 def _compress_progress(output):
     """Compress build progress output (docker build, cargo build verbose, etc.).
 
@@ -574,6 +616,17 @@ def _detect_pattern(command_str):
     # v5.1 progress handler (docker build, docker pull)
     elif cmd == "docker" and subcmd in ("build", "pull"):
         return "progress"
+    # v5.1 list handler
+    elif cmd in ("pip", "pip3") and subcmd == "list":
+        return "list"
+    elif cmd == "npm" and subcmd == "ls":
+        return "list"
+    elif cmd == "pnpm" and subcmd == "list":
+        return "list"
+    elif cmd == "docker" and subcmd == "ps":
+        return "list"
+    elif cmd == "brew" and subcmd == "list":
+        return "list"
 
     return None
 
@@ -590,6 +643,7 @@ _PATTERN_HANDLERS = {
     "logs": _compress_logs,
     "tree": _compress_tree,
     "progress": _compress_progress,
+    "list": _compress_list,
 }
 
 

@@ -57,6 +57,12 @@ _WHITELIST_COMPOUND = {
     # v5.1 progress handler (docker build/pull — read-only layer fetch)
     ("docker", "build"),
     ("docker", "pull"),
+    # v5.1 list handlers (read-only inventory queries)
+    ("pip", "list"), ("pip3", "list"),
+    ("npm", "ls"),
+    ("pnpm", "list"),
+    ("docker", "ps"),
+    ("brew", "list"),
 }
 
 # Git write commands that should NOT be compressed
