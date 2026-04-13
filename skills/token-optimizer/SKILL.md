@@ -107,40 +107,49 @@ python3 $MEASURE_PY check-hook
 
    If skipped, note it and continue. The audit still works without it, but the Trends tab will only have data from manual `measure.py collect` runs.
 
-6. **Check persistent dashboard daemon** (macOS only, first-time setup, skips silently if already running):
+6. **Offer the bookmarkable dashboard URL** (macOS and Windows. Linux lands in a future release; skip silently there.):
+
+   Run BOTH probes in one pass, then branch on the combination:
 ```bash
-python3 "$MEASURE_PY" daemon-status 2>/dev/null || echo "DAEMON_NOT_RUNNING"
+python3 "$MEASURE_PY" daemon-status
+python3 "$MEASURE_PY" daemon-consent --get
 ```
-   - If DAEMON_RUNNING: skip entirely, it's already working.
-   - If macOS and DAEMON_NOT_RUNNING: explain and offer to install:
+
+   `daemon-status` prints one of `DAEMON_RUNNING` (our daemon, identity verified), `DAEMON_FOREIGN` (port 24842 bound by something else), or `DAEMON_NOT_RUNNING`. `daemon-consent --get` prints a JSON object — either `{}` (never prompted) or `{"prompted": true, "consent": true|false, ...}`.
+
+   Decide using this 2×2 truth table:
+
+   | Daemon \ Consent | unrecorded (`{}`) | `consent: true` | `consent: false` |
+   |---|---|---|---|
+   | `DAEMON_RUNNING` | skip; lead with URL next time output mentions the dashboard | skip; URL works | the user declined but the daemon is still running — offer `setup-daemon --uninstall` once |
+   | `DAEMON_FOREIGN` | prompt, but warn port 24842 is already bound by a foreign service (`netstat -ano \| findstr :24842` on Windows, `lsof -i :24842` on Mac) | note conflict, suggest uninstalling our daemon's prior instance or freeing the port | skip silently |
+   | `DAEMON_NOT_RUNNING` | first-time install prompt (below) | offer to reinstall (`measure.py setup-daemon`) — launchd / Task Scheduler lost it | skip silently |
+
+   First-time install prompt copy:
 
    ```
    [Token Optimizer] Want a bookmarkable dashboard URL?
 
-   Your dashboard is an HTML file that updates after every session.
-   You can always open the file directly:
-     ~/.claude/_backups/token-optimizer/dashboard.html
+   URL:  http://localhost:24842/token-optimizer
+   File: ~/.claude/_backups/token-optimizer/dashboard.html  (always works)
 
-   But if you'd like a URL you can bookmark and click anytime:
-     http://localhost:24842/token-optimizer
+   The URL stays bookmarked and auto-updates after every session.
+   The file is the fallback — same content, just harder to reach.
 
-   What this does:
-   - Runs a tiny web server on your Mac (uses ~2MB of memory)
-   - Starts automatically when you log in, restarts if it ever stops
-   - Only accessible from your machine (localhost), not the network
-   - Serves just the one dashboard file, nothing else
-
-   The dashboard content still updates via the session hook above.
-   This just makes it easier to open.
+   What installing the URL does:
+   - Runs a tiny web server on your machine (~2MB memory)
+   - Starts automatically at login, restarts if it ever stops
+   - Only reachable from this machine (localhost), not the network
+   - Serves just this one dashboard file, nothing else
 
    Remove anytime: python3 measure.py setup-daemon --uninstall
    ```
 
    Ask user:
-   1. Install it (run `measure.py setup-daemon`)
-   2. Skip, I'll open the file directly
+   1. Install it (default — write consent FIRST so we never end up with a running daemon the user said no to, then install: run `measure.py daemon-consent --set yes`, then `measure.py setup-daemon`)
+   2. Skip (run `measure.py daemon-consent --set no`)
 
-   If not macOS, skip silently. The file:// URL and `--serve` flag still work on all platforms.
+   On Linux or BSD: skip silently. Mention once that the `file://` URL still works and the systemd `--user` daemon ships in a future release.
 
 7. **Check Smart Compaction hooks** (v2.0, first-time setup, skips silently if already installed; plugin users get these automatically):
 ```bash

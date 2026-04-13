@@ -7389,7 +7389,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         clean = self.path.lstrip("/").split("?")[0]
         return clean in ("", "token-optimizer", f)
 
+    def _is_identity_request(self):
+        # v5.3.3: clients (daemon-status) verify they're talking to OUR
+        # daemon, not whatever happens to be bound to 24842. Returns a
+        # magic string so a foreign listener can't masquerade.
+        return self.path.lstrip("/").split("?")[0] == "__to_ping"
+
+    def _respond_identity(self):
+        body = b"token-optimizer-dashboard-v1"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _serve_or_redirect(self, method):
+        if self._is_identity_request():
+            self._respond_identity()
+            return
         if self._is_dashboard_request():
             # Rewrite to the actual filename for SimpleHTTPRequestHandler
             self.path = "/" + os.path.basename(DASHBOARD)
@@ -7928,6 +7945,46 @@ def _daemon_install_lock():
     return _locked()
 
 
+def _reclaim_posix_daemon_port(port=DAEMON_PORT, script_name="dashboard-server.py"):
+    """SIGTERM any orphaned dashboard-server.py holding `port`.
+
+    Upgrading from a prior version (v5.2 -> v5.3) can leave the old
+    daemon alive after launchctl bootout, because bootout drops the
+    launchd job without sending SIGTERM to the child. A subsequent
+    bootstrap fails to bind. This helper identifies orphaned processes
+    that are running our OWN daemon script and terminates them cleanly.
+    Never kills a foreign process on the same port.
+    """
+    try:
+        lsof = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.SubprocessError, OSError, FileNotFoundError):
+        return
+    if lsof.returncode != 0 or not lsof.stdout.strip():
+        return
+    for pid_str in lsof.stdout.strip().splitlines():
+        try:
+            pid = int(pid_str.strip())
+        except ValueError:
+            continue
+        try:
+            ps_out = subprocess.run(
+                ["ps", "-o", "command=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (subprocess.SubprocessError, OSError, FileNotFoundError):
+            continue
+        if script_name in ps_out.stdout:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                continue
+            # Give the old process a moment to release the port.
+            time.sleep(0.5)
+
+
 def _install_launchd_daemon(dry_run=False):
     """macOS: install the dashboard daemon via a LaunchAgent.
 
@@ -7971,6 +8028,10 @@ def _install_launchd_daemon(dry_run=False):
         # exit when nothing is loaded is expected and ignored).
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)],
                        capture_output=True)
+        # bootout drops the launchd job but doesn't SIGTERM the Python
+        # child -- the port stays held until the orphan dies on its own.
+        # Reclaim it so bootstrap doesn't hit EADDRINUSE.
+        _reclaim_posix_daemon_port()
 
         # Start daemon
         result = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(PLIST_PATH)],
@@ -14348,6 +14409,84 @@ if __name__ == "__main__":
         if bad > 0:
             sys.exit(1)
         sys.exit(0)
+    elif args[0] == "daemon-consent":
+        # v5.3.3: persistent consent for the bookmarkable dashboard URL.
+        # SKILL.md checks --get before prompting; Claude writes --set
+        # yes|no after the user answers. Non-interactive runs
+        # (SessionStart, CI) never touch this file, so consent stays
+        # explicit and user-owned.
+        consent_path = SNAPSHOT_DIR / "daemon-consent.json"
+        if "--get" in args:
+            if not consent_path.exists():
+                print("{}")
+                sys.exit(0)
+            try:
+                raw = consent_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                # Read error: return "{}" so the skill treats it as
+                # unrecorded and re-prompts rather than branching on
+                # garbage. Exit 0 -- the CLI still succeeded, file
+                # recovery is the user's follow-up action.
+                print("{}")
+                sys.exit(0)
+            # Validate JSON shape. Torture MED-2: a half-written file
+            # from a crash between truncate and flush could print
+            # partial JSON here and mislead the skill's branch logic.
+            if not raw:
+                print("{}")
+                sys.exit(0)
+            try:
+                parsed = json.loads(raw)
+                if not isinstance(parsed, dict):
+                    print("{}")
+                else:
+                    print(json.dumps(parsed))
+            except (ValueError, TypeError):
+                print("{}")
+            sys.exit(0)
+        if "--set" in args:
+            try:
+                value = args[args.index("--set") + 1].strip().lower()
+            except (IndexError, AttributeError):
+                print("[Error] --set requires yes|no|unset")
+                sys.exit(1)
+            if value in ("yes", "y", "true", "1"):
+                consent = True
+            elif value in ("no", "n", "false", "0"):
+                consent = False
+            elif value == "unset":
+                if consent_path.exists():
+                    try:
+                        consent_path.unlink()
+                    except OSError:
+                        pass
+                print("consent cleared")
+                sys.exit(0)
+            else:
+                print(f"[Error] --set requires yes|no|unset, got {value!r}")
+                sys.exit(1)
+            record = {
+                "prompted": True,
+                "consent": consent,
+                "ts": datetime.now().isoformat(),
+                "platform": platform.system(),
+            }
+            # Atomic write: tempfile + os.replace so a mid-write crash
+            # cannot leave the consent file in a half-written state that
+            # would confuse future --get readers (torture MED-2).
+            try:
+                SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+                tmp_path = consent_path.with_suffix(".json.tmp")
+                tmp_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+                os.replace(str(tmp_path), str(consent_path))
+            except OSError as e:
+                print(f"[Error] Could not write consent file: {e}")
+                sys.exit(1)
+            print(json.dumps(record))
+            sys.exit(0)
+        # No flag: print usage
+        print("Usage: measure.py daemon-consent --get | --set yes|no|unset")
+        sys.exit(1)
     elif args[0] == "session-end-flush":
         # Single sequential entry point for the SessionEnd hook. Runs
         # collect -> dashboard -> compact-capture in one process so the
@@ -14368,37 +14507,41 @@ if __name__ == "__main__":
             pass
         sys.exit(0)
     elif args[0] == "daemon-status":
-        # Cross-platform probe of 127.0.0.1:24842. Tries IPv4 then IPv6
-        # (Windows Python 3.11+ may resolve "localhost" to ::1 first; the
-        # daemon binds explicitly to 127.0.0.1 so the IPv4 probe should
-        # succeed, but the IPv6 fallback avoids a false-negative if a
-        # future build binds to ::1). Replaces the bash-only `nc -z`
-        # pattern in SKILL.md. Exits 0 with "DAEMON_RUNNING" or 1 with
-        # "DAEMON_NOT_RUNNING".
-        import socket as _socket
+        # Cross-platform identity probe of 127.0.0.1:24842. A bare TCP
+        # connect would mark any foreign service on 24842 as "ours" and
+        # lead the SKILL.md to advertise a URL that returns someone
+        # else's content. Instead we GET /__to_ping and require the
+        # magic string reply. Foreign listener -> DAEMON_FOREIGN,
+        # surfaced separately so the skill can guide remediation.
+        import urllib.error
+        import urllib.request
 
-        def _probe(family, address):
-            probe_sock = _socket.socket(family, _socket.SOCK_STREAM)
-            probe_sock.settimeout(0.5)
+        magic = b"token-optimizer-dashboard-v1"
+        status = "DAEMON_NOT_RUNNING"
+        for host in ("127.0.0.1", "[::1]"):
+            url = f"http://{host}:{DAEMON_PORT}/__to_ping"
             try:
-                return probe_sock.connect_ex(address)
-            except OSError:
-                return 1
-            finally:
-                try:
-                    probe_sock.close()
-                except OSError:
-                    pass
-
-        rc = _probe(_socket.AF_INET, ("127.0.0.1", 24842))
-        if rc != 0:
-            rc = _probe(_socket.AF_INET6, ("::1", 24842, 0, 0))
-        if rc == 0:
-            print("DAEMON_RUNNING")
-            sys.exit(0)
-        else:
-            print("DAEMON_NOT_RUNNING")
-            sys.exit(1)
+                with urllib.request.urlopen(url, timeout=1) as resp:
+                    body = resp.read(len(magic) + 8).strip()
+                    if body == magic:
+                        status = "DAEMON_RUNNING"
+                        break
+                    status = "DAEMON_FOREIGN"
+            except urllib.error.URLError as e:
+                # Connection refused = not listening; anything else
+                # (HTTP error, timeout) = a foreign service replied.
+                reason = getattr(e, "reason", None)
+                if isinstance(reason, ConnectionRefusedError):
+                    continue
+                if isinstance(reason, OSError):
+                    errno_attr = getattr(reason, "errno", None)
+                    if errno_attr in (61, 111):  # ECONNREFUSED on macOS/Linux
+                        continue
+                status = "DAEMON_FOREIGN"
+            except (OSError, ValueError):
+                continue
+        print(status)
+        sys.exit(0 if status == "DAEMON_RUNNING" else 1)
     elif args[0] == "kill-stale":
         dry = "--dry-run" in args
         hours = 12

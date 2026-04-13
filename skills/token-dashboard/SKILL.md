@@ -26,8 +26,7 @@ python3 "$MEASURE_PY" collect --quiet && python3 "$MEASURE_PY" dashboard
 
 This collects the latest session data into the trends database, regenerates the dashboard HTML, and opens it in your default browser.
 
-3. **Tell the user** the dashboard is open and mention direct access:
-   - File: `~/.claude/_backups/token-optimizer/dashboard.html`
-   - Check if the persistent daemon is running: `python3 "$MEASURE_PY" daemon-status 2>/dev/null`
-   - If running, also mention: "Bookmarkable URL: http://localhost:24842/token-optimizer"
-   - If NOT running, do NOT mention the URL (it would give a connection error). Instead suggest: "Want a bookmarkable URL? Run: `python3 $MEASURE_PY setup-daemon`"
+3. **Tell the user** the dashboard is open. URL-first ordering (v5.3.3+):
+   - Probe daemon: `python3 "$MEASURE_PY" daemon-status 2>/dev/null`
+   - If DAEMON_RUNNING: lead with `URL: http://localhost:24842/token-optimizer` (bookmarkable, auto-updates), then mention the file fallback `File: ~/.claude/_backups/token-optimizer/dashboard.html`.
+   - If DAEMON_NOT_RUNNING: lead with the file `File: ~/.claude/_backups/token-optimizer/dashboard.html`, then suggest: "Want a bookmarkable URL? Run `python3 $MEASURE_PY setup-daemon` (macOS and Windows)."
