@@ -13743,6 +13743,100 @@ if __name__ == "__main__":
         session_health()
     elif args[0] == "health-selfcheck":
         health_selfcheck()
+    elif args[0] == "dashboard-diagnose":
+        # Bug 2 diagnostic: validate the schema of the JSON that would
+        # be injected into dashboard.html. Prints PRESENT / MISSING /
+        # UNEXPECTED-TYPE for every top-level key the template expects.
+        # Lets users (and us) rule out "data shape changed" as the cause
+        # of a silent empty-tab render before touching the dashboard.
+        expected = {
+            "snapshot": dict,
+            "plan": (str, type(None)),
+            "trends": (dict, type(None)),
+            "health": (dict, type(None)),
+            "coach": (dict, type(None)),
+            "quality": (dict, type(None)),
+            "manage": (dict, type(None)),
+            "hooks": (dict, type(None)),
+            "standalone": bool,
+            "auto_plan": bool,
+            "generated_at": str,
+            "pricing_tier": str,
+            "pricing_tier_label": str,
+            "pricing_tiers": dict,
+            "ttl_period_summary": list,
+            "session_turns": dict,
+            "memory_review": (dict, type(None)),
+            "claude_md_health": (dict, type(None)),
+            "v5_recommendation": (dict, type(None)),
+        }
+        try:
+            components = measure_components()
+            totals = calculate_totals(components)
+            baselines = get_session_baselines(5)
+            calibration = detect_calibration_gap(components, totals, baselines)
+            snapshot = {
+                "components": components,
+                "totals": totals,
+                "session_baselines": baselines,
+                "calibration": calibration,
+                "context_window": detect_context_window()[0],
+            }
+            try:
+                trends = _collect_trends_data(days=30)
+            except Exception:
+                trends = None
+            data = {
+                "snapshot": snapshot,
+                "plan": None,
+                "trends": trends,
+                "health": _collect_health_data(),
+                "coach": None,
+                "quality": {},
+                "manage": None,
+                "hooks": None,
+                "standalone": True,
+                "auto_plan": False,
+                "generated_at": datetime.now().isoformat(),
+                "pricing_tier": "anthropic",
+                "pricing_tier_label": "Anthropic API",
+                "pricing_tiers": {},
+                "ttl_period_summary": [],
+                "session_turns": {},
+                "memory_review": None,
+                "claude_md_health": None,
+                "v5_recommendation": None,
+            }
+        except Exception as e:
+            print(f"[ERROR] data construction failed: {e!r}")
+            sys.exit(1)
+
+        print("\nDASHBOARD DATA SCHEMA CHECK")
+        print("=" * 60)
+        ok = 0
+        bad = 0
+        for key, expected_type in expected.items():
+            if key not in data:
+                print(f"  [MISSING]  {key}  (expected {expected_type})")
+                bad += 1
+            else:
+                value = data[key]
+                if not isinstance(value, expected_type):
+                    actual = type(value).__name__
+                    print(f"  [WRONG]    {key}  expected {expected_type}, got {actual}")
+                    bad += 1
+                else:
+                    tag = type(value).__name__ if value is not None else "None"
+                    print(f"  [OK]       {key}  ({tag})")
+                    ok += 1
+        extras = [k for k in data.keys() if k not in expected]
+        for k in extras:
+            print(f"  [EXTRA]    {k}  ({type(data[k]).__name__})  -- not in expected schema")
+        print()
+        print(f"  {ok} keys valid, {bad} issues, {len(extras)} extras")
+        if bad > 0:
+            sys.exit(1)
+        sys.exit(0)
     elif args[0] == "session-end-flush":
         # Single sequential entry point for the SessionEnd hook. Runs
         # collect -> dashboard -> compact-capture in one process so the
