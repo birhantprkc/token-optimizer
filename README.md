@@ -28,7 +28,7 @@
 They compress command output, which covers 15-25% of your context on a good day. The other 75-85% (bloated configs, unused skills, duplicate system prompts, stale memory, plus the 60-70% you lose on every compaction) goes untouched.
 </p>
 <p align="center">
-Token Optimizer covers all of it, keeps your work alive across compactions, and measures whether the optimization actually helped. Runs fully local. Zero context tokens used. Zero runtime dependencies.
+Token Optimizer covers all of it, keeps your work alive across compactions, measures whether the optimization actually helped, and gives you a <strong>live dashboard</strong> that shows every token, every dollar, and every turn, auto-updated after every session. Runs fully local. Zero context tokens used. Zero runtime dependencies.
 </p>
 <p align="center">
 Works on <strong>Claude Code</strong> and <strong>OpenClaw</strong> today. Windsurf, Cursor, and more on the way.
@@ -57,6 +57,42 @@ bash ~/.claude/token-optimizer/install.sh
 ```
 
 Works on Claude Code and [OpenClaw](#openclaw-plugin). Each platform has its own native plugin (Python for Claude Code, TypeScript for OpenClaw). No bridging, no shared runtime, zero cross-platform dependencies.
+
+---
+
+## Full Visibility: See Every Token, Every Dollar, Every Turn
+
+Most tools tell you your context is full. Token Optimizer shows you exactly where every token went, how much each turn cost, which skills and MCP servers actually fired, and which ones are just sitting there eating your budget.
+
+![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-overview.png)
+
+One single-file HTML dashboard. Auto-regenerates after every session via the SessionEnd hook. Bookmark `http://localhost:24842/token-optimizer` and it's always current. Zero tokens from your context, zero network calls, zero setup after install.
+
+### What the dashboard tracks
+
+- **Per-turn token breakdown** for every API call: input, output, cache-read, cache-write, with spike detection highlighting context jumps
+- **Cache analysis**: stacked bars showing input vs output vs cache-read vs cache-write split, with TTL mix (`1h` vs `5m`) and hit rate alongside
+- **Pacing metrics** between calls so you can see whether a thread was steady or stop-start
+- **Cost across 4 pricing tiers**: Anthropic API, Vertex Global, Vertex Regional, AWS Bedrock. Set your tier once and every session updates
+- **Color-coded quality scores** overlaid on every session: green healthy, yellow degrading, red trouble
+- **Subagent cost breakdown**: orchestrator vs worker spend, top offenders ranked by cost, flags when subagents consume over 30%
+- **Top 5 costliest prompts** per session, pairing each user message with the cost of the response
+- **Skill adoption trends**: which skills you actually invoke vs just having installed
+- **Model mix over time**: Opus, Sonnet, Haiku breakdown across every session
+- **CLAUDE.md and MEMORY.md health cards** on the Overview tab with line count, orphan count, and status at a glance
+- **Drift detection**: config snapshots compared across time so you catch creep before it costs you
+- **Savings tracker**: cumulative dollars saved from optimizations, checkpoint restores, and archives
+
+Nobody else gives you this. `/context` shows a capacity bar. Proxy compressors print a terminal report. Token Optimizer shows the receipts, auto-updated, at zero context cost.
+
+### Launch it
+
+```bash
+python3 measure.py setup-daemon           # Bookmarkable URL at http://localhost:24842/token-optimizer
+python3 measure.py dashboard --serve      # One-time serve over HTTP
+```
+
+Throughout this README, whenever a feature mentions it's also visible on the dashboard, that means it lives inside this same HTML page. One place, everything tracked.
 
 ---
 
@@ -157,8 +193,9 @@ With Opus 4.6 and Sonnet 4.6 now at 1M context, that feels like breathing room. 
 - **Rate limits hit faster.** Ghost tokens count toward your plan's usage caps on every message, cached or not. 50K overhead times 100 messages is 5M tokens burned on nothing.
 - **Compaction is catastrophic.** 60-70% of your conversation gone per compaction. After 2-3 compactions, you've lost 88-95%. And each compaction means re-sending all that overhead again.
 - **Higher effort means faster burn.** More thinking tokens per response means you hit compaction sooner, which means more total tokens across the session.
+- **You can't fix what you can't see.** Without per-turn visibility into cache hits, model mix, and subagent spend, every "it feels slow" guess costs money. The dashboard shows exactly which turn was the expensive one.
 
-Token Optimizer tracks all of this. Quality score, degradation bands, compaction loss, drift detection. Zero context tokens consumed.
+Token Optimizer tracks all of this. Quality score, degradation bands, compaction loss, drift detection, per-turn cost across four pricing tiers, and skill-and-MCP attribution for every session. Zero context tokens consumed.
 
 ![What happens inside a 1M session](skills/token-optimizer/assets/user-profiles.svg)
 
@@ -170,7 +207,7 @@ Token Optimizer tracks all of this. Quality score, degradation bands, compaction
 
 When auto-compact fires, 60-70% of your conversation vanishes. Decisions, error-fix sequences, agent state, all gone.
 
-Smart Compaction catches all of it as checkpoints before compaction fires, then restores what the summary dropped. Sessions pick up where you left off, even after a crash or /clear.
+Smart Compaction catches all of it as checkpoints before compaction fires, then restores what the summary dropped. Sessions pick up where you left off, even after a crash or /clear. Checkpoint history and compaction loss per session are also visible on the dashboard.
 
 This is the feature nobody else has, and it's the reason compression savings actually stick. RTK or a proxy can save tokens on `git status` all day, but if compaction destroys your working context, those savings are meaningless.
 
@@ -441,7 +478,7 @@ Managing multiple agent systems? Fleet Auditor scans across Claude Code, OpenCla
 
 ### Subagent Cost Breakdown
 
-See exactly how much your subagents cost: total spend, % of combined budget, and top offenders ranked by cost. Flags when subagents consume >30% of total.
+See exactly how much your subagents cost: total spend, % of combined budget, and top offenders ranked by cost. Flags when subagents consume >30% of total. Also visible per session on the dashboard, with orchestrator-vs-worker split.
 
 ### Costly Prompt Ranking
 
@@ -458,30 +495,11 @@ python3 measure.py inject-routing              # Inject (with approval)
 
 ---
 
-## Interactive Dashboard
+## Dashboard: Post-Audit Walkthrough
 
-After the audit, you get an interactive HTML dashboard.
+The Full Visibility dashboard up top auto-tracks every session. After you run `/token-optimizer` and the 6-agent audit finishes, the same dashboard opens on an audit-focused view where every component is clickable. Expand any item to see why it matters, the trade-offs, and what would change. Toggle the fixes you want, copy a ready-to-paste optimization prompt, and apply with approval.
 
-![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-overview.png)
-
-Every component is clickable. Expand any item to see why it matters, what the trade-offs are, and what changes. Toggle the fixes you want, and copy a ready-to-paste optimization prompt.
-
-### What the Dashboard Shows
-
-Click any session for a per-turn breakdown of input, output, and cache tokens, with spike detection highlighting context jumps. Each session shows estimated API cost across four pricing tiers (Anthropic API, Vertex Global, Vertex Regional, AWS Bedrock). Set your tier once and all costs update.
-
-Cache visualization uses stacked bars to show input vs output vs cache-read vs cache-write split, with TTL mix (`1h` vs `5m`) shown alongside hit metrics. Session rows include pacing metrics (time between calls) so you can see whether a thread was steady or stop-start. Hover help on columns explains `Cache`, `TTL`, `Pacing`, `Cache R`, and `Cache W` without jargon.
-
-Color-coded quality scores overlay every session: green for healthy, yellow for degrading, red for trouble. Session drill-downs key off stable session identity for consistent expansion.
-
-### Persistent Dashboard
-
-The dashboard auto-regenerates after every session (via the SessionEnd hook). Bookmark it and it's always up to date.
-
-```bash
-python3 measure.py setup-daemon     # Bookmarkable URL at http://localhost:24842/token-optimizer
-python3 measure.py dashboard --serve # One-time serve over HTTP
-```
+Hover help on every column explains `Cache`, `TTL`, `Pacing`, `Cache R`, and `Cache W` without jargon. Session drill-downs key off stable session identity for consistent expansion across refreshes.
 
 ---
 
@@ -631,7 +649,7 @@ python3 measure.py jsonl-dedup --dry-run         # Preview removing duplicate re
 
 ### Savings Tracking
 
-Tracks cumulative dollar savings from setup optimization, checkpoint restores, and tool archiving.
+Tracks cumulative dollar savings from setup optimization, checkpoint restores, and tool archiving. Also surfaced on the dashboard's savings tile so you can watch the number climb over weeks.
 
 ```bash
 python3 measure.py savings                      # Dollar savings report (last 30 days)
