@@ -7857,33 +7857,85 @@ def setup_all_hooks(dry_run=False, verbose=False):
     return {"added": added, "skipped": skipped, "plugin_root": plugin_root_str}
 
 
-def setup_daemon(dry_run=False, uninstall=False):
-    """Install or remove the persistent dashboard HTTP server daemon (launchd).
+def _ensure_dashboard_file():
+    """Shared: generate the initial dashboard HTML if missing.
 
-    The daemon serves the dashboard HTML on localhost:{DAEMON_PORT}.
-    The SessionEnd hook regenerates the HTML file; the daemon just serves what's on disk.
+    All platform installers rely on the HTML file already existing on
+    disk so the daemon has something to serve. Idempotent.
     """
-    if sys.platform != "darwin":
-        print("[Error] Dashboard daemon requires macOS (launchd). Use --serve for other platforms.")
-        sys.exit(1)
+    if not DASHBOARD_PATH.exists():
+        print("  Generating initial dashboard...")
+        generate_standalone_dashboard(quiet=True)
+    if not DASHBOARD_PATH.exists():
+        print("[Error] Could not generate dashboard. Run 'measure.py dashboard' first.")
+        return False
+    return True
 
-    if uninstall:
-        # Stop and remove
-        if PLIST_PATH.exists():
-            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)],
-                           capture_output=True)
-            PLIST_PATH.unlink()
-            print("[Token Optimizer] Dashboard daemon removed.")
-            print(f"  Deleted: {PLIST_PATH}")
-        else:
-            print("[Token Optimizer] No daemon installed. Nothing to remove.")
-        # Clean up daemon script
-        daemon_script = SNAPSHOT_DIR / "dashboard-server.py"
-        if daemon_script.exists():
-            daemon_script.unlink()
-            print(f"  Deleted: {daemon_script}")
-        return
 
+def _verify_daemon_port(timeout_seconds=1, retries=8):
+    """Shared: probe 127.0.0.1:DAEMON_PORT to confirm the daemon is up.
+
+    Extended retry budget (torture-room M3, 2026-04-14): slow cold
+    starts on first-login Mac, LaunchAgent re-spawn, or Windows Task
+    Scheduler trigger delay can exceed 8s before the daemon binds. A
+    false "still starting up" drove users to run --uninstall mid-init,
+    which orphaned the python process and locked port 24842.
+    Budget now ~16s (8 retries * 1s timeout + 1s gap).
+    """
+    import socket as _socket
+    for _attempt in range(retries):
+        try:
+            with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+                s.settimeout(timeout_seconds)
+                s.connect(("127.0.0.1", DAEMON_PORT))
+            return True
+        except (OSError, ConnectionRefusedError):
+            time.sleep(1)
+    return False
+
+
+def _daemon_install_lock():
+    """Return a context manager that serialises concurrent setup-daemon runs.
+
+    Uses an atomic mkdir mutex on a marker directory. Torture-room H1
+    (2026-04-14): two terminals running `setup-daemon` simultaneously
+    could race on the plist write and bootout/bootstrap sequence,
+    leaving one instance nuked mid-install. This serialises them: the
+    second run aborts with a clear message rather than corrupting
+    state.
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _locked():
+        lock_dir = SNAPSHOT_DIR / ".setup-daemon.lock"
+        try:
+            SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+            lock_dir.mkdir(exist_ok=False)
+        except FileExistsError:
+            print("[Error] Another setup-daemon is already running.")
+            print(f"  Lock file: {lock_dir}")
+            print("  If you're sure no other run is active, remove the lock and retry.")
+            sys.exit(1)
+        try:
+            yield
+        finally:
+            try:
+                lock_dir.rmdir()
+            except OSError:
+                pass
+
+    return _locked()
+
+
+def _install_launchd_daemon(dry_run=False):
+    """macOS: install the dashboard daemon via a LaunchAgent.
+
+    Extracted verbatim from the pre-dispatcher setup_daemon. No behavior
+    change for macOS users -- plist path, label, port, and log location
+    are all preserved. Re-running overwrites the plist idempotently and
+    bootouts any existing instance first so we never fight a stale PID.
+    """
     if dry_run:
         print("[Token Optimizer] Dry run. Would install:\n")
         print("  A tiny web server that makes your dashboard available at:")
@@ -7900,63 +7952,167 @@ def setup_daemon(dry_run=False, uninstall=False):
         print("  No changes written.")
         return
 
-    # Ensure dashboard exists first
-    if not DASHBOARD_PATH.exists():
-        print("  Generating initial dashboard...")
-        generate_standalone_dashboard(quiet=True)
-
-    if not DASHBOARD_PATH.exists():
-        print("[Error] Could not generate dashboard. Run 'measure.py dashboard' first.")
+    if not _ensure_dashboard_file():
         sys.exit(1)
 
-    # Write daemon script
-    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    DAEMON_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    with _daemon_install_lock():
+        # Write daemon script
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        DAEMON_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        daemon_script = SNAPSHOT_DIR / "dashboard-server.py"
+        daemon_script.write_text(_generate_daemon_script(), encoding="utf-8")
+        daemon_script.chmod(0o755)
+
+        # Write plist
+        LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+        PLIST_PATH.write_text(_generate_plist(), encoding="utf-8")
+
+        # Stop existing daemon if running (bootout is idempotent -- non-zero
+        # exit when nothing is loaded is expected and ignored).
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)],
+                       capture_output=True)
+
+        # Start daemon
+        result = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(PLIST_PATH)],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"[Error] Failed to start daemon: {result.stderr.strip()}")
+            print(f"  Plist written to: {PLIST_PATH}")
+            print(f"  Try manually: launchctl bootstrap gui/{os.getuid()} {PLIST_PATH}")
+            sys.exit(1)
+
+        # Verify it's actually running. Budget ~16s covers slow cold
+        # starts. If we still can't reach the port, surface a clear
+        # do-NOT-uninstall instruction so users don't kill a booting
+        # daemon mid-init (torture-room M3).
+        time.sleep(1)
+        if _verify_daemon_port():
+            print("[Token Optimizer] Dashboard server installed and running.\n")
+            print("  Bookmark this URL:")
+            print(f"    http://localhost:{DAEMON_PORT}/token-optimizer\n")
+            print("  It updates automatically after every Claude Code session.")
+            print("  Starts on login, so the URL always works.\n")
+            print("  To remove: python3 measure.py setup-daemon --uninstall")
+        else:
+            print("[Token Optimizer] Server bootstrapped but port not yet reachable.")
+            print(f"  Give it 30s, then open: http://localhost:{DAEMON_PORT}/token-optimizer")
+            print("  Do NOT run --uninstall while it is still coming up -- that can")
+            print(f"  orphan the process and block port {DAEMON_PORT} for the next install.")
+            print(f"  If still unreachable after 30s, check: {DAEMON_LOG_DIR}/stderr.log")
+
+
+def _uninstall_launchd_daemon():
+    """macOS: stop and remove the LaunchAgent + daemon script.
+
+    Unified output (torture-room L7, 2026-04-14): track what is actually
+    deleted so we don't print a contradictory "Nothing to remove" header
+    followed by a "Deleted: script.py" line when the plist is gone but
+    the script file remains from a half-uninstall.
+    """
+    removed = []
+    if PLIST_PATH.exists():
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)],
+                       capture_output=True)
+        PLIST_PATH.unlink()
+        removed.append(str(PLIST_PATH))
     daemon_script = SNAPSHOT_DIR / "dashboard-server.py"
-    daemon_script.write_text(_generate_daemon_script(), encoding="utf-8")
-    daemon_script.chmod(0o755)
-
-    # Write plist
-    LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-    PLIST_PATH.write_text(_generate_plist(), encoding="utf-8")
-
-    # Stop existing daemon if running
-    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)],
-                   capture_output=True)
-
-    # Start daemon
-    result = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(PLIST_PATH)],
-                            capture_output=True, text=True)
-
-    if result.returncode != 0:
-        print(f"[Error] Failed to start daemon: {result.stderr.strip()}")
-        print(f"  Plist written to: {PLIST_PATH}")
-        print(f"  Try manually: launchctl bootstrap gui/{os.getuid()} {PLIST_PATH}")
-        sys.exit(1)
-
-    # Verify it's actually running
-    import time
-    time.sleep(1)
-    try:
-        import socket
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(2)
-            s.connect(("127.0.0.1", DAEMON_PORT))
-        running = True
-    except (OSError, ConnectionRefusedError):
-        running = False
-
-    if running:
-        print("[Token Optimizer] Dashboard server installed and running.\n")
-        print("  Bookmark this URL:")
-        print(f"    http://localhost:{DAEMON_PORT}/token-optimizer\n")
-        print("  It updates automatically after every Claude Code session.")
-        print("  Starts on login, so the URL always works.\n")
-        print("  To remove: python3 measure.py setup-daemon --uninstall")
+    if daemon_script.exists():
+        daemon_script.unlink()
+        removed.append(str(daemon_script))
+    if removed:
+        print("[Token Optimizer] Dashboard daemon removed.")
+        for path in removed:
+            print(f"  Deleted: {path}")
     else:
-        print("[Token Optimizer] Server installed but still starting up.")
-        print(f"  Give it a few seconds, then try: http://localhost:{DAEMON_PORT}/token-optimizer")
-        print(f"  If it doesn't work, check: {DAEMON_LOG_DIR}/stderr.log")
+        print("[Token Optimizer] No daemon artifacts found. Nothing to remove.")
+
+
+def _install_task_scheduler_daemon(dry_run=False):
+    """Windows: install dashboard daemon via Task Scheduler. Placeholder.
+
+    Not implemented in v5.3.1. Landed as a stub so the dispatcher can
+    route cleanly without branching inline, and so a user running
+    setup-daemon on Windows gets a clear "coming soon" message rather
+    than a silent failure or a macOS-only error.
+    """
+    _ = dry_run
+    print("[Token Optimizer] Windows dashboard daemon ships in an upcoming release.")
+    print(f"  For now, open the file directly: {DASHBOARD_PATH.as_uri()}")
+    print("  The dashboard regenerates automatically after every session.")
+
+
+def _uninstall_task_scheduler_daemon():
+    """Windows: remove the scheduled task. Placeholder until the Windows
+    installer lands in a future release."""
+    print("[Token Optimizer] No Windows daemon is installed yet.")
+
+
+def _install_systemd_user_daemon(dry_run=False):
+    """Linux: install dashboard daemon via systemd --user. Placeholder.
+
+    Not implemented in v5.3.1. Lands in a later release after macOS and
+    Windows are shipping cleanly.
+    """
+    _ = dry_run
+    print("[Token Optimizer] Linux dashboard daemon ships in an upcoming release.")
+    print(f"  For now, open the file directly: {DASHBOARD_PATH.as_uri()}")
+    print("  The dashboard regenerates automatically after every session.")
+
+
+def _uninstall_systemd_user_daemon():
+    """Linux: remove the systemd user unit. Placeholder."""
+    print("[Token Optimizer] No Linux daemon is installed yet.")
+
+
+def _normalized_platform():
+    """Return a normalized platform label.
+
+    Hedges against torture-room M5: frozen builds or test harnesses that
+    monkey-patch platform.system() can return non-canonical casing
+    ("darwin", "Macintosh", "MacOSX"). We normalize a small allowlist
+    of aliases to the canonical CPython labels.
+    """
+    raw = (platform.system() or "").strip()
+    lower = raw.lower()
+    if lower in ("darwin", "macintosh", "macosx", "mac os x", "mac"):
+        return "Darwin"
+    if lower == "windows":
+        return "Windows"
+    if lower == "linux":
+        return "Linux"
+    return raw
+
+
+def setup_daemon(dry_run=False, uninstall=False):
+    """Install or remove the persistent dashboard HTTP server daemon.
+
+    Dispatches to a platform-specific installer/uninstaller. macOS uses
+    launchd (LaunchAgent); Windows and Linux installers ship in future
+    releases. All platforms share the daemon script and port
+    (DAEMON_PORT = 24842) so the bookmarkable URL is identical
+    everywhere.
+    """
+    system = _normalized_platform()
+    if uninstall:
+        if system == "Darwin":
+            _uninstall_launchd_daemon()
+        elif system == "Windows":
+            _uninstall_task_scheduler_daemon()
+        elif system == "Linux":
+            _uninstall_systemd_user_daemon()
+        else:
+            print(f"[Token Optimizer] Unsupported platform for daemon uninstall: {system}")
+        return
+    if system == "Darwin":
+        _install_launchd_daemon(dry_run=dry_run)
+    elif system == "Windows":
+        _install_task_scheduler_daemon(dry_run=dry_run)
+    elif system == "Linux":
+        _install_systemd_user_daemon(dry_run=dry_run)
+    else:
+        print(f"[Error] Dashboard daemon not supported on {system}.")
+        print(f"  Open the dashboard file directly: {DASHBOARD_PATH.as_uri()}")
+        sys.exit(1)
 
 
 # ========== Context Quality Analyzer (v2.0) ==========
