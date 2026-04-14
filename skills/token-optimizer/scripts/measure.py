@@ -3653,13 +3653,19 @@ def generate_auto_recommendations(components, trends=None, days=30):
                 )
 
     # --- Rule 8: No SessionEnd hook (one-time setup → Quick Win, not habit) ---
+    # v5.3.8: plugin users get SessionEnd via hooks/hooks.json -- the old
+    # check only inspected settings.json, so plugin users always saw a
+    # false-positive "no hook detected" recommendation contradicting
+    # their actual installed state. Short-circuit when the plugin is
+    # installed so we never recommend installing what is already there.
     hooks = components.get("hooks", {})
-    if not hooks.get("configured") or "SessionEnd" not in hooks.get("names", []):
+    hook_missing_in_settings = not hooks.get("configured") or "SessionEnd" not in hooks.get("names", [])
+    if hook_missing_in_settings and not _is_plugin_installed():
         quick.append(
             "**Install SessionEnd hook for usage tracking**: "
-            "No SessionEnd hook detected. One-time setup, takes 10 seconds:\n"
-            "  Run: `python3 measure.py setup-hook`\n"
-            "  This enables the Trends tab (which skills you actually use, model mix, daily patterns) "
+            "No SessionEnd hook detected. One-time setup, takes 10 seconds. "
+            "Run `python3 measure.py setup-hook`. "
+            "This enables the Trends tab (which skills you actually use, model mix, daily patterns) "
             "and the Health tab (stale sessions, version checks). Without it, you only get data "
             "from manual `measure.py collect` runs. The hook runs automatically after every session "
             "(~2 seconds, no background process)."
@@ -7428,7 +7434,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.3.7"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.3.8"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -14268,6 +14274,35 @@ def _run_ensure_health():
     except Exception:
         pass
 
+    # v5.3.8: auto-regenerate the dashboard HTML when the on-disk file
+    # is stale relative to the currently installed plugin version.
+    # Users upgrading via /plugin update keep seeing the OLD dashboard
+    # because the file is only rewritten by /token-dashboard,
+    # /token-optimizer, or the SessionEnd hook -- none of which fires
+    # on /plugin update. Non-blocking: wrap in try/except so a bad
+    # regen never breaks SessionStart.
+    try:
+        if DASHBOARD_PATH.exists():
+            head = ""
+            try:
+                with open(str(DASHBOARD_PATH), "r", encoding="utf-8", errors="replace") as _f:
+                    head = _f.read(32768)
+            except OSError:
+                head = ""
+            # The template injects `"version":"X.Y.Z"` as part of the
+            # __TOKEN_DATA__ blob near the top of the file. If the
+            # shipped version isn't there, the file predates this
+            # release -- regenerate.
+            marker = f'"version": "{TOKEN_OPTIMIZER_VERSION}"'
+            if marker not in head:
+                try:
+                    generate_standalone_dashboard(quiet=True)
+                    print(f"  [Token Optimizer] Refreshed dashboard to v{TOKEN_OPTIMIZER_VERSION}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     # v5.2.0 migration notice for Windows users. v5.1.0 and earlier shipped
     # a hooks.json that used POSIX shell syntax, which silently failed on
     # Windows PowerShell -- the plugin installed but every hook was a
@@ -14761,6 +14796,11 @@ if __name__ == "__main__":
         print(f"  {ok} keys valid, {bad} issues, {len(extras)} extras")
         if bad > 0:
             sys.exit(1)
+        sys.exit(0)
+    elif args[0] in ("version", "--version", "-v"):
+        # Simple sanity check users can run to confirm which Token
+        # Optimizer they're actually running after /plugin update.
+        print(TOKEN_OPTIMIZER_VERSION)
         sys.exit(0)
     elif args[0] == "daemon-consent":
         # v5.3.3: persistent consent for the bookmarkable dashboard URL.
