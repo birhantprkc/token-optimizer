@@ -2347,8 +2347,36 @@ def full_report():
     print(f"\n{'=' * 55}")
 
 
+def _daemon_is_running():
+    """Return True iff the dashboard daemon identity probe passes.
+
+    Uses the same magic-string check as `daemon-status` so a foreign
+    process on 24842 is never mistaken for ours. Short timeout (0.5s)
+    because this is called from interactive paths where users are
+    waiting for a browser to open.
+    """
+    import urllib.error
+    import urllib.request
+
+    magic = b"token-optimizer-dashboard-v1"
+    for host in ("127.0.0.1", "[::1]"):
+        url = f"http://{host}:{DAEMON_PORT}/__to_ping"
+        try:
+            with urllib.request.urlopen(url, timeout=0.5) as resp:
+                if resp.read(len(magic) + 8).strip() == magic:
+                    return True
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+    return False
+
+
 def _open_in_browser(filepath):
-    """Open a file in the default browser. Cross-platform."""
+    """Open a file in the default browser. Cross-platform.
+
+    Kept for non-dashboard callers. For dashboard flows use
+    _open_dashboard() which prefers the bookmarkable URL when the
+    daemon is live.
+    """
     filepath = str(filepath)
     system = platform.system()
     try:
@@ -2364,6 +2392,40 @@ def _open_in_browser(filepath):
         url = Path(filepath).as_uri()
         print("\n  Could not auto-open browser. Open manually:")
         print(f"  {url}")
+
+
+def _open_dashboard(fallback_filepath):
+    """Open the dashboard, preferring the bookmarkable URL.
+
+    When the daemon is live, open http://localhost:24842/token-optimizer
+    so the user lands on their bookmark-ready URL instead of a
+    throwaway file:// path. The caller must still have written the
+    freshest content to DASHBOARD_PATH so the daemon serves current
+    data -- this helper doesn't touch files, only decides which
+    address to open.
+
+    Falls back to opening the file directly when the daemon isn't
+    live or the identity probe fails.
+    """
+    if _daemon_is_running():
+        url = f"http://localhost:{DAEMON_PORT}/token-optimizer"
+        system = platform.system()
+        try:
+            if system == "Darwin":
+                subprocess.run(["open", url], check=True)
+            elif system == "Linux":
+                subprocess.run(["xdg-open", url], check=True)
+            elif system == "Windows":
+                os.startfile(url)
+            else:
+                raise OSError(f"Unsupported platform: {system}")
+            print(f"  Opened: {url}")
+            return
+        except (subprocess.CalledProcessError, OSError, FileNotFoundError):
+            print(f"\n  Could not auto-open browser. Open manually:\n  {url}")
+            return
+    # Daemon down: open the file directly
+    _open_in_browser(fallback_filepath)
 
 
 def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
@@ -2701,6 +2763,7 @@ def generate_dashboard(coord_path):
         "savings": savings_data,
         "auto_plan": auto_plan_flag,
         "generated_at": datetime.now().isoformat(),
+        "version": TOKEN_OPTIMIZER_VERSION,
     }
 
     # Load template and inject data
@@ -2712,7 +2775,8 @@ def generate_dashboard(coord_path):
     if injected == template:
         print("  [Warning] Data injection failed: placeholder not found in template.")
 
-    # Write output
+    # Write audit output to the coord_path (historical behavior so
+    # audits keep a self-contained artifact per run).
     out_dir = coord / "analysis"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "dashboard.html"
@@ -2721,9 +2785,24 @@ def generate_dashboard(coord_path):
         f.write(injected)
     print(f"  Dashboard written to: {out_path}")
 
-    # Open in browser
-    _open_in_browser(out_path)
-    print("  Opened in browser.")
+    # v5.3.6: mirror the same HTML to DASHBOARD_PATH so the live daemon
+    # serves the fresh audit content at
+    # http://localhost:24842/token-optimizer instead of a pre-audit
+    # snapshot. Without this mirror, opening the URL would show stale
+    # data and the user would never know their audit ran.
+    try:
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        mirror_fd = os.open(str(DASHBOARD_PATH), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(mirror_fd, "w", encoding="utf-8") as f:
+            f.write(injected)
+    except OSError as e:
+        print(f"  [Warning] Could not mirror to {DASHBOARD_PATH}: {e}")
+
+    # Prefer the bookmarkable URL when the daemon is live; fall back to
+    # the coord-path file://. This removes the v5.3.5-era UX bug where
+    # users with a live daemon still got a /tmp/coord.../dashboard.html
+    # file:// URL instead of their bookmark.
+    _open_dashboard(fallback_filepath=out_path)
     return str(out_path)
 
 
@@ -3318,6 +3397,7 @@ def generate_standalone_dashboard(days=30, quiet=False):
         "memory_review": mr_data,
         "claude_md_health": claude_md_health,
         "v5_recommendation": _get_v5_savings_recommendation(),
+        "version": TOKEN_OPTIMIZER_VERSION,
     }
 
     template = template_path.read_text(encoding="utf-8")
@@ -7348,6 +7428,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
+TOKEN_OPTIMIZER_VERSION = "5.3.6"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -14497,7 +14578,10 @@ if __name__ == "__main__":
             if out and serve:
                 _serve_dashboard(out, port=serve_port, host=serve_host)
             elif out and not quiet:
-                _open_in_browser(out)
+                # v5.3.6: prefer the live bookmarkable URL over file://
+                # so /token-dashboard lands on the same address the user
+                # already bookmarked.
+                _open_dashboard(fallback_filepath=out)
             sys.exit(0 if out else 1)
         out = generate_dashboard(cp)
         if serve:
@@ -14608,6 +14692,7 @@ if __name__ == "__main__":
             "memory_review": (dict, type(None)),
             "claude_md_health": (dict, type(None)),
             "v5_recommendation": (dict, type(None)),
+            "version": str,
         }
         try:
             components = measure_components()
@@ -14645,6 +14730,7 @@ if __name__ == "__main__":
                 "memory_review": None,
                 "claude_md_health": None,
                 "v5_recommendation": None,
+                "version": TOKEN_OPTIMIZER_VERSION,
             }
         except Exception as e:
             print(f"[ERROR] data construction failed: {e!r}")

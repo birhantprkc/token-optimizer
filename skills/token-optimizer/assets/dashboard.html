@@ -1610,9 +1610,9 @@ window.__TOKEN_DATA__ = null;
     <!-- Overview View -->
     <div class="view active" id="view-overview">
       <header class="header">
-        <div class="label">Token Overhead Analysis</div>
+        <div class="label">Token Overhead Analysis <span id="overview-version-badge" style="opacity:.7;margin-left:.5rem;font-family:var(--font-mono);font-size:12px;"></span></div>
         <h1>Overview</h1>
-        <p>Your current config overhead, measured against your detected context window.</p>
+        <p>Your current config overhead, measured against your detected context window. <span id="overview-view-source" style="color:var(--c-text-dim);font-size:13px;"></span></p>
       </header>
 
       <div class="card wide" id="hero-card">
@@ -2150,6 +2150,29 @@ var DB = (function() {
     var ctxWindow = (data.snapshot.context_window) || 200000;
     var ctxLabel = (ctxWindow >= 1000000) ? (ctxWindow / 1000000) + 'M' : (ctxWindow / 1000) + 'K';
     var pct = ((total / ctxWindow) * 100).toFixed(1);
+
+    // Version badge (v5.3.6+): show which Token Optimizer wrote this
+    // HTML and whether the user is viewing the bookmarkable URL or a
+    // local file://, so stale-cache and wrong-file confusion become
+    // visible at a glance.
+    var versionBadge = document.getElementById('overview-version-badge');
+    if (versionBadge) {
+      var versionText = data.version ? 'v' + data.version : 'version unknown';
+      if (data.generated_at) {
+        var genDate = new Date(data.generated_at);
+        if (!isNaN(genDate.getTime())) {
+          versionText += ' \u00b7 generated ' + genDate.toLocaleString();
+        }
+      }
+      versionBadge.textContent = versionText;
+    }
+    var viewSourceEl = document.getElementById('overview-view-source');
+    if (viewSourceEl) {
+      var isUrl = (window.location.protocol || '').indexOf('http') === 0;
+      viewSourceEl.textContent = isUrl
+        ? 'Viewing live dashboard at ' + window.location.origin + '. Updates on every session end.'
+        : 'Viewing a local file. For the bookmarkable URL run: python3 measure.py setup-daemon';
+    }
 
     // Hero card
     var remaining = Math.max(0, ctxWindow - total);
