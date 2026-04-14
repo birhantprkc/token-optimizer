@@ -40,7 +40,9 @@ Works on <strong>Claude Code</strong> and <strong>OpenClaw</strong> today. Winds
 
 ## Install
 
-```bash
+**Recommended on every platform (macOS, Linux, Windows):**
+
+```
 /plugin marketplace add alexgreensh/token-optimizer
 /plugin install token-optimizer@alexgreensh-token-optimizer
 ```
@@ -49,7 +51,23 @@ Then in Claude Code: `/token-optimizer`
 
 > **Please enable auto-update after installing.** Claude Code ships third-party marketplaces with auto-update **off by default**, and plugin authors cannot change that default. So you won't get bug fixes automatically unless you turn it on. In Claude Code: `/plugin` → **Marketplaces** tab → select `alexgreensh-token-optimizer` → **Enable auto-update**. One-time, 10 seconds, and you'll never miss a fix again. Token Optimizer also prints a one-time reminder on your first SessionStart so you don't forget.
 
-Script install works too, and it auto-updates daily via `git pull --ff-only`:
+### Windows users: read this first
+
+The plugin install above is the **only** path you should use on Windows. Do **not** also run the `install.sh` script described below — that's a bash installer for macOS/Linux/WSL, and combining the two creates an `EBUSY: resource busy or locked` error because Git Bash holds Windows file handles open while the plugin system is trying to clone.
+
+If you've already hit that error:
+
+1. Close every Claude Code window and Git Bash terminal.
+2. Open Task Manager and end any lingering `git.exe` processes.
+3. Delete both folders if they exist:
+   - `C:\Users\<you>\.claude\token-optimizer`
+   - `C:\Users\<you>\.claude\plugins\marketplaces\alexgreensh-token-optimizer`
+4. If Windows still refuses to delete (file in use), reboot, then delete.
+5. Open a fresh Claude Code window and run the two `/plugin` commands above.
+
+### macOS / Linux only: script install (alternative)
+
+If you prefer a script-managed install on macOS or Linux, this works too and auto-updates daily via `git pull --ff-only`. **Do not run this on Windows, and do not run it alongside the plugin install above on any platform.** Pick one method.
 
 ```bash
 git clone https://github.com/alexgreensh/token-optimizer.git ~/.claude/token-optimizer

@@ -18,7 +18,7 @@ for f in "$HOME/.claude/plugins/cache"/*/token-optimizer/*/skills/token-optimize
 done
 ```
 
-2. Run: `python3 $MEASURE_PY quick --json`
+2. Run: `bash "$CLAUDE_PLUGIN_ROOT/hooks/python-launcher.sh" $MEASURE_PY quick --json`
 
 3. Parse the JSON output and present concisely:
    - Context overhead: X tokens (Y% of context window)

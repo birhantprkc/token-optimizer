@@ -1,39 +1,32 @@
 #!/usr/bin/env python3
 """Cross-platform hook dispatcher.
 
-Invoked via `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" <script> args`
-from hooks.json. The explicit `python3` prefix is required because
-PowerShell on Windows does not run bare-path quoted commands as
-executables -- it treats them as string expressions (Microsoft Learn:
-about_Parsing) -- and the .py file association is not honored by
-PowerShell command discovery. The `python3` prefix also matches the
-Claude Code plugin ecosystem convention.
+Invoked from hooks.json via a small bash launcher that locates a usable
+Python 3 interpreter on macOS, Linux, and Windows:
 
-The wrapper resolves the target script under CLAUDE_PLUGIN_ROOT, checks
-it exists, and runs it with the same interpreter that ran this file
-(sys.executable). On timeout we kill the child (Popen.kill) to avoid
-leaking a process holding the trends.db lock. Always exits 0 so hook
-failures never block the user's tool call.
+  "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/python-launcher.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" <script-relative-path> [args...]"
 
-Usage in hooks.json:
-  "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/run.py\" <script-relative-path> [args...]"
+The launcher handles Windows-specific gotchas (Program Files spaced paths,
+Microsoft Store zero-byte stubs in WindowsApps, py launcher fallback) so
+this file can assume it's running under a real Python 3.8+.
 
-Windows notes:
-- Microsoft Store Python registers `python3` via App Execution Aliases
-  (Python docs, "Using Python on Windows" section 4.8.1). Recommended
-  install for Windows users.
-- python.org installer ships `python.exe` and `py.exe` but not
-  `python3.exe`. Users must add a `python3` alias or use Microsoft
-  Store Python for hooks to run.
-- If `python3` is not on PATH, hooks silently fail (non-blocking) --
-  behavior identical to the pre-v5.2 plugin on Windows, so no
-  regression for affected users.
+This dispatcher resolves the target script under CLAUDE_PLUGIN_ROOT,
+checks it exists, and runs it with the same interpreter (sys.executable).
+On timeout we kill the child (Popen.kill) to avoid leaking a process
+holding the trends.db SQLite lock. Always exits 0 so hook failures never
+block the user's tool call.
 """
 from __future__ import annotations
 
 import os
 import subprocess
 import sys
+
+# Defense in depth: the launcher script already filters interpreters, but
+# if a user's PATH has a stale Python 3.7 that slipped through, bail early
+# so later imports don't explode with confusing SyntaxError noise.
+if sys.version_info < (3, 8):
+    sys.exit(0)
 
 
 def main() -> int:

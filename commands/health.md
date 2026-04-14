@@ -18,7 +18,7 @@ for f in "$HOME/.claude/plugins/cache"/*/token-optimizer/*/skills/token-optimize
 done
 ```
 
-2. Run: `python3 $MEASURE_PY health`
+2. Run: `bash "$CLAUDE_PLUGIN_ROOT/hooks/python-launcher.sh" $MEASURE_PY health`
 
 3. Present results clearly. For each session show: PID, elapsed time, version, and flags (STALE >24h, ZOMBIE >48h, OUTDATED, HEADLESS, TERMINAL).
 
@@ -29,7 +29,7 @@ done
    - NEVER auto-kill anything. Always ask first and get explicit confirmation.
    - HEADLESS sessions might be intentional background processes (cron agents, heartbeat monitors, scheduled tasks). Always warn: "This session is headless, it might be a background agent running on purpose. Are you sure you want to terminate it?"
    - Let the user pick specific PIDs to terminate, or offer "terminate all ZOMBIE-flagged sessions" as a batch option.
-   - Always run `python3 $MEASURE_PY kill-stale --dry-run` first to preview what would be terminated, then ask for confirmation before running without `--dry-run`.
+   - Always run `bash "$CLAUDE_PLUGIN_ROOT/hooks/python-launcher.sh" $MEASURE_PY kill-stale --dry-run` first to preview what would be terminated, then ask for confirmation before running without `--dry-run`.
    - If the user says "kill all" or similar, still show the dry-run preview and confirm. No silent kills.
 
 6. If no stale or zombie sessions found, say: "All sessions look healthy. Your oldest is Xh old."
