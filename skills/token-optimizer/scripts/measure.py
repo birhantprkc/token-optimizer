@@ -7562,7 +7562,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.3.10"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.4.5"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -14816,10 +14816,25 @@ def _run_ensure_health():
                     daemon_script.write_text(new_script, encoding="utf-8")
                     # Restart the daemon so the new script takes effect.
                     import subprocess as _sp
-                    if platform.system() == "Darwin":
+                    _sys = platform.system()
+                    if _sys == "Darwin":
                         uid = _sp.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
                         _sp.run(
                             ["launchctl", "kickstart", "-k", f"gui/{uid}/{DAEMON_LABEL}"],
+                            capture_output=True, timeout=5
+                        )
+                    elif _sys == "Linux":
+                        _sp.run(
+                            ["systemctl", "--user", "restart", SYSTEMD_UNIT_NAME],
+                            capture_output=True, timeout=10
+                        )
+                    elif _sys == "Windows":
+                        _sp.run(
+                            ["schtasks", "/End", "/TN", WINDOWS_TASK_NAME],
+                            capture_output=True, timeout=5
+                        )
+                        _sp.run(
+                            ["schtasks", "/Run", "/TN", WINDOWS_TASK_NAME],
                             capture_output=True, timeout=5
                         )
                     print(f"  [Token Optimizer] Auto-updated daemon to v{TOKEN_OPTIMIZER_VERSION}")
