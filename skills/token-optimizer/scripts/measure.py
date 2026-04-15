@@ -4863,7 +4863,6 @@ def _parse_session_jsonl(filepath):
     skills_used = {}
     subagents_used = {}
     tool_calls = {}
-    seen_request_ids = set()
     request_usage_map = {}        # v5.4.9: per-requestId MAX usage (streaming-aware)
     total_input = 0
     total_output = 0
@@ -5001,8 +5000,6 @@ def _parse_session_jsonl(filepath):
                                 "cc_1h": cc_1h, "cc_5m": cc_5m, "model": model,
                                 "ts": ts_str,
                             }
-                            if req_id:
-                                seen_request_ids.add(req_id)
                         else:
                             # Streaming: keep MAX of each token category.
                             # Model + timestamp: prefer later (non-empty) values.
@@ -7745,7 +7742,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.4.14"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.4.15"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -15010,11 +15007,15 @@ def _run_ensure_health():
     # was introduced in v5.4.9 as the headline billable source of truth.
     try:
         if DASHBOARD_PATH.exists():
-            # Read enough to contain __TOKEN_DATA__ (can be >32KB on large workspaces).
+            # v5.4.14: read FULL file, not a head slice. The version marker
+            # lives inside __TOKEN_DATA__ which can be 4-5MB on active users.
+            # A 256KB cap missed the marker at byte 4.8M, causing a 24s full
+            # regen on EVERY SessionStart (Performance Oracle HIGH finding).
+            # Full read costs ~2ms (measured); the regen it prevents costs 24s.
             head = ""
             try:
                 with open(str(DASHBOARD_PATH), "r", encoding="utf-8", errors="replace") as _f:
-                    head = _f.read(262144)  # 256KB
+                    head = _f.read()
             except OSError:
                 head = ""
             version_marker = f'"version": "{TOKEN_OPTIMIZER_VERSION}"'
