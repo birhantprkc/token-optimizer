@@ -5784,15 +5784,17 @@ def _migrate_model_daily(conn, quiet=False):
     Users wanting full historical accuracy can run `collect --rebuild`.
     """
     try:
-        conn.execute("DELETE FROM model_daily")
+        # Set version FIRST to break retry loop on failure (Error Handling H1).
         conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+        conn.execute("DELETE FROM model_daily")
         conn.commit()
         if not quiet:
             print("[Token Optimizer] Migrated model_daily for corrected model attribution (fix #18).")
             print("  New sessions will have correct model mix. For full historical accuracy:")
             print("  python3 measure.py collect --rebuild")
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as e:
+        print(f"  [Token Optimizer] model_daily migration failed: {e}", file=sys.stderr)
 
 
 def _migrate_streaming_dedup(conn, quiet=False):
@@ -5801,20 +5803,28 @@ def _migrate_streaming_dedup(conn, quiet=False):
     roll-up. session_log stores per-session output_tokens which was wrong
     pre-v5.4.9, so we wipe that too. Reparsing happens automatically on
     next `collect` (triggered by SessionEnd hook or /token-dashboard).
+
+    v5.4.13: set user_version FIRST (before DELETE) to prevent a
+    migration loop where a failed COMMIT leaves user_version < 3 and
+    triggers a full data wipe on every subsequent SessionStart. If the
+    DELETE then fails, user_version is already 3 so the migration won't
+    re-fire — the data stays stale but doesn't get wiped repeatedly.
     """
     try:
+        # Set version FIRST to break the retry loop on failure.
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
         conn.execute("DELETE FROM session_log")
         conn.execute("DELETE FROM daily_stats")
         conn.execute("DELETE FROM model_daily")
         conn.execute("DELETE FROM skill_daily")
         conn.execute("DELETE FROM subagent_daily")
-        conn.execute("PRAGMA user_version = 3")
         conn.commit()
         if not quiet:
             print("[Token Optimizer] Migrated to v5.4.9 streaming-aware token counting.")
             print("  Old data cleared. Your next session will rebuild automatically.")
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as e:
+        print(f"  [Token Optimizer] migration failed: {e}", file=sys.stderr)
 
 
 def collect_sessions(days=90, quiet=False, rebuild=False):
@@ -7735,7 +7745,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.4.13"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.4.14"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -14974,8 +14984,8 @@ def _run_ensure_health():
             _cp_data["cleanupPeriodDays"] = 99999
             _write_settings_atomic(_cp_data)
             print("  [Token Optimizer] Set cleanupPeriodDays=99999 (preserves session transcripts for trends/analytics)")
-    except Exception:
-        pass
+    except Exception as _e:
+        print(f"  [Token Optimizer] cleanupPeriodDays write failed: {_e}", file=sys.stderr)
     # Silent auto-fix of known harmful settings.
     # Guarded: a corrupt settings.json would otherwise raise
     # json.JSONDecodeError through the dispatch and crash the hook
@@ -15013,10 +15023,10 @@ def _run_ensure_health():
                 try:
                     generate_standalone_dashboard(quiet=True, force=True)
                     print(f"  [Token Optimizer] Refreshed dashboard to v{TOKEN_OPTIMIZER_VERSION}")
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except Exception as _e:
+                    print(f"  [Token Optimizer] dashboard refresh failed: {_e}", file=sys.stderr)
+    except Exception as _e:
+        print(f"  [Token Optimizer] dashboard staleness check failed: {_e}", file=sys.stderr)
 
     # Auto-regenerate daemon script when it's outdated (e.g. after plugin update).
     # The daemon is a generated file outside the plugin, so it doesn't update
@@ -15084,10 +15094,10 @@ def _run_ensure_health():
                         capture_output=True, timeout=5
                     )
                 print(f"  [Token Optimizer] Auto-updated daemon to v{TOKEN_OPTIMIZER_VERSION}")
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as _e:
+                print(f"  [Token Optimizer] daemon restart failed: {_e}", file=sys.stderr)
+    except Exception as _e:
+        print(f"  [Token Optimizer] daemon auto-update check failed: {_e}", file=sys.stderr)
 
     # v5.2.0 migration notice for Windows users. v5.1.0 and earlier shipped
     # a hooks.json that used POSIX shell syntax, which silently failed on
@@ -15276,8 +15286,8 @@ def _run_ensure_health():
                 setup_quality_bar(force=True)
             elif not has_statusline or (has_statusline and not has_cache_hook):
                 setup_quality_bar()
-    except Exception:
-        pass
+    except Exception as _e:
+        print(f"  [Token Optimizer] quality bar setup failed: {_e}", file=sys.stderr)
     # Auto-update check (once per day, script-installed users only)
     try:
         install_dir = Path.home() / ".claude" / "token-optimizer"
