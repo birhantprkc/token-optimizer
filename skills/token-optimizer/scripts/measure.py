@@ -4847,6 +4847,7 @@ def _parse_session_jsonl(filepath):
     subagents_used = {}
     tool_calls = {}
     seen_request_ids = set()
+    request_usage_map = {}        # v5.4.9: per-requestId MAX usage (streaming-aware)
     total_input = 0
     total_output = 0
     total_cache_read = 0
@@ -4941,15 +4942,22 @@ def _parse_session_jsonl(filepath):
                                 agent_type = inp.get("subagent_type", "unknown")
                                 subagents_used[agent_type] = subagents_used.get(agent_type, 0) + 1
 
-                    # Extract usage/token data (deduplicate by requestId)
+                    # v5.4.9 (P1 fix): Streaming-aware dedup. Claude Code writes
+                    # MULTIPLE assistant records per requestId during streaming;
+                    # each one's usage.output_tokens is the CUMULATIVE count up
+                    # to that chunk. The previous dedup (skip-if-seen) kept the
+                    # FIRST record, which captured only the initial partial
+                    # count and discarded the final cumulative total — causing
+                    # a 3-10x under-count of output. Root-caused by verifying
+                    # 48,595 requestIds across 30d had monotonically increasing
+                    # output values in local JSONL. Fix: track per-requestId
+                    # MAX usage and apply it at end of file.
                     req_id = record.get("requestId")
                     usage = msg.get("usage", {})
-                    if usage and (req_id is None or req_id not in seen_request_ids):
-                        if req_id:
-                            seen_request_ids.add(req_id)
-                        inp_tok = usage.get("input_tokens", 0)
-                        out_tok = usage.get("output_tokens", 0)
-                        cr = usage.get("cache_read_input_tokens", 0)
+                    if usage:
+                        inp_tok = usage.get("input_tokens", 0) or 0
+                        out_tok = usage.get("output_tokens", 0) or 0
+                        cr = usage.get("cache_read_input_tokens", 0) or 0
                         cache_creation = usage.get("cache_creation", {})
                         if not isinstance(cache_creation, dict):
                             cache_creation = {}
@@ -4964,42 +4972,68 @@ def _parse_session_jsonl(filepath):
                             or 0
                         )
                         cc = usage.get("cache_creation_input_tokens", 0) or (cc_1h + cc_5m)
-                        total_input += inp_tok
-                        total_output += out_tok
-                        total_cache_read += cr
-                        total_cache_create += cc
-                        total_cache_create_1h += cc_1h
-                        total_cache_create_5m += cc_5m
-                        api_calls += 1
-                        if ts_str:
-                            try:
-                                api_call_timestamps.append(datetime.fromisoformat(ts_str.replace("Z", "+00:00")))
-                            except (ValueError, TypeError):
-                                pass
-
-                        # v5.4.8: Model usage is BILLABLE tokens only
-                        # (fresh_input + cache_create + output). cache_read is
-                        # tracked separately since it bills at ~10% of fresh
-                        # and would otherwise inflate totals 5-10x on long
-                        # sessions with heavy context reuse. Matches official
-                        # Claude Code Desktop dashboard methodology.
                         model = msg.get("model", "unknown")
-                        billable = inp_tok + cc + out_tok  # exclude cache_read
-                        model_usage[model] = model_usage.get(model, 0) + billable
-                        bd = model_usage_breakdown.setdefault(
-                            model,
-                            {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "output": 0},
-                        )
-                        bd["fresh_input"] += inp_tok
-                        bd["cache_read"] += cr
-                        bd["cache_create"] += cc
-                        bd["output"] += out_tok
+                        # Records without requestId must never collapse with
+                        # each other — use the map's own size as a monotonic
+                        # per-session counter.
+                        key = req_id if req_id else f"__noreq__{len(request_usage_map)}"
+                        prev = request_usage_map.get(key)
+                        if prev is None:
+                            request_usage_map[key] = {
+                                "inp": inp_tok, "out": out_tok, "cr": cr, "cc": cc,
+                                "cc_1h": cc_1h, "cc_5m": cc_5m, "model": model,
+                                "ts": ts_str,
+                            }
+                            if req_id:
+                                seen_request_ids.add(req_id)
+                        else:
+                            # Streaming: keep MAX of each token category.
+                            # Model + timestamp: prefer later (non-empty) values.
+                            prev["inp"] = max(prev["inp"], inp_tok)
+                            prev["out"] = max(prev["out"], out_tok)
+                            prev["cr"] = max(prev["cr"], cr)
+                            prev["cc"] = max(prev["cc"], cc)
+                            prev["cc_1h"] = max(prev["cc_1h"], cc_1h)
+                            prev["cc_5m"] = max(prev["cc_5m"], cc_5m)
+                            if model and model != "unknown":
+                                prev["model"] = model
+                            if ts_str:
+                                prev["ts"] = ts_str
 
     except (PermissionError, OSError):
         return None
 
     if message_count == 0:
         return None
+
+    # v5.4.9: Apply per-requestId MAX dedup. Each entry in request_usage_map
+    # holds the final cumulative usage for one API call. Summing these gives
+    # the session's true total without streaming-chunk under-counting.
+    for key, u in request_usage_map.items():
+        total_input += u["inp"]
+        total_output += u["out"]
+        total_cache_read += u["cr"]
+        total_cache_create += u["cc"]
+        total_cache_create_1h += u["cc_1h"]
+        total_cache_create_5m += u["cc_5m"]
+        api_calls += 1
+        ts_s = u.get("ts")
+        if ts_s:
+            try:
+                api_call_timestamps.append(datetime.fromisoformat(ts_s.replace("Z", "+00:00")))
+            except (ValueError, TypeError):
+                pass
+        model = u["model"]
+        billable = u["inp"] + u["cc"] + u["out"]  # fresh + cache_create + output
+        model_usage[model] = model_usage.get(model, 0) + billable
+        bd = model_usage_breakdown.setdefault(
+            model,
+            {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "output": 0},
+        )
+        bd["fresh_input"] += u["inp"]
+        bd["cache_read"] += u["cr"]
+        bd["cache_create"] += u["cc"]
+        bd["output"] += u["out"]
 
     # Calculate duration
     duration_minutes = 0
@@ -5788,16 +5822,34 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         # which stays parent-only for: session_log storage, dom_model
         # selection, and cost calculations. Merging into model_usage would
         # flip dom_model to a cheaper subagent model, mispricing sessions.
+        #
+        # v5.4.9: ALSO aggregate subagent input/output/cache tokens into the
+        # session-level totals so session_log.output_tokens (and the dashboard
+        # "Billable Tokens" headline derived from it) captures work the main
+        # thread delegated to agents. Without this, sessions that fan out
+        # heavily via Task tool appeared to use ~0 tokens.
         all_model_usage = dict(parsed["model_usage"])
         for sub_jf in subagent_files:
             sub_parsed = _parse_session_jsonl(sub_jf)
-            if sub_parsed and sub_parsed.get("model_usage"):
+            if not sub_parsed:
+                continue
+            # Aggregate model_usage (for model_daily)
+            if sub_parsed.get("model_usage"):
                 for model_id, tokens in sub_parsed["model_usage"].items():
                     if model_id.startswith("<"):  # skip synthetic IDs
                         continue
                     all_model_usage[model_id] = (
                         all_model_usage.get(model_id, 0) + tokens
                     )
+            # v5.4.9: also roll subagent token totals up into session_log
+            parsed["total_input_tokens"] = (parsed.get("total_input_tokens") or 0) + (sub_parsed.get("total_input_tokens") or 0)
+            parsed["total_output_tokens"] = (parsed.get("total_output_tokens") or 0) + (sub_parsed.get("total_output_tokens") or 0)
+            parsed["total_cache_create_1h"] = (parsed.get("total_cache_create_1h") or 0) + (sub_parsed.get("total_cache_create_1h") or 0)
+            parsed["total_cache_create_5m"] = (parsed.get("total_cache_create_5m") or 0) + (sub_parsed.get("total_cache_create_5m") or 0)
+            # Recompute cache_hit_rate over combined totals:
+            # total_full_input already includes cache_read + cache_create per _parse_session_jsonl
+            # but the stored cache_hit_rate is parent-only. Leave as-is (parent-derived)
+            # since mixing subagent hit rates isn't meaningful for per-session display.
 
         date = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
         skills_used = parsed["skills_used"]
@@ -5947,12 +5999,19 @@ def _query_trends_db(conn, days):
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
     # Basic stats
-    # v5.4.8: Billable-token computation matches Claude Code Desktop methodology.
-    # session_log.input_tokens stores total_full_input (fresh + cache_read + cache_create),
-    # which inflates "Total tokens" ~6-10x on long sessions with heavy context reuse.
-    # Billable excludes cache_read since it bills at 10% of fresh rate.
-    # Formula: billable_input = input_tokens * (1 - cache_hit_rate).
-    # Output is always billable at full rate.
+    # v5.4.9: "Total tokens" matches Claude Code Desktop methodology exactly:
+    # fresh_input + output. Both cache_read and cache_create are excluded from
+    # the headline since Desktop's "X in · Y out" per-model view uses only
+    # those two fields. session_log.input_tokens stores total_full_input
+    # (fresh + cache_read + cache_create). We derive fresh by subtracting both
+    # cache categories using stored fields:
+    #   fresh = input_tokens * (1 - cache_hit_rate) - cache_create_*
+    #   where input_tokens * (1 - cache_hit_rate) = fresh + cache_create
+    # cache_create_1h/5m are stored separately in session_log since v5.3.5.
+    # v5.4.9: per-session clamping for fresh_input. Aggregate-level subtraction
+    # lets sessions where cache_create_stored > (input_tokens * (1 - chr)) eat
+    # positive contributions from other sessions due to rounding drift between
+    # cache_hit_rate (float) and cache_create_* (int). Clamp at per-row level.
     row = conn.execute(
         """SELECT COUNT(*) as cnt,
                   COALESCE(SUM(duration_minutes), 0) as total_dur,
@@ -5960,10 +6019,19 @@ def _query_trends_db(conn, days):
                   COALESCE(SUM(output_tokens), 0) as total_out,
                   COALESCE(SUM(message_count), 0) as total_msgs,
                   COALESCE(SUM(
-                    input_tokens * (1.0 - COALESCE(cache_hit_rate, 0))
-                  ), 0) as total_billable_in
+                    COALESCE(cache_create_1h_tokens, 0)
+                    + COALESCE(cache_create_5m_tokens, 0)
+                  ), 0) as total_cache_create
            FROM session_log WHERE date >= ?""", (cutoff,)
     ).fetchone()
+
+    # Per-session fresh_input with non-negative clamp (see comment above).
+    fresh_rows = conn.execute(
+        """SELECT input_tokens * (1.0 - COALESCE(cache_hit_rate, 0)) as bp_c,
+                  COALESCE(cache_create_1h_tokens, 0) + COALESCE(cache_create_5m_tokens, 0) as cc
+           FROM session_log WHERE date >= ?""", (cutoff,)
+    ).fetchall()
+    _total_fresh_clamped = sum(max(0, (r["bp_c"] or 0) - (r["cc"] or 0)) for r in fresh_rows)
 
     session_count = row["cnt"]
     if session_count == 0:
@@ -5974,8 +6042,16 @@ def _query_trends_db(conn, days):
     total_input = row["total_in"]
     total_output = row["total_out"]
     total_messages = row["total_msgs"]
-    total_billable_input = int(row["total_billable_in"])
-    total_billable_tokens = total_billable_input + total_output
+    total_fresh_input = int(_total_fresh_clamped)
+    total_cache_create = int(row["total_cache_create"])
+    # Billable tokens for headline (matches our token coach methodology):
+    # fresh_input + cache_create + output.
+    # - Excludes cache_read (bills at 10% of fresh, would dominate numbers).
+    # - Includes cache_create (bills at 125% of fresh, real cost driver).
+    # Claude Code Desktop's "Total tokens" uses server-side aggregation we
+    # cannot reproduce exactly from local JSONL. Our number reflects what
+    # your Anthropic invoice bills for on full-rate input + output.
+    total_billable_tokens = total_fresh_input + total_cache_create + total_output
 
     # Skill usage
     skill_rows = conn.execute(
@@ -6138,12 +6214,13 @@ def _query_trends_db(conn, days):
     return {
         "period_days": days,
         "session_count": session_count,
-        "total_input_tokens": total_input,           # includes cache reads (raw)
+        "total_input_tokens": total_input,           # raw (includes cache reads + cache creates)
         "total_output_tokens": total_output,
-        "total_billable_input": total_billable_input,
-        "total_tokens": total_billable_tokens,       # v5.4.8: BILLABLE (Desktop-parity)
+        "total_fresh_input": total_fresh_input,      # v5.4.9: billable fresh input (Desktop-parity)
+        "total_cache_create": total_cache_create,    # separate (bills at 1.25x fresh)
+        "total_tokens": total_billable_tokens,       # v5.4.9: fresh_input + output (Desktop-parity)
         "total_tokens_raw": total_input + total_output,  # includes cache, for debugging
-        "total_messages": total_messages,            # v5.4.8: Desktop-parity headline
+        "total_messages": total_messages,            # Desktop-parity headline
         "avg_duration_minutes": round(total_duration / session_count, 1) if session_count else 0,
         "avg_input_tokens": round(total_input / session_count) if session_count else 0,
         "avg_output_tokens": round(total_output / session_count) if session_count else 0,
@@ -7597,7 +7674,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.4.8"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.4.9"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -14836,20 +14913,24 @@ def _run_ensure_health():
     # /token-optimizer, or the SessionEnd hook -- none of which fires
     # on /plugin update. Non-blocking: wrap in try/except so a bad
     # regen never breaks SessionStart.
+    #
+    # v5.4.9: dual marker check. Version string alone isn't enough --
+    # if a future release shares TOKEN_OPTIMIZER_VERSION with existing
+    # HTML but changes the data shape, users would silently see stale
+    # numbers. Also check for the shape marker "total_fresh_input" which
+    # was introduced in v5.4.9 as the headline billable source of truth.
     try:
         if DASHBOARD_PATH.exists():
+            # Read enough to contain __TOKEN_DATA__ (can be >32KB on large workspaces).
             head = ""
             try:
                 with open(str(DASHBOARD_PATH), "r", encoding="utf-8", errors="replace") as _f:
-                    head = _f.read(32768)
+                    head = _f.read(262144)  # 256KB
             except OSError:
                 head = ""
-            # The template injects `"version":"X.Y.Z"` as part of the
-            # __TOKEN_DATA__ blob near the top of the file. If the
-            # shipped version isn't there, the file predates this
-            # release -- regenerate.
-            marker = f'"version": "{TOKEN_OPTIMIZER_VERSION}"'
-            if marker not in head:
+            version_marker = f'"version": "{TOKEN_OPTIMIZER_VERSION}"'
+            shape_marker = '"total_fresh_input"'  # present in v5.4.9+ only
+            if version_marker not in head or shape_marker not in head:
                 try:
                     generate_standalone_dashboard(quiet=True, force=True)
                     print(f"  [Token Optimizer] Refreshed dashboard to v{TOKEN_OPTIMIZER_VERSION}")

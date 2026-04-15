@@ -2630,7 +2630,7 @@ var DB = (function() {
     // cache_read is tracked separately since it bills at ~10% of fresh input.
     html += '<div class="stat-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:var(--s-3)">' +
       '<div class="stat-card"><div class="stat-card-value">' + t.session_count + '</div><div class="stat-card-label">Sessions (' + t.period_days + 'd)</div></div>' +
-      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_tokens || 0) + '</div><div class="stat-card-label">Total Tokens</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Billable (input + output, excludes cache reads)</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_tokens || 0) + '</div><div class="stat-card-label">Billable Tokens</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Fresh input + cache writes + output (what your invoice bills at full rate).</div><div style="font-size:10px;color:var(--c-text-dim);margin-top:2px">fresh:' + fn(t.total_fresh_input || 0) + ' · cache-write:' + fn(t.total_cache_create || 0) + ' · out:' + fn(t.total_output_tokens || 0) + '</div></div>' +
       '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_messages || 0) + '</div><div class="stat-card-label">Messages</div></div>' +
       '</div>' +
       '<div class="stat-row" style="grid-template-columns:repeat(3,1fr)">' +
