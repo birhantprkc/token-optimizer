@@ -14802,6 +14802,32 @@ def _run_ensure_health():
     except Exception:
         pass
 
+    # Auto-regenerate daemon script when it's outdated (e.g. after plugin update).
+    # The daemon is a generated file outside the plugin, so it doesn't update
+    # automatically. We detect staleness by checking for a capability marker
+    # added in v5.4.3 (api/health endpoint). If missing, regenerate + restart.
+    try:
+        daemon_script = SNAPSHOT_DIR / "dashboard-server.py"
+        if daemon_script.exists():
+            daemon_src = daemon_script.read_text(encoding="utf-8", errors="replace")
+            if "api/health" not in daemon_src:
+                new_script = _generate_daemon_script()
+                try:
+                    daemon_script.write_text(new_script, encoding="utf-8")
+                    # Restart the daemon so the new script takes effect.
+                    import subprocess as _sp
+                    if platform.system() == "Darwin":
+                        uid = _sp.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
+                        _sp.run(
+                            ["launchctl", "kickstart", "-k", f"gui/{uid}/{DAEMON_LABEL}"],
+                            capture_output=True, timeout=5
+                        )
+                    print(f"  [Token Optimizer] Auto-updated daemon to v{TOKEN_OPTIMIZER_VERSION}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     # v5.2.0 migration notice for Windows users. v5.1.0 and earlier shipped
     # a hooks.json that used POSIX shell syntax, which silently failed on
     # Windows PowerShell -- the plugin installed but every hook was a
