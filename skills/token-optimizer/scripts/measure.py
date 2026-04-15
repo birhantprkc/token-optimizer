@@ -2496,9 +2496,9 @@ def _open_in_browser(filepath):
     system = platform.system()
     try:
         if system == "Darwin":
-            subprocess.run(["open", filepath], check=True)
+            subprocess.run(["open", filepath], check=True, timeout=10)
         elif system == "Linux":
-            subprocess.run(["xdg-open", filepath], check=True)
+            subprocess.run(["xdg-open", filepath], check=True, timeout=10)
         elif system == "Windows":
             os.startfile(filepath)
         else:
@@ -2527,9 +2527,9 @@ def _open_dashboard(fallback_filepath):
         system = platform.system()
         try:
             if system == "Darwin":
-                subprocess.run(["open", url], check=True)
+                subprocess.run(["open", url], check=True, timeout=10)
             elif system == "Linux":
-                subprocess.run(["xdg-open", url], check=True)
+                subprocess.run(["xdg-open", url], check=True, timeout=10)
             elif system == "Windows":
                 os.startfile(url)
             else:
@@ -6002,6 +6002,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
     conn.commit()
     # Ensure schema version is set (idempotent, also set in migration and rebuild)
     conn.execute("PRAGMA user_version = 3")
+    conn.commit()  # PRAGMA write must be committed explicitly (Lang Reviewer H2)
     conn.close()
 
     if not quiet:
@@ -6264,7 +6265,8 @@ def _query_trends_db(conn, days):
 
     daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
 
-    conn.close()
+    # conn.close() removed — caller (_collect_trends_from_db) owns the connection
+    # and closes it in its finally block (Lang Reviewer H3: double-close fix).
 
     # Pricing tier info for dashboard
     pricing_tier = _load_pricing_tier()
@@ -7733,7 +7735,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.4.12"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.4.13"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"

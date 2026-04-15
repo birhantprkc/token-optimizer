@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations  # PEP 604 union syntax compat for Python 3.9
 """Fleet Auditor: Cross-Platform Agent Token Waste Auditor.
 
 Detects agent systems (Claude Code, OpenClaw, NanoClaw, Hermes, OpenCode, IronClaw),

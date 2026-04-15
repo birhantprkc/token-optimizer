@@ -442,8 +442,14 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
 
     file_path = str(Path(raw_path).resolve())
     session_id = str(hook_input.get("agent_id") or hook_input.get("session_id") or "unknown")
-    offset = int(tool_input.get("offset", 0) or 0)
-    limit = int(tool_input.get("limit", 0) or 0)
+    try:
+        offset = int(tool_input.get("offset", 0) or 0)
+    except (ValueError, TypeError):
+        offset = 0
+    try:
+        limit = int(tool_input.get("limit", 0) or 0)
+    except (ValueError, TypeError):
+        limit = 0
     ext = Path(file_path).suffix.lower()
     language = detect_structure_language(file_path)
     save_hook_context_enabled = _hook_additional_context_saved()

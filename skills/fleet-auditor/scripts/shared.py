@@ -1,3 +1,4 @@
+from __future__ import annotations  # PEP 604 union syntax compat for Python 3.9
 """Shared utilities for Token Optimizer fleet and measurement tools.
 
 Extracted from measure.py to prevent duplicate maintenance of JSONL parsing,
