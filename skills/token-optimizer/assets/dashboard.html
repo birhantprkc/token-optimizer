@@ -2630,8 +2630,8 @@ var DB = (function() {
     // cache_read is tracked separately since it bills at ~10% of fresh input.
     html += '<div class="stat-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:var(--s-3)">' +
       '<div class="stat-card"><div class="stat-card-value">' + t.session_count + '</div><div class="stat-card-label">Sessions (' + t.period_days + 'd)</div></div>' +
-      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_tokens || 0) + '</div><div class="stat-card-label">Billable Tokens</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Fresh input + cache writes + output (what your invoice bills at full rate).</div><div style="font-size:10px;color:var(--c-text-dim);margin-top:2px">fresh:' + fn(t.total_fresh_input || 0) + ' · cache-write:' + fn(t.total_cache_create || 0) + ' · out:' + fn(t.total_output_tokens || 0) + '</div></div>' +
-      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_messages || 0) + '</div><div class="stat-card-label">Messages</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_tokens || 0) + '</div><div class="stat-card-label">Billable Tokens (' + t.period_days + 'd)</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Fresh input + cache writes + output (what your invoice bills at full rate).</div><div style="font-size:10px;color:var(--c-text-dim);margin-top:2px">fresh:' + fn(t.total_fresh_input || 0) + ' · cache-write:' + fn(t.total_cache_create || 0) + ' · out:' + fn(t.total_output_tokens || 0) + '</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_messages || 0) + '</div><div class="stat-card-label">Messages (' + t.period_days + 'd)</div></div>' +
       '</div>' +
       '<div class="stat-row" style="grid-template-columns:repeat(3,1fr)">' +
       '<div class="stat-card"><div class="stat-card-value">' + Math.round(t.avg_duration_minutes || 0) + 'm</div><div class="stat-card-label">Avg Duration</div></div>' +
@@ -2650,7 +2650,7 @@ var DB = (function() {
     for (var mk in modelMix) { modelTotal += modelMix[mk]; modelCount++; }
 
     if (modelTotal > 0) {
-      html += '<div class="card wide"><div class="card-header"><span>Model Mix</span><span class="label">Which models do the work</span></div>';
+      html += '<div class="card wide"><div class="card-header"><span>Model Mix (' + t.period_days + 'd)</span><span class="label">Which models do the work</span></div>';
       if (modelCount <= 1) {
         var singleModel = Object.keys(modelMix)[0] || 'unknown';
         html += '<p style="font-size:13px;color:var(--c-text-dim);font-family:var(--font-mono);margin-bottom:var(--s-2);">All sessions use ' + esc(singleModel) + '. Consider defaulting agents to haiku (5x cheaper) or sonnet for data-gathering tasks.</p>';

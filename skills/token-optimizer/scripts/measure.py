@@ -5747,6 +5747,18 @@ def _needs_model_daily_rebuild(conn):
         return False
 
 
+def _needs_streaming_dedup_rebuild(conn):
+    """v5.4.9: check if DB was built before the streaming-dedup + subagent
+    roll-up fix (schema version < 3). Pre-v5.4.9 sessions stored
+    output_tokens from the FIRST streaming chunk instead of the final
+    cumulative value, and excluded subagent output entirely."""
+    try:
+        ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        return ver < 3
+    except sqlite3.Error:
+        return False
+
+
 def _migrate_model_daily(conn, quiet=False):
     """One-time migration for fix #18: wipe model_daily so it rebuilds correctly.
 
@@ -5756,12 +5768,34 @@ def _migrate_model_daily(conn, quiet=False):
     """
     try:
         conn.execute("DELETE FROM model_daily")
-        conn.execute("PRAGMA user_version = 2")
+        conn.execute("PRAGMA user_version = 3")
         conn.commit()
         if not quiet:
             print("[Token Optimizer] Migrated model_daily for corrected model attribution (fix #18).")
             print("  New sessions will have correct model mix. For full historical accuracy:")
             print("  python3 measure.py collect --rebuild")
+    except sqlite3.Error:
+        pass
+
+
+def _migrate_streaming_dedup(conn, quiet=False):
+    """v5.4.9 one-time migration: wipe ALL aggregate tables so the next
+    session-end-flush rebuilds with streaming-aware MAX-dedup and subagent
+    roll-up. session_log stores per-session output_tokens which was wrong
+    pre-v5.4.9, so we wipe that too. Reparsing happens automatically on
+    next `collect` (triggered by SessionEnd hook or /token-dashboard).
+    """
+    try:
+        conn.execute("DELETE FROM session_log")
+        conn.execute("DELETE FROM daily_stats")
+        conn.execute("DELETE FROM model_daily")
+        conn.execute("DELETE FROM skill_daily")
+        conn.execute("DELETE FROM subagent_daily")
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+        if not quiet:
+            print("[Token Optimizer] Migrated to v5.4.9 streaming-aware token counting.")
+            print("  Old data cleared. Your next session will rebuild automatically.")
     except sqlite3.Error:
         pass
 
@@ -5779,11 +5813,19 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
     if _needs_model_daily_rebuild(conn):
         _migrate_model_daily(conn, quiet=quiet)
 
+    # v5.4.9 one-time migration: streaming-dedup + subagent roll-up changed
+    # how output_tokens and model_usage are computed. Pre-v5.4.9 data is wrong.
+    # Wipe everything so the loop below re-parses all JSONL files with the
+    # corrected logic. This makes `rebuild=True` implicit on first v5.4.9 run.
+    if _needs_streaming_dedup_rebuild(conn):
+        _migrate_streaming_dedup(conn, quiet=quiet)
+        rebuild = True  # force re-parse of all sessions
+
     if rebuild:
         if not quiet:
             print("[Token Optimizer] Rebuilding trends DB (re-parsing all sessions)...")
         # Mark version FIRST so a killed process doesn't re-trigger
-        conn.execute("PRAGMA user_version = 2")
+        conn.execute("PRAGMA user_version = 3")
         conn.execute("DELETE FROM session_log")
         conn.execute("DELETE FROM daily_stats")
         conn.execute("DELETE FROM model_daily")
@@ -5942,7 +5984,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
 
     conn.commit()
     # Ensure schema version is set (idempotent, also set in migration and rebuild)
-    conn.execute("PRAGMA user_version = 2")
+    conn.execute("PRAGMA user_version = 3")
     conn.close()
 
     if not quiet:
@@ -7674,7 +7716,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.4.9"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.4.10"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
