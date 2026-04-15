@@ -2889,9 +2889,12 @@ var DB = (function() {
         if (checked.length === 0) return;
         var names = [];
         checked.forEach(function(cb) { names.push(cb.dataset.skill); });
+        // Shell-quote skill names to prevent injection via malicious directory names.
+        // Single-quote each name, escaping embedded single quotes with '\''.
+        function shellQuote(s) { return "'" + s.replace(/'/g, "'\\''") + "'"; }
         var cmd = 'ARCHIVE_DIR="$HOME/.claude/_backups/skills-archived-$(date +%Y%m%d)" && mkdir -p "$ARCHIVE_DIR"';
         names.forEach(function(name) {
-          cmd += ' && mv "$HOME/.claude/skills/' + name + '" "$ARCHIVE_DIR/"';
+          cmd += ' && mv "$HOME/.claude/skills/"' + shellQuote(name) + ' "$ARCHIVE_DIR/"';
         });
         cmd += ' && echo "Archived ' + names.length + ' skill(s). Regenerate dashboard: python3 measure.py dashboard"';
 

@@ -2904,14 +2904,18 @@ def generate_dashboard(coord_path):
     # the daemon serves fresh audit content regardless of which path it
     # was configured to use. Same dual-path pattern as v5.4.7 daemon script.
     legacy_dashboard = CLAUDE_DIR / "_backups" / "token-optimizer" / "dashboard.html"
+    wrote_mirror = False
     for mirror_path in {DASHBOARD_PATH, legacy_dashboard}:
         try:
             mirror_path.parent.mkdir(parents=True, exist_ok=True)
             mirror_fd = os.open(str(mirror_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(mirror_fd, "w", encoding="utf-8") as f:
                 f.write(injected)
+            wrote_mirror = True
         except OSError:
             pass
+    if not wrote_mirror:
+        print("  [Warning] Could not mirror dashboard to daemon paths.")
 
     # Prefer the bookmarkable URL when the daemon is live; fall back to
     # the coord-path file://. This removes the v5.3.5-era UX bug where
@@ -7729,7 +7733,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.4.11"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.4.12"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -7801,7 +7805,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        allowed = origin if origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1") or origin.startswith("file://") else ""
+        self.send_header("Access-Control-Allow-Origin", allowed or "http://localhost:{DAEMON_PORT}")
         self.end_headers()
         self.wfile.write(body)
 
@@ -7822,7 +7828,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        # Restrict CORS to localhost origins only (file:// dashboard → daemon).
+        # Wildcard * would allow any website to POST toggle commands.
+        allowed = origin if origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1") or origin.startswith("file://") else ""
+        self.send_header("Access-Control-Allow-Origin", allowed or "http://localhost:{DAEMON_PORT}")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
@@ -7832,10 +7842,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         clean = self.path.lstrip("/").split("?")[0]
         if clean == "api/v5/toggle":
             length = int(self.headers.get("Content-Length", 0))
+            if length > 4096:
+                self._json_response(413, {{"ok": False, "msg": "payload too large"}})
+                return
             body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {{}}
             name = body.get("name", "")
             enabled = bool(body.get("enabled", False))
-            import subprocess, sys
+            # Validate name: alphanumeric + hyphens/underscores only.
+            # Prevents argument injection via subprocess argv.
+            import re as _re, subprocess, sys
+            if not name or not _re.match(r'^[a-zA-Z0-9_-]{{1,64}}$', name):
+                self._json_response(400, {{"ok": False, "msg": "invalid feature name"}})
+                return
             action = "enable" if enabled else "disable"
             result = subprocess.run(
                 [sys.executable, {measure_py_literal}, "v5", action, name],
@@ -7857,7 +7875,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 if not os.path.exists(DASHBOARD):
     sys.exit(1)
 
-HOST = os.environ.get("TOKEN_OPTIMIZER_HOST", "127.0.0.1")
+# Restrict to localhost only. TOKEN_OPTIMIZER_HOST is accepted for IPv4/IPv6 localhost
+# variants but never 0.0.0.0 or other interfaces (security: exposes toggle API to LAN).
+_host_raw = os.environ.get("TOKEN_OPTIMIZER_HOST", "127.0.0.1")
+HOST = _host_raw if _host_raw in ("127.0.0.1", "::1", "localhost") else "127.0.0.1"
 with socketserver.TCPServer((HOST, PORT), Handler) as httpd:
     httpd.serve_forever()
 '''
@@ -7865,9 +7886,10 @@ with socketserver.TCPServer((HOST, PORT), Handler) as httpd:
 
 def _generate_plist():
     """Generate the launchd plist XML for the dashboard daemon."""
-    daemon_script = SNAPSHOT_DIR / "dashboard-server.py"
-    log_out = DAEMON_LOG_DIR / "stdout.log"
-    log_err = DAEMON_LOG_DIR / "stderr.log"
+    from xml.sax.saxutils import escape as _xml_escape
+    daemon_script = _xml_escape(str(SNAPSHOT_DIR / "dashboard-server.py"))
+    log_out = _xml_escape(str(DAEMON_LOG_DIR / "stdout.log"))
+    log_err = _xml_escape(str(DAEMON_LOG_DIR / "stderr.log"))
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
