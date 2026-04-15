@@ -3475,7 +3475,7 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
     claude_md_health = None
     try:
         claude_tokens = 0
-        context_window = components.get("context_window", 200000)
+        context_window = components.get("context_window") or detect_context_window()[0]
         for key in components:
             if key.startswith("claude_md") and components[key].get("exists"):
                 claude_tokens += components[key].get("tokens", 0)
@@ -4038,7 +4038,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
     skills = components.get("skills", {})
     skill_count = skills.get("count", 0)
     skill_tokens = skills.get("tokens", 0)
-    context_window = components.get("context_window", 200000)
+    # context_window already set above via detect_context_window() — don't overwrite with stale snapshot value
     skill_pct = skill_tokens / context_window * 100 if context_window else 0
     unused_skills = trends.get("skills", {}).get("never_used", []) if trends else []
     unused_count = len(unused_skills) if unused_skills else 0
@@ -7618,9 +7618,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _json_response(self, code, data):
+        import json
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _serve_or_redirect(self, method):
         if self._is_identity_request():
             self._respond_identity()
+            return
+        clean = self.path.lstrip("/").split("?")[0]
+        if clean == "api/health":
+            self._json_response(200, {{"ok": True, "server": "token-optimizer-daemon"}})
             return
         if self._is_dashboard_request():
             # Rewrite to the actual filename for SimpleHTTPRequestHandler
@@ -7628,6 +7642,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             getattr(super(), method)()
         else:
             self.send_error(403, "Forbidden")
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_POST(self):
+        import json
+        clean = self.path.lstrip("/").split("?")[0]
+        if clean == "api/v5/toggle":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {{}}
+            name = body.get("name", "")
+            enabled = bool(body.get("enabled", False))
+            import subprocess, sys
+            action = "enable" if enabled else "disable"
+            result = subprocess.run(
+                [sys.executable, "{Path(__file__).resolve()}", "v5", action, name],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                self._json_response(200, {{"ok": True, "msg": result.stdout.strip()}})
+            else:
+                self._json_response(500, {{"ok": False, "msg": result.stderr.strip()}})
+            return
+        self.send_error(403, "Forbidden")
 
     def do_GET(self):
         self._serve_or_redirect("do_GET")

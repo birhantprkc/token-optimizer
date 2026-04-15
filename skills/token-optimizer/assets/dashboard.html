@@ -3797,7 +3797,7 @@ var DB = (function() {
 
         if (row) row.style.opacity = '0.5';
 
-        fetch('/api/v5/toggle', {
+        fetch((window.__TOKEN_API_BASE || '') + '/api/v5/toggle', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: fname, enabled: newState })
@@ -3851,7 +3851,7 @@ var DB = (function() {
 
           if (row) row.style.opacity = '0.4';
 
-          fetch(endpoint, {
+          fetch((window.__TOKEN_API_BASE || '') + endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: mName })
@@ -4356,7 +4356,7 @@ var DB = (function() {
             loadingCell.textContent = 'Loading per-turn breakdown...';
             loadingRow.appendChild(loadingCell);
             sessionRow.after(loadingRow);
-            fetch('/api/session-turns', {
+            fetch((window.__TOKEN_API_BASE || '') + '/api/session-turns', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ jsonl_path: sessionPath })
@@ -4735,16 +4735,27 @@ document.addEventListener('DOMContentLoaded', function() {
 
   function startApp() { DB.init(data); }
 
-  // Probe for our custom API server before init
-  if (window.location.protocol.indexOf('http') === 0 && typeof fetch === 'function') {
+  // Probe for our custom API server before init.
+  // When served from the daemon (http://localhost:*), a relative /api/health works.
+  // When viewed as a file:// URL, relative paths fail — probe the daemon directly.
+  var DAEMON_URL = 'http://localhost:24842';
+  function _setApiLive(baseUrl) {
+    window.__TOKEN_API_LIVE = true;
+    window.__TOKEN_API_BASE = baseUrl || '';
+  }
+  if (typeof fetch === 'function') {
+    var isHttp = window.location.protocol.indexOf('http') === 0;
+    var isFile = window.location.protocol === 'file:';
+    var probe = isHttp ? '/api/health' : (DAEMON_URL + '/api/health');
     try {
-      fetch('/api/health', { method: 'GET' })
+      fetch(probe, { method: 'GET' })
         .then(function(r) { return r.json(); })
-        .then(function(d) { if (d && d.ok) window.__TOKEN_API_LIVE = true; })
+        .then(function(d) {
+          if (d && d.ok) _setApiLive(isFile ? DAEMON_URL : '');
+        })
         .catch(function() {})
         .finally(startApp);
     } catch(e) {
-      // fetch threw synchronously (CSP, network block, etc.)
       startApp();
     }
   } else {
