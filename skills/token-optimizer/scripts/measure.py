@@ -4853,7 +4853,8 @@ def _parse_session_jsonl(filepath):
     total_cache_create = 0
     total_cache_create_1h = 0
     total_cache_create_5m = 0
-    model_usage = {}
+    model_usage = {}              # v5.4.8: billable tokens (fresh_input + cache_create + output)
+    model_usage_breakdown = {}    # v5.4.8: per-model {fresh_input, cache_read, cache_create, output}
     version = None
     slug = None
     topic = None
@@ -4976,9 +4977,23 @@ def _parse_session_jsonl(filepath):
                             except (ValueError, TypeError):
                                 pass
 
-                        # Model usage: count all input types + output
+                        # v5.4.8: Model usage is BILLABLE tokens only
+                        # (fresh_input + cache_create + output). cache_read is
+                        # tracked separately since it bills at ~10% of fresh
+                        # and would otherwise inflate totals 5-10x on long
+                        # sessions with heavy context reuse. Matches official
+                        # Claude Code Desktop dashboard methodology.
                         model = msg.get("model", "unknown")
-                        model_usage[model] = model_usage.get(model, 0) + inp_tok + cr + cc + out_tok
+                        billable = inp_tok + cc + out_tok  # exclude cache_read
+                        model_usage[model] = model_usage.get(model, 0) + billable
+                        bd = model_usage_breakdown.setdefault(
+                            model,
+                            {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "output": 0},
+                        )
+                        bd["fresh_input"] += inp_tok
+                        bd["cache_read"] += cr
+                        bd["cache_create"] += cc
+                        bd["output"] += out_tok
 
     except (PermissionError, OSError):
         return None
@@ -5017,6 +5032,7 @@ def _parse_session_jsonl(filepath):
         "max_call_gap_seconds": gap_stats["max"],
         "p95_call_gap_seconds": gap_stats["p95"],
         "model_usage": model_usage,
+        "model_usage_breakdown": model_usage_breakdown,
         "skills_used": skills_used,
         "subagents_used": subagents_used,
         "tool_calls": tool_calls,
@@ -5931,11 +5947,21 @@ def _query_trends_db(conn, days):
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
     # Basic stats
+    # v5.4.8: Billable-token computation matches Claude Code Desktop methodology.
+    # session_log.input_tokens stores total_full_input (fresh + cache_read + cache_create),
+    # which inflates "Total tokens" ~6-10x on long sessions with heavy context reuse.
+    # Billable excludes cache_read since it bills at 10% of fresh rate.
+    # Formula: billable_input = input_tokens * (1 - cache_hit_rate).
+    # Output is always billable at full rate.
     row = conn.execute(
         """SELECT COUNT(*) as cnt,
                   COALESCE(SUM(duration_minutes), 0) as total_dur,
                   COALESCE(SUM(input_tokens), 0) as total_in,
-                  COALESCE(SUM(output_tokens), 0) as total_out
+                  COALESCE(SUM(output_tokens), 0) as total_out,
+                  COALESCE(SUM(message_count), 0) as total_msgs,
+                  COALESCE(SUM(
+                    input_tokens * (1.0 - COALESCE(cache_hit_rate, 0))
+                  ), 0) as total_billable_in
            FROM session_log WHERE date >= ?""", (cutoff,)
     ).fetchone()
 
@@ -5947,6 +5973,9 @@ def _query_trends_db(conn, days):
     total_duration = row["total_dur"]
     total_input = row["total_in"]
     total_output = row["total_out"]
+    total_messages = row["total_msgs"]
+    total_billable_input = int(row["total_billable_in"])
+    total_billable_tokens = total_billable_input + total_output
 
     # Skill usage
     skill_rows = conn.execute(
@@ -6109,6 +6138,12 @@ def _query_trends_db(conn, days):
     return {
         "period_days": days,
         "session_count": session_count,
+        "total_input_tokens": total_input,           # includes cache reads (raw)
+        "total_output_tokens": total_output,
+        "total_billable_input": total_billable_input,
+        "total_tokens": total_billable_tokens,       # v5.4.8: BILLABLE (Desktop-parity)
+        "total_tokens_raw": total_input + total_output,  # includes cache, for debugging
+        "total_messages": total_messages,            # v5.4.8: Desktop-parity headline
         "avg_duration_minutes": round(total_duration / session_count, 1) if session_count else 0,
         "avg_input_tokens": round(total_input / session_count) if session_count else 0,
         "avg_output_tokens": round(total_output / session_count) if session_count else 0,
@@ -7562,7 +7597,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.4.7"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.4.8"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -7571,7 +7606,16 @@ DAEMON_LOG_DIR = SNAPSHOT_DIR / "logs"
 
 
 def _generate_daemon_script():
-    """Generate a minimal Python HTTP server script for the dashboard daemon."""
+    """Generate a minimal Python HTTP server script for the dashboard daemon.
+
+    v5.4.8: Paths are interpolated via repr() to produce properly escaped
+    Python string literals. Without this, Windows paths containing backslash
+    escape sequences (\\U, \\N, \\x, \\t) would raise SyntaxError when the
+    generated daemon starts. Usernames like 'Nadya', 'Username', 'xavier'
+    reliably triggered this.
+    """
+    dashboard_literal = repr(str(DASHBOARD_PATH))
+    measure_py_literal = repr(str(Path(__file__).resolve()))
     return f'''#!/usr/bin/env python3
 """Token Optimizer dashboard server daemon.
 Auto-generated by measure.py v{TOKEN_OPTIMIZER_VERSION}. Serves the dashboard HTML on localhost:{DAEMON_PORT}.
@@ -7583,7 +7627,7 @@ import os
 import socketserver
 import sys
 
-DASHBOARD = "{DASHBOARD_PATH}"
+DASHBOARD = {dashboard_literal}
 PORT = {DAEMON_PORT}
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -7662,7 +7706,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             import subprocess, sys
             action = "enable" if enabled else "disable"
             result = subprocess.run(
-                [sys.executable, "{Path(__file__).resolve()}", "v5", action, name],
+                [sys.executable, {measure_py_literal}, "v5", action, name],
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode == 0:
@@ -7994,7 +8038,18 @@ def setup_all_hooks(dry_run=False, verbose=False):
 
     # SEC-001 fix: reject plugin_root with shell metacharacters that would break
     # out of single-quoted strings in hook templates or inject commands.
-    _DANGEROUS_PATH_CHARS = set("'\"`$\\;&|<>\n\r\x00")
+    # v5.4.8: backslash is excluded on Windows since it's the legitimate path
+    # separator (C:\Users\...\.claude\plugins\...). The remaining chars still
+    # block shell-injection vectors on both platforms. UNC paths (\\server\...)
+    # are rejected explicitly to prevent SMB auth leak via hook execution.
+    _DANGEROUS_PATH_CHARS = set("'\"`$;&|<>\n\r\x00")
+    if platform.system() != "Windows":
+        _DANGEROUS_PATH_CHARS.add("\\")
+    elif plugin_root_str.startswith("\\\\") or plugin_root_str.startswith("//"):
+        msg = f"Plugin root is a UNC path, refusing to install hooks: {plugin_root_str!r}"
+        if verbose:
+            print(f"  [setup-all-hooks] {msg}")
+        return {"added": 0, "skipped": 0, "plugin_root": plugin_root_str, "error": msg}
     if any(c in plugin_root_str for c in _DANGEROUS_PATH_CHARS):
         msg = f"Plugin root contains unsafe characters: {plugin_root_str!r}"
         if verbose:
@@ -14853,10 +14908,17 @@ def _run_ensure_health():
                         capture_output=True, timeout=10
                     )
                 elif _sys == "Windows":
+                    # v5.4.8: /End is async, /Run issued too soon races on
+                    # port 24842. Fixed sleep of 2s lets /End settle.
+                    # Locale-independent: avoids parsing schtasks text output
+                    # which is localized on non-EN Windows (breaks polling).
+                    # /Run errors ("Task already running") are swallowed.
                     _sp.run(
                         ["schtasks", "/End", "/TN", WINDOWS_TASK_NAME],
                         capture_output=True, timeout=5
                     )
+                    import time as _t
+                    _t.sleep(2)
                     _sp.run(
                         ["schtasks", "/Run", "/TN", WINDOWS_TASK_NAME],
                         capture_output=True, timeout=5

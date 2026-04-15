@@ -2625,11 +2625,17 @@ var DB = (function() {
       .filter(function(label) { return !!label; })
       .join(' | ');
 
-    // Hero stat cards
-    html += '<div class="stat-row" style="grid-template-columns:repeat(4,1fr)">' +
+    // Hero stat cards — v5.4.8 added Total Tokens + Messages for Desktop parity.
+    // Billable tokens (fresh_input + output + cache_create) match Desktop methodology.
+    // cache_read is tracked separately since it bills at ~10% of fresh input.
+    html += '<div class="stat-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:var(--s-3)">' +
       '<div class="stat-card"><div class="stat-card-value">' + t.session_count + '</div><div class="stat-card-label">Sessions (' + t.period_days + 'd)</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_tokens || 0) + '</div><div class="stat-card-label">Total Tokens</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Billable (input + output, excludes cache reads)</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_messages || 0) + '</div><div class="stat-card-label">Messages</div></div>' +
+      '</div>' +
+      '<div class="stat-row" style="grid-template-columns:repeat(3,1fr)">' +
       '<div class="stat-card"><div class="stat-card-value">' + Math.round(t.avg_duration_minutes || 0) + 'm</div><div class="stat-card-label">Avg Duration</div></div>' +
-      '<div class="stat-card"><div class="stat-card-value">' + fn(t.avg_input_tokens + t.avg_output_tokens) + '</div><div class="stat-card-label">Avg Tokens/Session</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value">' + fn((t.avg_input_tokens || 0) + (t.avg_output_tokens || 0)) + '</div><div class="stat-card-label">Avg Tokens/Session</div></div>' +
       '<div class="stat-card"><div class="stat-card-value" style="color:#22c55e">' + avgCacheHit + (avgCacheHit !== 'N/A' ? '%' : '') + '</div><div class="stat-card-label">Avg Cache Hit Rate</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Cache writes: ' + esc(globalTtlMix) + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + esc(globalTtlSessionLabel) + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + esc(ttlPeriodSummary || 'TTL period summary unavailable') + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Above 90% is normal for longer sessions. It means prompt caching is working well.</div></div>' +
       '</div>';
 

@@ -51,11 +51,23 @@ Then in Claude Code: `/token-optimizer`
 
 > **Please enable auto-update after installing.** Claude Code ships third-party marketplaces with auto-update **off by default**, and plugin authors cannot change that default. So you won't get bug fixes automatically unless you turn it on. In Claude Code: `/plugin` → **Marketplaces** tab → select `alexgreensh-token-optimizer` → **Enable auto-update**. One-time, 10 seconds, and you'll never miss a fix again. Token Optimizer also prints a one-time reminder on your first SessionStart so you don't forget.
 
+### Seeing `Unknown skill: plugin`?
+
+That means your Claude Code is out of date. The `/plugin` command was added in a recent Claude Code release. Update first:
+
+- **Homebrew**: `brew upgrade claude-code`
+- **npm**: `npm update -g @anthropic-ai/claude-code`
+- **Native installer**: re-run the install command from [claude.com/product/claude-code](https://claude.com/product/claude-code)
+
+Then restart Claude Code and re-run the two `/plugin` commands above.
+
 ### Windows users: read this first
 
 The plugin install above is the **only** path you should use on Windows. Do **not** also run the `install.sh` script described below — that's a bash installer for macOS/Linux/WSL, and combining the two creates an `EBUSY: resource busy or locked` error because Git Bash holds Windows file handles open while the plugin system is trying to clone.
 
-If you've already hit that error:
+**Repo size note**: our repo is ~3 MB (218 files, ~2,700 git objects). If your `/plugin marketplace add` attempt seems to be downloading gigabytes, it's not us — cancel and check whether Claude Code is cloning a different URL or network state. You can verify by cloning manually: `git clone --bare https://github.com/alexgreensh/token-optimizer.git` should finish in under a second and produce a ~2.6 MB directory.
+
+If you've already hit the EBUSY error:
 
 1. Close every Claude Code window and Git Bash terminal.
 2. Open Task Manager and end any lingering `git.exe` processes.
@@ -64,6 +76,8 @@ If you've already hit that error:
    - `C:\Users\<you>\.claude\plugins\marketplaces\alexgreensh-token-optimizer`
 4. If Windows still refuses to delete (file in use), reboot, then delete.
 5. Open a fresh Claude Code window and run the two `/plugin` commands above.
+
+**Manual ZIP fallback** (if plugin install repeatedly fails): download [the repo ZIP](https://github.com/alexgreensh/token-optimizer/archive/refs/heads/main.zip) (~800 KB), extract to `C:\Users\<you>\.claude\token-optimizer\`, then run `python measure.py setup-quality-bar` from that directory. Note: on Windows the command is `python`, not `python3`.
 
 ### macOS / Linux only: script install (alternative)
 
