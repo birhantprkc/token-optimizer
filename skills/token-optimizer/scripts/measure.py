@@ -58,7 +58,7 @@ Usage:
 Snapshots are saved to SNAPSHOT_DIR (default: ~/.claude/_backups/token-optimizer/)
 
 Copyright (C) 2026 Alex Greenshpun
-SPDX-License-Identifier: AGPL-3.0-only
+SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """
 
 import hashlib
@@ -7742,7 +7742,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.4.16"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.4.17"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"

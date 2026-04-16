@@ -14,7 +14,7 @@
 # Idempotent: safe to run multiple times.
 #
 # Copyright (C) 2026 Alex Greenshpun
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 set -euo pipefail
 
