@@ -2144,10 +2144,122 @@ var DB = (function() {
     document.getElementById('nav-date').textContent = ts.slice(0,10);
   }
 
+  // v5.4.18: v5 feature metadata mirrors V5_FEATURES in measure.py. Used as a
+  // client-side fallback so the Overview pitch card and Manage toggles render
+  // even when the dashboard has no session data yet (fresh install, no SessionEnd
+  // hook has fired). v5 state is pure config, independent of session metrics.
+  var V5_FEATURES_FALLBACK = {
+    quality_nudges: {
+      default: true, recommended: true, impact_pct: 5, risk_level: 'none',
+      label: 'Quality Nudges',
+      what: "Warns you when your context quality drops suddenly (e.g., from 85 to 60).",
+      value: "Catches context rot early so you can /compact at the right moment. Prevents silent quality loss that leads to bad decisions.",
+      how: "Shows a one-line message like '[Token Optimizer] Quality dropped to 58. Consider /compact.' Fires at most 3 times per session with a 5-minute cooldown.",
+      risk: "None. Only adds a short warning to context, never removes anything.",
+      env_var: 'TOKEN_OPTIMIZER_QUALITY_NUDGES'
+    },
+    loop_detection: {
+      default: true, recommended: true, impact_pct: 8, risk_level: 'none',
+      label: 'Loop Detection',
+      what: "Detects when the AI is stuck retrying the same thing and warns you.",
+      value: "Catches loops before they burn through tokens. A single caught loop typically saves 10-50K tokens.",
+      how: "Watches for 3+ similar messages in the last 4 turns, or 3+ identical failing tool calls. Fires at most 2 times per session.",
+      risk: "None. Only adds a short warning to context, never removes anything.",
+      env_var: 'TOKEN_OPTIMIZER_LOOP_DETECTION'
+    },
+    delta_mode: {
+      default: true, recommended: true, impact_pct: 20, risk_level: 'low',
+      label: 'Delta Mode (Smart Re-reads)',
+      what: "When the AI re-reads a file after editing it, shows only what changed instead of the whole file.",
+      value: "This is the biggest single win. Typical sessions re-read the same file 2-5 times. Delta mode sends only what changed.",
+      how: "Stores file content (up to 50KB per file) in a local cache. On re-read, computes a compact diff. Falls back to full re-read if the diff is too large or the file is too big.",
+      risk: "Low. If the AI needed the full file to understand the change in context, the diff alone might not be enough. Falls back to full re-read on large changes (>1500 chars) and big files (>2000 lines).",
+      env_var: 'TOKEN_OPTIMIZER_READ_CACHE_DELTA'
+    },
+    structure_map_beta: {
+      default: false, recommended: false, impact_pct: 0, risk_level: 'none',
+      label: 'Structure Map Beta (Local Measurement)',
+      what: "Tracks when the structure map feature fires on your machine so YOU can measure if it's helping.",
+      value: "Writes local-only SQLite rows so you can check `measure.py compression-stats` later. Nothing sent anywhere. Helps you prove (or disprove) whether structure maps help on your code-heavy sessions.",
+      how: "Writes one row to your local SQLite (~/.claude/_backups/token-optimizer/trends.db) when a code file is read multiple times and gets replaced with a function/class summary. Zero network calls. You can sqlite3 the file or delete it anytime.",
+      risk: "None. Local SQLite writes only, no external connections. Ever.",
+      env_var: 'TOKEN_OPTIMIZER_STRUCTURE_MAP'
+    },
+    bash_compress: {
+      default: false, recommended: false, impact_pct: 10, risk_level: 'moderate',
+      label: 'Bash Output Compression',
+      what: "Rewrites 'git status', 'pytest', 'npm install' etc. to return compressed summaries instead of verbose output.",
+      value: "Strips hundreds of lines of test/build/git output down to just the essentials. Best for sessions with lots of CLI commands.",
+      how: "A PreToolUse hook intercepts safe read-only commands and routes them through a compression wrapper. Only whitelisted commands (git status/log/diff, pytest, jest, npm install, ls) are touched. Compound commands (anything with &&, ;, |, $()) are never touched.",
+      risk: "Moderate. Compression is lossy by design: 'git diff' truncates to 30 lines on large diffs, 'pytest' shows pass/fail counts but strips individual passing tests, 'git log' drops merge commit details. For routine checks this is fine. For careful diff review or debugging specific test failures, it could hide information. OFF by default -- opt-in only.",
+      env_var: 'TOKEN_OPTIMIZER_BASH_COMPRESS'
+    }
+  };
+
+  // Synthesize a v5_recommendation payload from defaults when the dashboard
+  // has no real data (pre-SessionEnd). Mirrors _get_v5_savings_recommendation()
+  // in measure.py so the Overview card pitches the same numbers a real audit would.
+  function synthesizeV5Recommendation() {
+    var disabled = [], enabled = [], totalImpact = 0;
+    Object.keys(V5_FEATURES_FALLBACK).forEach(function(name) {
+      var f = V5_FEATURES_FALLBACK[name];
+      if (f.default) {
+        enabled.push({ name: name, label: f.label });
+      } else {
+        disabled.push({
+          name: name, label: f.label, impact_pct: f.impact_pct,
+          value: f.value, risk_level: f.risk_level, recommended: f.recommended
+        });
+        if (f.recommended) totalImpact += f.impact_pct;
+      }
+    });
+    var additional = disabled
+      .filter(function(f) { return !f.recommended && (f.risk_level === 'none' || f.risk_level === 'low'); })
+      .reduce(function(s, f) { return s + f.impact_pct; }, 0);
+    var moderate = disabled
+      .filter(function(f) { return !f.recommended && f.risk_level === 'moderate'; })
+      .reduce(function(s, f) { return s + f.impact_pct; }, 0);
+    var aggressive = totalImpact + additional + moderate;
+    var recText;
+    if (totalImpact > 0) {
+      recText = 'Turn on ' + disabled.filter(function(f){return f.recommended;}).length +
+        ' more recommended feature(s) to save up to ' + totalImpact + '% more tokens per session';
+    } else if (aggressive > 0) {
+      recText = 'All recommended features are on. Enable opt-in features for up to ' + aggressive + '% more savings (with trade-offs)';
+    } else {
+      recText = 'All v5 features enabled. You\u0027re running at maximum token efficiency.';
+    }
+    return {
+      total_disabled_impact_pct: totalImpact,
+      aggressive_impact_pct: aggressive,
+      disabled_features: disabled,
+      enabled_features: enabled,
+      recommendation: recText,
+      has_savings_available: totalImpact > 0 || aggressive > 0,
+      synthesized: true
+    };
+  }
+
+  // Synthesize the v5_features shape the Manage tab consumes. Matches
+  // _get_v5_feature_status() in measure.py so toggles render correctly.
+  function synthesizeV5FeatureStatus() {
+    var status = {};
+    Object.keys(V5_FEATURES_FALLBACK).forEach(function(name) {
+      var f = V5_FEATURES_FALLBACK[name];
+      status[name] = {
+        label: f.label, what: f.what, value: f.value, impact_pct: f.impact_pct,
+        how: f.how, risk: f.risk, risk_level: f.risk_level,
+        recommended: f.recommended, enabled: f.default,
+        source: 'default', env_var: f.env_var, config_key: 'v5_' + name
+      };
+    });
+    return status;
+  }
+
   function renderOverview() {
     var tot = data.snapshot.totals;
     var total = tot.estimated_total, ctrl = tot.controllable_tokens;
-    var ctxWindow = (data.snapshot.context_window) || 200000;
+    var ctxWindow = (data.snapshot.context_window) || 1000000;
     var ctxLabel = (ctxWindow >= 1000000) ? (ctxWindow / 1000000) + 'M' : (ctxWindow / 1000) + 'K';
     var pct = ((total / ctxWindow) * 100).toFixed(1);
 
@@ -2181,8 +2293,11 @@ var DB = (function() {
     document.getElementById('hero-sub').innerHTML =
       'tokens loaded before you type a word (' + ctxLabel + ' window). You start every session with only <span>' + fn(remaining) + '</span> left for actual conversation.';
 
-    // v5 Active Compression recommendation card
-    var v5rec = data.v5_recommendation;
+    // v5 Active Compression recommendation card. v5.4.18: fall back to
+    // client-side synthesis when the dashboard has no real data yet so a
+    // fresh install advertises these features before they run their first
+    // SessionEnd. The pitch card is pure config, not session metrics.
+    var v5rec = data.v5_recommendation || synthesizeV5Recommendation();
     var v5card = document.getElementById('v5-recommendation-card');
     if (v5card && v5rec) {
       var disabled = v5rec.disabled_features || [];
@@ -2288,7 +2403,7 @@ var DB = (function() {
     vals.push(c.mcp_tools ? c.mcp_tools.tokens : 0);
     vals.push(c.core_system ? c.core_system.tokens : 0);
     // Log-scale bars: visible at all sizes, preserves ordering
-    var ctxWindow = (data.snapshot.context_window) || 200000;
+    var ctxWindow = (data.snapshot.context_window) || 1000000;
     function logBar(tokens) {
       if (tokens <= 0) return 0;
       var logVal = Math.log10(Math.max(tokens, 1));
@@ -3260,7 +3375,7 @@ var DB = (function() {
       '<div class="card"><div class="card-header"><span>Startup Overhead</span></div>' +
       '<div style="font-size:11px;color:var(--c-text-dim);padding:0 0 4px 0;">Tokens loaded into every API call before you type. Includes CLAUDE.md, skills, MCP tools, and system prompt.</div>' +
       '<div class="mini-stat">' + fn(snap.total_overhead || 0) + '</div>' +
-      '<div class="label">' + (snap.overhead_pct || 0) + '% of ' + ((snap.context_window || data.snapshot.context_window || 200000) >= 1000000 ? ((snap.context_window || data.snapshot.context_window || 200000) / 1000000) + 'M' : ((snap.context_window || data.snapshot.context_window || 200000) / 1000) + 'K') + '</div></div>' +
+      '<div class="label">' + (snap.overhead_pct || 0) + '% of ' + ((snap.context_window || data.snapshot.context_window || 1000000) >= 1000000 ? ((snap.context_window || data.snapshot.context_window || 1000000) / 1000000) + 'M' : ((snap.context_window || data.snapshot.context_window || 1000000) / 1000) + 'K') + '</div></div>' +
       '<div class="card"><div class="card-header"><span>Usable Context</span></div>' +
       '<div style="font-size:11px;color:var(--c-text-dim);padding:0 0 4px 0;">Context window minus startup overhead and ~33K autocompact buffer. This is how much room you actually have for conversation.</div>' +
       '<div class="mini-stat" style="color:var(--c-accent-cyan);">~' + fn(snap.usable_tokens || 0) + '</div>' +
@@ -3572,6 +3687,15 @@ var DB = (function() {
     var el = document.getElementById('view-manage');
     if (!el) return;
     var m = data.manage;
+    // v5.4.18: v5 feature toggles are pure config state, so render them
+    // regardless of whether session data exists. Skills/hooks/MCP sections
+    // still require real audit data below.
+    var noSessionData = !m;
+    var v5Synthesized = !m || !m.v5_features;
+    if (v5Synthesized) {
+      m = m || {};
+      m.v5_features = synthesizeV5FeatureStatus();
+    }
 
     var html = '<div class="section-header">' +
       '<div class="label">Control Panel</div>' +
@@ -3583,10 +3707,10 @@ var DB = (function() {
       '</p>' +
       '</div>';
 
-    if (!m) {
-      html += '<div class="empty-state">No management data available. Regenerate dashboard: python3 measure.py dashboard</div>';
-      el.innerHTML = html;
-      return;
+    if (v5Synthesized) {
+      html += '<div style="padding:12px var(--s-3);margin-bottom:var(--s-2);background:var(--c-bg);border-left:3px solid var(--c-accent-cyan);border-radius:4px;font-size:14px;color:var(--c-text-dim);">' +
+        'Showing default feature state. Run <code style="background:var(--c-bg);padding:2px 5px;border-radius:4px;">/token-optimizer</code> once to reflect your actual config and enable live toggles.' +
+        '</div>';
     }
 
     // --- v5 FEATURES SECTION (Active Compression) - SHOWS FIRST ---
@@ -3806,11 +3930,7 @@ var DB = (function() {
 
         if (row) row.style.opacity = '0.5';
 
-        fetch((window.__TOKEN_API_BASE || '') + '/api/v5/toggle', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: fname, enabled: newState })
-        })
+        window.__TOKEN_API_POST('/api/v5/toggle', { name: fname, enabled: newState })
         .then(function(r) { return r.json(); })
         .then(function(resp) {
           if (row) row.style.opacity = '1';
@@ -3860,11 +3980,7 @@ var DB = (function() {
 
           if (row) row.style.opacity = '0.4';
 
-          fetch((window.__TOKEN_API_BASE || '') + endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: mName })
-          })
+          window.__TOKEN_API_POST(endpoint, { name: mName })
           .then(function(r) { return r.json(); })
           .then(function(resp) {
             if (resp.ok && resp.manage) {
@@ -4365,11 +4481,7 @@ var DB = (function() {
             loadingCell.textContent = 'Loading per-turn breakdown...';
             loadingRow.appendChild(loadingCell);
             sessionRow.after(loadingRow);
-            fetch((window.__TOKEN_API_BASE || '') + '/api/session-turns', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ jsonl_path: sessionPath })
-            })
+            window.__TOKEN_API_POST('/api/session-turns', { jsonl_path: sessionPath })
               .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('Failed to load per-turn breakdown')); })
               .then(function(payload) {
                 var fetchedTurns = (payload && payload.turns) || [];
@@ -4752,6 +4864,46 @@ document.addEventListener('DOMContentLoaded', function() {
     window.__TOKEN_API_LIVE = true;
     window.__TOKEN_API_BASE = baseUrl || '';
   }
+  // v5.4.19: helper that all mutating API calls must use. Adds the per-install
+  // CSRF token header so the server accepts the request. Without this, POSTs
+  // are rejected with 403 -- that's the whole point of the M-4 hardening.
+  //
+  // Torture-room M-1 (2026-04-16): surface auth errors as a distinct message
+  // rather than letting callers hit r.json() on a text body ("Forbidden:
+  // invalid token") and seeing a confusing JSON parse error. The helper
+  // intercepts 403 responses and rejects with an Error whose .authError flag
+  // lets call sites show a reload-page hint.
+  window.__TOKEN_API_POST = function(path, body) {
+    var base = window.__TOKEN_API_BASE || '';
+    var headers = { 'Content-Type': 'application/json' };
+    if (window.__TOKEN_API_TOKEN) headers['X-TO-Token'] = window.__TOKEN_API_TOKEN;
+    return fetch(base + path, {
+      method: 'POST',
+      credentials: 'include',
+      headers: headers,
+      body: JSON.stringify(body || {})
+    }).then(function(r) {
+      if (r.status === 403) {
+        var err = new Error('Authentication failed — reload the page to refresh the token.');
+        err.authError = true;
+        err.status = 403;
+        throw err;
+      }
+      return r;
+    });
+  };
+  // Fetch the per-install token after we've confirmed the daemon is up.
+  // Server only returns it to localhost Origin+Host so foreign pages can't
+  // exfiltrate. Fire-and-forget: if it fails, mutating endpoints will 403
+  // and the UI surfaces the error normally.
+  function _fetchToken(baseUrl) {
+    return fetch(baseUrl + '/api/token', { method: 'GET', credentials: 'include' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (d && d.token) window.__TOKEN_API_TOKEN = d.token;
+      })
+      .catch(function() {});
+  }
   if (typeof fetch === 'function') {
     var isHttp = window.location.protocol.indexOf('http') === 0;
     var isFile = window.location.protocol === 'file:';
@@ -4760,7 +4912,11 @@ document.addEventListener('DOMContentLoaded', function() {
       fetch(probe, { method: 'GET' })
         .then(function(r) { return r.json(); })
         .then(function(d) {
-          if (d && d.ok) _setApiLive(isFile ? DAEMON_URL : '');
+          if (d && d.ok) {
+            var base = isFile ? DAEMON_URL : '';
+            _setApiLive(base);
+            return _fetchToken(base);
+          }
         })
         .catch(function() {})
         .finally(startApp);

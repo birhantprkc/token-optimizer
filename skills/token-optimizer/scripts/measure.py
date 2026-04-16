@@ -63,11 +63,13 @@ SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 import hashlib
 import heapq
+import hmac
 import json
 import math
 import os
 import glob
 import re
+import secrets
 import shlex
 import signal
 import sqlite3
@@ -1226,7 +1228,7 @@ def _is_1m_model(model_str):
     if "haiku" in m:
         return False
     # Any other Claude model string (opus, sonnet, or future models) -> assume 1M eligible
-    # This covers: 'opus', 'sonnet', 'claude-opus-4-6', 'claude-sonnet-4-6', etc.
+    # This covers: 'opus', 'sonnet', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-sonnet-4-6', etc.
     # Users on non-Max plans who actually have 200K can set TOKEN_OPTIMIZER_CONTEXT_SIZE=200000
     return True
 
@@ -1240,7 +1242,7 @@ def detect_context_window():
       3. --context-size CLI flag (set via _cli_context_size) -> override
       4. CLAUDE_MODEL / ANTHROPIC_MODEL env var -> check model family
       5. config.json or settings.json model field -> check model family
-      6. Fallback: 1M (Opus 4.6 and Sonnet 4.6 are 1M GA since March 2026)
+      6. Fallback: 1M (Opus 4.6+/4.7 and Sonnet 4.6 are 1M GA since March 2026)
     """
     if os.environ.get("CLAUDE_CODE_DISABLE_1M_CONTEXT") == "1":
         return 200_000, "env: CLAUDE_CODE_DISABLE_1M_CONTEXT"
@@ -1286,10 +1288,10 @@ def detect_context_window():
                         return 1_000_000, f"{cfg_name.split('.')[0]}: {m} (1M)"
             except (json.JSONDecodeError, PermissionError, OSError):
                 pass
-    # Since March 2026: Opus 4.6 and Sonnet 4.6 have 1M context GA.
+    # Since March 2026: Opus 4.6+/4.7 and Sonnet 4.6 have 1M context GA.
     # Most Claude Code users are on these models. Default to 1M.
     # Users on Haiku or older models can override with TOKEN_OPTIMIZER_CONTEXT_SIZE=200000.
-    return 1_000_000, "default (1M, Opus/Sonnet 4.6 GA. Override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"
+    return 1_000_000, "default (1M, Opus/Sonnet 4.6+ GA. Override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"
 
 
 # CLI override for context size (set by --context-size flag parsing)
@@ -1482,8 +1484,8 @@ def quick_scan(as_json=False):
     coaching = None
     if ctx_window >= 500_000:
         coaching = (
-            "At 1M, Sonnet 4.6 outperforms Opus on multi-hop reasoning\n"
-            "  (GraphWalks: 73.8 vs 38.7). Consider Sonnet for long code sessions."
+            "At 1M, Sonnet 4.6 has held the lead on multi-hop reasoning vs earlier Opus\n"
+            "  (GraphWalks: 73.8 vs 38.7 on 4.6). Opus 4.7 narrows this — benchmark your own workload."
         )
 
     # Auto-save snapshot for drift detection
@@ -2601,13 +2603,35 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
             return True
 
         def do_GET(self):
+            path_only = self.path.split("?")[0]
             # API health probe (lets dashboard detect our server vs generic)
-            if self.path.split("?")[0] == "/api/health":
+            if path_only == "/api/health":
                 self._json_response(200, {"ok": True, "server": "token-optimizer"})
+                return
+            # v5.4.19 identity magic probe (defeats foreign-port masquerade, adv-007)
+            if path_only == "/__to_ping":
+                self._json_response(200, {"ok": True, "magic": DAEMON_IDENTITY_MAGIC})
+                return
+            # v5.4.19 per-install token endpoint (H-2/M-4). Only served to
+            # localhost Origin+Host so a foreign site cannot exfiltrate it.
+            if path_only == "/api/token":
+                origin = self.headers.get("Origin", "")
+                host = self.headers.get("Host", "")
+                origin_ok = (not origin) or any(
+                    origin.startswith(p) for p in ("http://127.0.0.1:", "http://localhost:", "http://[::1]:")
+                )
+                if not origin_ok or not _is_localhost_host_header(host):
+                    self.send_error(403, "Forbidden")
+                    return
+                self._json_response(200, {"token": _read_daemon_token()})
                 return
             if self._redirect_root():
                 return
             if not self._check_allowed():
+                return
+            # H-1 DNS rebinding defense: GETs to static assets must come from localhost Host
+            if not _is_localhost_host_header(self.headers.get("Host", "")):
+                self.send_error(421, "Misdirected Request")
                 return
             super().do_GET()
 
@@ -2619,11 +2643,29 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
             super().do_HEAD()
 
         def do_POST(self):
-            """Handle API requests for skill/MCP management."""
-            # CSRF protection: reject requests from foreign origins
+            """Handle API requests for skill/MCP management.
+
+            v5.4.19 hardening (C-2/H-1/M-4):
+              - Reject empty Origin (no more bypass via curl/fetch-no-cors).
+              - Enforce Host allowlist (defeats DNS rebinding).
+              - Require X-TO-Token matching per-install secret.
+            """
+            # C-2 fix: require a non-empty, localhost-prefixed Origin.
             origin = self.headers.get("Origin", "")
-            if origin and not any(origin.startswith(p) for p in ("http://127.0.0.1:", "http://localhost:", "http://[::1]:")):
+            if not origin or not any(origin.startswith(p) for p in ("http://127.0.0.1:", "http://localhost:", "http://[::1]:")):
                 self.send_error(403, "Forbidden: invalid origin")
+                return
+
+            # H-1 fix: Host header allowlist (localhost / 127.0.0.1 / [::1]).
+            if not _is_localhost_host_header(self.headers.get("Host", "")):
+                self.send_error(421, "Misdirected Request")
+                return
+
+            # M-4 fix: constant-time per-install token check.
+            expected_tok = _read_daemon_token()
+            got_tok = self.headers.get("X-TO-Token", "")
+            if not expected_tok or not hmac.compare_digest(expected_tok, got_tok):
+                self.send_error(403, "Forbidden: invalid token")
                 return
 
             path = self.path.split("?")[0]
@@ -7742,38 +7784,176 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.4.17"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.4.19"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 PLIST_PATH = LAUNCH_AGENTS_DIR / f"{DAEMON_LABEL}.plist"
 DAEMON_LOG_DIR = SNAPSHOT_DIR / "logs"
+DAEMON_TOKEN_PATH = SNAPSHOT_DIR / "daemon-token"  # 0600, per-install CSRF secret
+DAEMON_THRASH_BREADCRUMB = SNAPSHOT_DIR / ".daemon-thrash"  # adv-005 tombstone
+DAEMON_IDENTITY_MAGIC = "token-optimizer-dashboard-v1"
+
+
+def _get_or_create_daemon_token():
+    """Return the per-install daemon auth token, creating it on first use.
+
+    v5.4.19 (security H-2/M-4 fix): all state-mutating POST endpoints
+    (/api/v5/toggle, /api/skill/archive, /api/mcp/disable, etc.) require
+    a matching X-TO-Token header. The token is generated at daemon
+    install time, persisted at DAEMON_TOKEN_PATH with 0600 perms, and
+    exposed to the dashboard via a same-origin /api/token endpoint.
+
+    Any local same-user process can still read the token file (standard
+    Unix permissions), so this is NOT a defense against a same-user
+    attacker — it's defense-in-depth against (a) cross-origin drive-by
+    POSTs that bypass the empty-Origin CSRF check, (b) DNS-rebinding
+    pages that manage to forge an Origin header, and (c) accidental
+    discovery by scripts probing localhost ports.
+
+    Idempotent: returns the existing token if the file is already there
+    and non-empty. Only creates a new token on first run or if the file
+    is missing/empty.
+    """
+    try:
+        if DAEMON_TOKEN_PATH.exists():
+            existing = DAEMON_TOKEN_PATH.read_text(encoding="utf-8").strip()
+            if len(existing) >= 16:
+                return existing
+    except OSError:
+        pass
+    try:
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        token = secrets.token_urlsafe(32)  # 43 chars, cryptographically random
+        # Write with 0600 perms via os.open before write
+        fd = os.open(
+            str(DAEMON_TOKEN_PATH),
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(token + "\n")
+        return token
+    except OSError:
+        return ""
+
+
+def _read_daemon_token():
+    """Read the daemon token from disk. Returns empty string if missing."""
+    try:
+        if DAEMON_TOKEN_PATH.exists():
+            return DAEMON_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _is_localhost_host_header(host_header):
+    """True iff the Host header is a recognised localhost form (DNS rebinding guard).
+
+    Accepts: 'localhost', 'localhost:<port>', '127.0.0.1', '127.0.0.1:<port>',
+    '[::1]', '[::1]:<port>'. Rejects anything else, closing the DNS-rebinding
+    leak path where an attacker-controlled hostname resolves to 127.0.0.1
+    and the browser sends same-origin requests whose Host is the attacker's
+    domain (H-1, 2026-04-16).
+    """
+    if not host_header:
+        return False
+    h = host_header.strip().lower()
+    # Strip port if present (bracketed IPv6 is handled below)
+    if h.startswith("["):
+        # [::1] or [::1]:port
+        return h.startswith("[::1]") and (h == "[::1]" or h.startswith("[::1]:"))
+    # bare or ipv4-with-port
+    base = h.split(":", 1)[0]
+    return base in ("localhost", "127.0.0.1")
 
 
 def _generate_daemon_script():
     """Generate a minimal Python HTTP server script for the dashboard daemon.
 
-    v5.4.8: Paths are interpolated via repr() to produce properly escaped
-    Python string literals. Without this, Windows paths containing backslash
-    escape sequences (\\U, \\N, \\x, \\t) would raise SyntaxError when the
-    generated daemon starts. Usernames like 'Nadya', 'Username', 'xavier'
-    reliably triggered this.
+    v5.4.19 hardening (security + torture pass):
+      - C-2: reject empty Origin and non-localhost Origin on POST.
+      - H-1: Host header allowlist (localhost / 127.0.0.1 / [::1]) — DNS rebind defense.
+      - H-2/M-4: per-install X-TO-Token header required on mutating endpoints.
+      - adv-005: 3-strikes thrash breadcrumb when DASHBOARD is missing (avoid KeepAlive
+                 hot-loop with launchd/systemd).
+      - adv-006: honor breadcrumb tombstone to self-exit cleanly after uninstall.
+      - Serves /api/token to localhost Origin+Host only so dashboard JS can fetch it.
+
+    Paths are interpolated via repr() to produce properly escaped Python string
+    literals. Without this, Windows paths containing backslash escape sequences
+    (\\U, \\N, \\x, \\t) would raise SyntaxError when the generated daemon starts.
     """
     dashboard_literal = repr(str(DASHBOARD_PATH))
     measure_py_literal = repr(str(Path(__file__).resolve()))
+    token_path_literal = repr(str(DAEMON_TOKEN_PATH))
+    thrash_path_literal = repr(str(DAEMON_THRASH_BREADCRUMB))
+    magic_literal = repr(DAEMON_IDENTITY_MAGIC)
     return f'''#!/usr/bin/env python3
 """Token Optimizer dashboard server daemon.
 Auto-generated by measure.py v{TOKEN_OPTIMIZER_VERSION}. Serves the dashboard HTML on localhost:{DAEMON_PORT}.
 The SessionEnd hook regenerates the HTML file; this daemon just serves what's on disk.
 TOKEN_OPTIMIZER_DAEMON_VERSION = "{TOKEN_OPTIMIZER_VERSION}"
 """
+import hmac
 import http.server
+import json
 import os
 import socketserver
 import sys
+import time
 
 DASHBOARD = {dashboard_literal}
+TOKEN_PATH = {token_path_literal}
+THRASH_PATH = {thrash_path_literal}
+IDENTITY_MAGIC = {magic_literal}
 PORT = {DAEMON_PORT}
+
+# adv-005/adv-006: thrash + tombstone guard. If dashboard has been missing for
+# 3 consecutive starts (reset when found), write a tombstone and exit with
+# code 0 so launchd/systemd consider this a "successful exit" and stop
+# respawning us. Uninstall also writes this tombstone directly.
+THRASH_LIMIT = 3
+
+
+def _read_token():
+    """Read per-install CSRF token from disk. Empty string if missing/unreadable."""
+    try:
+        with open(TOKEN_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _is_localhost_host(host_header):
+    """True iff Host header is a localhost form. Defeats DNS rebinding."""
+    if not host_header:
+        return False
+    h = host_header.strip().lower()
+    if h.startswith("["):
+        return h.startswith("[::1]") and (h == "[::1]" or h.startswith("[::1]:"))
+    base = h.split(":", 1)[0]
+    return base in ("localhost", "127.0.0.1")
+
+
+def _is_localhost_origin(origin):
+    """True iff Origin header is http(s)://localhost|127.0.0.1|[::1] or file://.
+
+    v5.4.19 S-2 tightening: require the host to terminate (end-of-string,
+    ':', or '/') so a malicious Origin like 'http://127.0.0.1.evil.com'
+    cannot masquerade as localhost.
+    """
+    if not origin:
+        return False
+    for prefix in ("http://localhost", "http://127.0.0.1", "http://[::1]",
+                   "https://localhost", "https://127.0.0.1", "https://[::1]"):
+        if origin.startswith(prefix):
+            tail = origin[len(prefix):]
+            if tail == "" or tail.startswith(":") or tail.startswith("/"):
+                return True
+    return origin.startswith("file://")
+
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
@@ -7795,13 +7975,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return clean in ("", "token-optimizer", f)
 
     def _is_identity_request(self):
-        # v5.3.3: clients (daemon-status) verify they're talking to OUR
-        # daemon, not whatever happens to be bound to 24842. Returns a
-        # magic string so a foreign listener can't masquerade.
         return self.path.lstrip("/").split("?")[0] == "__to_ping"
 
     def _respond_identity(self):
-        body = b"token-optimizer-dashboard-v1"
+        # Return the magic string so foreign listeners on PORT can't masquerade.
+        body = IDENTITY_MAGIC.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -7809,16 +7987,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json_response(self, code, data):
-        import json
         body = json.dumps(data).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         origin = self.headers.get("Origin", "")
-        allowed = origin if origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1") or origin.startswith("file://") else ""
+        allowed = origin if _is_localhost_origin(origin) else ""
         self.send_header("Access-Control-Allow-Origin", allowed or "http://localhost:{DAEMON_PORT}")
+        self.send_header("Access-Control-Allow-Credentials", "true")
         self.end_headers()
         self.wfile.write(body)
+
+    def _require_localhost(self):
+        """Reject anything that isn't coming from a localhost Host header.
+        H-1 DNS rebinding defense — fires before we look at Origin/token.
+        """
+        if not _is_localhost_host(self.headers.get("Host", "")):
+            self.send_error(421, "Misdirected Request")
+            return False
+        return True
 
     def _serve_or_redirect(self, method):
         if self._is_identity_request():
@@ -7828,8 +8015,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if clean == "api/health":
             self._json_response(200, {{"ok": True, "server": "token-optimizer-daemon"}})
             return
+        if clean == "api/token":
+            # Only expose to localhost Origin+Host so foreign origins cannot exfiltrate it.
+            origin = self.headers.get("Origin", "")
+            origin_ok = (not origin) or _is_localhost_origin(origin)
+            if not origin_ok or not _is_localhost_host(self.headers.get("Host", "")):
+                self.send_error(403, "Forbidden")
+                return
+            self._json_response(200, {{"token": _read_token()}})
+            return
+        if not self._require_localhost():
+            return
         if self._is_dashboard_request():
-            # Rewrite to the actual filename for SimpleHTTPRequestHandler
             self.path = "/" + os.path.basename(DASHBOARD)
             getattr(super(), method)()
         else:
@@ -7838,36 +8035,56 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         origin = self.headers.get("Origin", "")
-        # Restrict CORS to localhost origins only (file:// dashboard → daemon).
-        # Wildcard * would allow any website to POST toggle commands.
-        allowed = origin if origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1") or origin.startswith("file://") else ""
+        allowed = origin if _is_localhost_origin(origin) else ""
         self.send_header("Access-Control-Allow-Origin", allowed or "http://localhost:{DAEMON_PORT}")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-TO-Token")
+        self.send_header("Access-Control-Allow-Credentials", "true")
         self.end_headers()
 
     def do_POST(self):
-        import json
+        # Layered defense: Host allowlist first, then Origin, then token.
+        if not _is_localhost_host(self.headers.get("Host", "")):
+            self.send_error(421, "Misdirected Request")
+            return
+        origin = self.headers.get("Origin", "")
+        if not origin or not _is_localhost_origin(origin):
+            self.send_error(403, "Forbidden: invalid origin")
+            return
+        expected_tok = _read_token()
+        got_tok = self.headers.get("X-TO-Token", "")
+        if not expected_tok or not hmac.compare_digest(expected_tok, got_tok):
+            self.send_error(403, "Forbidden: invalid token")
+            return
+
         clean = self.path.lstrip("/").split("?")[0]
         if clean == "api/v5/toggle":
             length = int(self.headers.get("Content-Length", 0))
             if length > 4096:
                 self._json_response(413, {{"ok": False, "msg": "payload too large"}})
                 return
-            body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {{}}
+            try:
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {{}}
+            except (ValueError, UnicodeDecodeError):
+                self._json_response(400, {{"ok": False, "msg": "invalid json"}})
+                return
             name = body.get("name", "")
             enabled = bool(body.get("enabled", False))
             # Validate name: alphanumeric + hyphens/underscores only.
             # Prevents argument injection via subprocess argv.
-            import re as _re, subprocess, sys
+            import re as _re, subprocess
             if not name or not _re.match(r'^[a-zA-Z0-9_-]{{1,64}}$', name):
                 self._json_response(400, {{"ok": False, "msg": "invalid feature name"}})
                 return
             action = "enable" if enabled else "disable"
-            result = subprocess.run(
-                [sys.executable, {measure_py_literal}, "v5", action, name],
-                capture_output=True, text=True, timeout=10
-            )
+            try:
+                result = subprocess.run(
+                    [sys.executable, {measure_py_literal}, "v5", action, name],
+                    capture_output=True, text=True, timeout=10
+                )
+            except (subprocess.TimeoutExpired, OSError) as e:
+                self._json_response(500, {{"ok": False, "msg": "toggle backend unavailable: " + str(e)}})
+                return
             if result.returncode == 0:
                 self._json_response(200, {{"ok": True, "msg": result.stdout.strip()}})
             else:
@@ -7881,15 +8098,71 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_HEAD(self):
         self._serve_or_redirect("do_HEAD")
 
-if not os.path.exists(DASHBOARD):
-    sys.exit(1)
+
+def _thrash_check_and_update():
+    """Return True to continue, False to tombstone-and-exit cleanly."""
+    # adv-006: if an uninstall tombstone is present, exit cleanly.
+    # (Install writes empty file; any presence = "stop respawning me".)
+    if os.path.exists(THRASH_PATH):
+        try:
+            size = os.path.getsize(THRASH_PATH)
+        except OSError:
+            size = 0
+        # Size 0 = uninstall tombstone. >0 = thrash counter; process it below.
+        if size == 0:
+            return False
+
+    if os.path.exists(DASHBOARD):
+        # Healthy start: clear any thrash counter.
+        try:
+            if os.path.exists(THRASH_PATH):
+                os.unlink(THRASH_PATH)
+        except OSError:
+            pass
+        return True
+
+    # adv-005: dashboard is missing. Increment 3-strikes counter.
+    count = 0
+    try:
+        with open(THRASH_PATH, "r", encoding="utf-8") as f:
+            count = int((f.read() or "0").strip() or "0")
+    except (OSError, ValueError):
+        count = 0
+    count += 1
+    try:
+        os.makedirs(os.path.dirname(THRASH_PATH), exist_ok=True)
+        with open(THRASH_PATH, "w", encoding="utf-8") as f:
+            f.write(str(count) + "\\n")
+    except OSError:
+        pass
+    if count >= THRASH_LIMIT:
+        # Write tombstone (empty file) so future respawns exit immediately.
+        try:
+            with open(THRASH_PATH, "w", encoding="utf-8") as f:
+                f.write("")
+        except OSError:
+            pass
+        return False
+    # Under threshold: still exit 0 (don't fight KeepAlive) but without tombstone,
+    # so next SessionEnd regenerating dashboard.html will reset the counter.
+    return False
+
+
+if not _thrash_check_and_update():
+    # Exit 0 so launchd's "KeepAlive on unsuccessful exit" stops respawning us.
+    sys.exit(0)
 
 # Restrict to localhost only. TOKEN_OPTIMIZER_HOST is accepted for IPv4/IPv6 localhost
 # variants but never 0.0.0.0 or other interfaces (security: exposes toggle API to LAN).
 _host_raw = os.environ.get("TOKEN_OPTIMIZER_HOST", "127.0.0.1")
 HOST = _host_raw if _host_raw in ("127.0.0.1", "::1", "localhost") else "127.0.0.1"
-with socketserver.TCPServer((HOST, PORT), Handler) as httpd:
-    httpd.serve_forever()
+try:
+    with socketserver.TCPServer((HOST, PORT), Handler) as httpd:
+        httpd.serve_forever()
+except OSError:
+    # Port in use by another process (or our old instance still dying).
+    # Exit 0 cleanly so KeepAlive backs off via ThrottleInterval.
+    sys.exit(0)
 '''
 
 
@@ -8366,57 +8639,146 @@ def _ensure_dashboard_file():
 
 
 def _verify_daemon_port(timeout_seconds=1, retries=8):
-    """Shared: probe 127.0.0.1:DAEMON_PORT to confirm the daemon is up.
+    """Probe 127.0.0.1:DAEMON_PORT to confirm OUR daemon is up (not a foreign listener).
+
+    v5.4.19 (adv-007 fix): a TCP connect() alone can't tell us whether the
+    process on DAEMON_PORT is actually ours. A foreign app (or a stale orphan
+    under a different dashboard path) that happens to bind 24842 would pass
+    the connect check, and install code would assume success. We now follow
+    the connect with a GET /__to_ping and verify the body equals our magic
+    string. Only then do we claim the daemon is up.
 
     Extended retry budget (torture-room M3, 2026-04-14): slow cold
     starts on first-login Mac, LaunchAgent re-spawn, or Windows Task
-    Scheduler trigger delay can exceed 8s before the daemon binds. A
-    false "still starting up" drove users to run --uninstall mid-init,
-    which orphaned the python process and locked port 24842.
+    Scheduler trigger delay can exceed 8s before the daemon binds.
     Budget now ~16s (8 retries * 1s timeout + 1s gap).
     """
     import socket as _socket
+    import urllib.request
+    import urllib.error
+
+    url = f"http://127.0.0.1:{DAEMON_PORT}/__to_ping"
     for _attempt in range(retries):
         try:
             with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
                 s.settimeout(timeout_seconds)
                 s.connect(("127.0.0.1", DAEMON_PORT))
-            return True
         except (OSError, ConnectionRefusedError):
             time.sleep(1)
+            continue
+        # Port is open -- verify identity so we don't mistake a foreign listener for ours.
+        try:
+            req = urllib.request.Request(url, headers={"Host": f"127.0.0.1:{DAEMON_PORT}"})
+            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                body = resp.read(256).decode("utf-8", errors="replace").strip()
+            if body == DAEMON_IDENTITY_MAGIC:
+                return True
+            # Wrong magic -- foreign listener or older build. Don't retry ident check.
+            return False
+        except (urllib.error.URLError, OSError, ValueError):
+            time.sleep(1)
+            continue
     return False
 
 
-def _daemon_install_lock():
+def _daemon_install_lock(soft_fail=False):
     """Return a context manager that serialises concurrent setup-daemon runs.
 
-    Uses an atomic mkdir mutex on a marker directory. Torture-room H1
-    (2026-04-14): two terminals running `setup-daemon` simultaneously
-    could race on the plist write and bootout/bootstrap sequence,
-    leaving one instance nuked mid-install. This serialises them: the
-    second run aborts with a clear message rather than corrupting
-    state.
+    v5.4.19 (adv-003 fix): uses atomic mkdir as the mutex, but also reaps stale
+    locks whose owner died (SIGKILL, crash, etc.). A PID file inside the lock
+    directory records who took it; on contention, we check whether that PID is
+    still alive and the lock was taken recently (mtime < 10 minutes). If the
+    owner is gone OR the lock is older than 10 minutes, we reclaim it.
+
+    soft_fail=True (adv-008): return an inert contextmanager on contention
+    rather than sys.exit(1). Used from hook paths where we must never kill
+    the calling Claude Code session.
     """
     from contextlib import contextmanager
 
+    lock_dir = SNAPSHOT_DIR / ".setup-daemon.lock"
+    pid_file = lock_dir / "pid"
+    MAX_LOCK_AGE = 10 * 60  # 10 minutes
+
+    def _pid_alive(pid):
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def _try_reclaim_stale():
+        """Return True if we successfully reaped a stale lock, False otherwise."""
+        try:
+            mtime = lock_dir.stat().st_mtime
+        except OSError:
+            return False
+        owner_pid = 0
+        try:
+            raw = pid_file.read_text(encoding="utf-8").strip()
+            owner_pid = int(raw)
+        except (OSError, ValueError):
+            owner_pid = 0
+        age = time.time() - mtime
+        if not _pid_alive(owner_pid) or age > MAX_LOCK_AGE:
+            try:
+                if pid_file.exists():
+                    pid_file.unlink()
+                lock_dir.rmdir()
+                return True
+            except OSError:
+                return False
+        return False
+
+    @contextmanager
+    def _inert():
+        yield False  # acquired=False: caller can detect "skipped"
+
     @contextmanager
     def _locked():
-        lock_dir = SNAPSHOT_DIR / ".setup-daemon.lock"
+        acquired = False
         try:
             SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-            lock_dir.mkdir(exist_ok=False)
-        except FileExistsError:
-            print("[Error] Another setup-daemon is already running.")
-            print(f"  Lock file: {lock_dir}")
-            print("  If you're sure no other run is active, remove the lock and retry.")
-            sys.exit(1)
-        try:
-            yield
-        finally:
             try:
-                lock_dir.rmdir()
+                lock_dir.mkdir(exist_ok=False)
+                acquired = True
+            except FileExistsError:
+                # Try to reap a stale lock, then retry once.
+                if _try_reclaim_stale():
+                    try:
+                        lock_dir.mkdir(exist_ok=False)
+                        acquired = True
+                    except FileExistsError:
+                        acquired = False
+                else:
+                    acquired = False
+            if not acquired:
+                if soft_fail:
+                    yield False
+                    return
+                print("[Error] Another setup-daemon is already running.")
+                print(f"  Lock file: {lock_dir}")
+                print("  If you're sure no other run is active, remove the lock and retry.")
+                sys.exit(1)
+            # Record ownership inside the lock for adv-003 reaping.
+            try:
+                pid_file.write_text(str(os.getpid()), encoding="utf-8")
             except OSError:
                 pass
+            yield True
+        finally:
+            if acquired:
+                try:
+                    if pid_file.exists():
+                        pid_file.unlink()
+                except OSError:
+                    pass
+                try:
+                    lock_dir.rmdir()
+                except OSError:
+                    pass
 
     return _locked()
 
@@ -8461,14 +8823,26 @@ def _reclaim_posix_daemon_port(port=DAEMON_PORT, script_name="dashboard-server.p
             time.sleep(0.5)
 
 
-def _install_launchd_daemon(dry_run=False):
+def _install_launchd_daemon(dry_run=False, soft_fail=False):
     """macOS: install the dashboard daemon via a LaunchAgent.
 
-    Extracted verbatim from the pre-dispatcher setup_daemon. No behavior
-    change for macOS users -- plist path, label, port, and log location
-    are all preserved. Re-running overwrites the plist idempotently and
-    bootouts any existing instance first so we never fight a stale PID.
+    v5.4.19 (adv-001/adv-008 fix): added `soft_fail`. When True (hook paths),
+    errors return False instead of sys.exit(1) so we never kill the calling
+    Claude Code session. CLI calls keep the default False for backwards
+    compatibility -- users still see a hard failure + actionable hint.
+
+    Extracted verbatim from the pre-dispatcher setup_daemon. Re-running
+    overwrites the plist idempotently and bootouts any existing instance
+    first so we never fight a stale PID.
     """
+    def _fail(msg, hint=None):
+        print(msg)
+        if hint:
+            print(hint)
+        if soft_fail:
+            return False
+        sys.exit(1)
+
     if dry_run:
         print("[Token Optimizer] Dry run. Would install:\n")
         print("  A tiny web server that makes your dashboard available at:")
@@ -8483,40 +8857,61 @@ def _install_launchd_daemon(dry_run=False):
         print(f"    {SNAPSHOT_DIR / 'dashboard-server.py'}")
         print(f"    {PLIST_PATH}\n")
         print("  No changes written.")
-        return
+        return True
 
     if not _ensure_dashboard_file():
-        sys.exit(1)
+        return _fail("[Token Optimizer] Dashboard file missing; cannot start daemon.")
 
-    with _daemon_install_lock():
-        # Write daemon script
-        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-        DAEMON_LOG_DIR.mkdir(parents=True, exist_ok=True)
-        daemon_script = SNAPSHOT_DIR / "dashboard-server.py"
-        daemon_script.write_text(_generate_daemon_script(), encoding="utf-8")
-        daemon_script.chmod(0o755)
+    # Clear any stale uninstall tombstone so a fresh install proceeds.
+    try:
+        if DAEMON_THRASH_BREADCRUMB.exists():
+            DAEMON_THRASH_BREADCRUMB.unlink()
+    except OSError:
+        pass
 
-        # Write plist
-        LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-        PLIST_PATH.write_text(_generate_plist(), encoding="utf-8")
+    # Ensure per-install auth token exists before writing the daemon script.
+    _get_or_create_daemon_token()
+
+    with _daemon_install_lock(soft_fail=soft_fail) as acquired:
+        if soft_fail and not acquired:
+            # Another installer holds the lock; don't fight it from a hook path.
+            return False
+
+        # Write daemon script (catch OSError from permissions/quota issues).
+        try:
+            SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+            DAEMON_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            daemon_script = SNAPSHOT_DIR / "dashboard-server.py"
+            daemon_script.write_text(_generate_daemon_script(), encoding="utf-8")
+            daemon_script.chmod(0o755)
+            LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+            PLIST_PATH.write_text(_generate_plist(), encoding="utf-8")
+        except OSError as e:
+            return _fail(f"[Error] Could not write daemon files: {e}")
 
         # Stop existing daemon if running (bootout is idempotent -- non-zero
         # exit when nothing is loaded is expected and ignored).
-        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)],
-                       capture_output=True)
+        try:
+            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)],
+                           capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
         # bootout drops the launchd job but doesn't SIGTERM the Python
         # child -- the port stays held until the orphan dies on its own.
         # Reclaim it so bootstrap doesn't hit EADDRINUSE.
         _reclaim_posix_daemon_port()
 
         # Start daemon
-        result = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(PLIST_PATH)],
-                                capture_output=True, text=True)
+        try:
+            result = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(PLIST_PATH)],
+                                    capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return _fail(f"[Error] launchctl bootstrap failed: {e}")
         if result.returncode != 0:
-            print(f"[Error] Failed to start daemon: {result.stderr.strip()}")
-            print(f"  Plist written to: {PLIST_PATH}")
-            print(f"  Try manually: launchctl bootstrap gui/{os.getuid()} {PLIST_PATH}")
-            sys.exit(1)
+            return _fail(
+                f"[Error] Failed to start daemon: {result.stderr.strip()}",
+                hint=f"  Plist written to: {PLIST_PATH}\n  Try manually: launchctl bootstrap gui/{os.getuid()} {PLIST_PATH}",
+            )
 
         # Verify it's actually running. Budget ~16s covers slow cold
         # starts. If we still can't reach the port, surface a clear
@@ -8536,6 +8931,29 @@ def _install_launchd_daemon(dry_run=False):
             print("  Do NOT run --uninstall while it is still coming up -- that can")
             print(f"  orphan the process and block port {DAEMON_PORT} for the next install.")
             print(f"  If still unreachable after 30s, check: {DAEMON_LOG_DIR}/stderr.log")
+        return True
+
+
+def _write_uninstall_tombstone():
+    """v5.4.19 (adv-006): write an empty breadcrumb file so that if the daemon
+    process somehow respawns (e.g., an orphaned LaunchAgent the user didn't clean
+    up), it exits cleanly on next start instead of resurrecting.
+
+    Torture-room H-4 (2026-04-16): surface failures to stderr so a silently
+    broken tombstone (e.g. SNAPSHOT_DIR unwritable) is visible to the user
+    rather than leaving them thinking uninstall succeeded while the daemon
+    keeps respawning."""
+    try:
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        with open(DAEMON_THRASH_BREADCRUMB, "w", encoding="utf-8") as f:
+            f.write("")
+    except OSError as e:
+        sys.stderr.write(
+            f"[Token Optimizer] Warning: could not write uninstall tombstone "
+            f"at {DAEMON_THRASH_BREADCRUMB}: {e}\n"
+            f"  If the daemon is still running after uninstall, remove the "
+            f"LaunchAgent/task/unit manually.\n"
+        )
 
 
 def _uninstall_launchd_daemon():
@@ -8546,16 +8964,33 @@ def _uninstall_launchd_daemon():
     followed by a "Deleted: script.py" line when the plist is gone but
     the script file remains from a half-uninstall.
     """
+    # adv-006: tombstone FIRST so any racing respawn exits cleanly.
+    _write_uninstall_tombstone()
     removed = []
     if PLIST_PATH.exists():
-        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)],
-                       capture_output=True)
-        PLIST_PATH.unlink()
-        removed.append(str(PLIST_PATH))
+        try:
+            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)],
+                           capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        try:
+            PLIST_PATH.unlink()
+            removed.append(str(PLIST_PATH))
+        except OSError:
+            pass
     daemon_script = SNAPSHOT_DIR / "dashboard-server.py"
     if daemon_script.exists():
-        daemon_script.unlink()
-        removed.append(str(daemon_script))
+        try:
+            daemon_script.unlink()
+            removed.append(str(daemon_script))
+        except OSError:
+            pass
+    # Clean up per-install token (not a secret the user needs to keep).
+    try:
+        if DAEMON_TOKEN_PATH.exists():
+            DAEMON_TOKEN_PATH.unlink()
+    except OSError:
+        pass
     if removed:
         print("[Token Optimizer] Dashboard daemon removed.")
         for path in removed:
@@ -8901,16 +9336,24 @@ def _uninstall_task_scheduler_daemon():
     Cleans orphan XML files from any prior naming convention (torture
     LOW-8) via glob so version drift doesn't leave artifacts behind.
     """
+    # adv-006: tombstone FIRST so any racing respawn exits cleanly.
+    _write_uninstall_tombstone()
     removed = []
     # Stop running instance (safe to fail if already stopped).
-    subprocess.run(
-        ["schtasks", "/End", "/TN", WINDOWS_TASK_NAME],
-        capture_output=True, text=True, errors="replace",
-    )
-    delete = subprocess.run(
-        ["schtasks", "/Delete", "/TN", WINDOWS_TASK_NAME, "/F"],
-        capture_output=True, text=True, errors="replace",
-    )
+    try:
+        subprocess.run(
+            ["schtasks", "/End", "/TN", WINDOWS_TASK_NAME],
+            capture_output=True, text=True, errors="replace", timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        delete = subprocess.run(
+            ["schtasks", "/Delete", "/TN", WINDOWS_TASK_NAME, "/F"],
+            capture_output=True, text=True, errors="replace", timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        delete = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="timeout")
     if delete.returncode == 0:
         removed.append(f"Scheduled Task: {WINDOWS_TASK_NAME}")
     for artifact_name in ("dashboard-server.py", WINDOWS_LAUNCHER_NAME):
@@ -8929,6 +9372,12 @@ def _uninstall_task_scheduler_daemon():
                 xml_path.unlink()
             except OSError:
                 pass
+    except OSError:
+        pass
+    # Clean up per-install token.
+    try:
+        if DAEMON_TOKEN_PATH.exists():
+            DAEMON_TOKEN_PATH.unlink()
     except OSError:
         pass
     if removed:
@@ -9189,11 +9638,16 @@ def _install_systemd_user_daemon(dry_run=False):
 
 def _uninstall_systemd_user_daemon():
     """Linux: stop and remove the systemd --user dashboard unit."""
+    # adv-006: tombstone FIRST so any racing respawn exits cleanly.
+    _write_uninstall_tombstone()
     removed = []
-    subprocess.run(
-        ["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT_NAME],
-        capture_output=True, text=True, errors="replace",
-    )
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT_NAME],
+            capture_output=True, text=True, errors="replace", timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     unit_path = _systemd_user_unit_path()
     if unit_path.exists():
         try:
@@ -9203,10 +9657,13 @@ def _uninstall_systemd_user_daemon():
             pass
     # daemon-reload AFTER unit file removal so systemd drops the unit
     # from its in-memory catalog.
-    subprocess.run(
-        ["systemctl", "--user", "daemon-reload"],
-        capture_output=True, text=True, errors="replace",
-    )
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "daemon-reload"],
+            capture_output=True, text=True, errors="replace", timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     for artifact_name in ("dashboard-server.py", LINUX_LAUNCHER_NAME):
         artifact = SNAPSHOT_DIR / artifact_name
         if artifact.exists():
@@ -9215,6 +9672,12 @@ def _uninstall_systemd_user_daemon():
                 removed.append(str(artifact))
             except OSError:
                 pass
+    # Clean up per-install token.
+    try:
+        if DAEMON_TOKEN_PATH.exists():
+            DAEMON_TOKEN_PATH.unlink()
+    except OSError:
+        pass
     if removed:
         print("[Token Optimizer] Dashboard daemon removed.")
         for path in removed:
@@ -13915,9 +14378,51 @@ def _read_config_flag(key, default=False):
     return default
 
 
-def _write_config_flag(key, value):
-    """Merge a single flag into config.json. Non-fatal on I/O errors."""
+_CONFIG_LOCK_PATH = CONFIG_DIR / ".config.lock"
+
+
+@contextmanager
+def _config_lock():
+    """Advisory file lock for config.json writes (adv-004 fix, 2026-04-16).
+
+    The v5 toggle endpoint can trigger 5+ concurrent read-modify-write
+    cycles on CONFIG_PATH when a user rage-clicks dashboard checkboxes,
+    and SessionStart ensure-health also writes last_hook_heal_check.
+    Without serialization, interleaved writers silently clobber each
+    other's keys. Mirrors _settings_lock: blocking flock with kernel
+    auto-release on process death; no-op fallback on Windows.
+    """
+    if not _HAS_FCNTL:
+        yield
+        return
     try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(_CONFIG_LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        yield
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _write_config_flag(key, value):
+    """Merge a single flag into config.json. Non-fatal on I/O errors.
+
+    v5.4.19 (adv-004 fix): wrapped in _config_lock + tempfile + os.replace
+    so concurrent writers (daemon toggles, ensure-health timestamps,
+    welcome flags) never race on a non-atomic write. Readers always see
+    either the pre-write state or the fully-written state, never partial
+    JSON. tmp_path=None sentinel prevents the finally clause from
+    unlinking an already-renamed destination.
+    """
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    with _config_lock():
         cfg = {}
         if CONFIG_PATH.exists():
             try:
@@ -13927,10 +14432,26 @@ def _write_config_flag(key, value):
             except (json.JSONDecodeError, OSError):
                 pass
         cfg[key] = value
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-    except OSError:
-        pass
+        tmp_path = None
+        try:
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(CONFIG_DIR),
+                prefix=".config-",
+                suffix=".json",
+            )
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+                f.write("\n")
+            os.replace(tmp_path, str(CONFIG_PATH))
+            tmp_path = None
+        except OSError:
+            pass
+        finally:
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
 
 # ---------------------------------------------------------------------------
@@ -15056,47 +15577,91 @@ def _run_ensure_health():
                 except OSError:
                     continue
         if needs_refresh:
-            new_script = _generate_daemon_script()
-            for p in candidate_paths:
-                try:
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_text(new_script, encoding="utf-8")
-                except OSError:
-                    continue
-            # Restart the daemon so the new script takes effect.
-            try:
-                import subprocess as _sp
-                _sys = platform.system()
-                if _sys == "Darwin":
-                    uid = _sp.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
-                    _sp.run(
-                        ["launchctl", "kickstart", "-k", f"gui/{uid}/{DAEMON_LABEL}"],
-                        capture_output=True, timeout=5
-                    )
-                elif _sys == "Linux":
-                    _sp.run(
-                        ["systemctl", "--user", "restart", SYSTEMD_UNIT_NAME],
-                        capture_output=True, timeout=10
-                    )
-                elif _sys == "Windows":
-                    # v5.4.8: /End is async, /Run issued too soon races on
-                    # port 24842. Fixed sleep of 2s lets /End settle.
-                    # Locale-independent: avoids parsing schtasks text output
-                    # which is localized on non-EN Windows (breaks polling).
-                    # /Run errors ("Task already running") are swallowed.
-                    _sp.run(
-                        ["schtasks", "/End", "/TN", WINDOWS_TASK_NAME],
-                        capture_output=True, timeout=5
-                    )
-                    import time as _t
-                    _t.sleep(2)
-                    _sp.run(
-                        ["schtasks", "/Run", "/TN", WINDOWS_TASK_NAME],
-                        capture_output=True, timeout=5
-                    )
-                print(f"  [Token Optimizer] Auto-updated daemon to v{TOKEN_OPTIMIZER_VERSION}")
-            except Exception as _e:
-                print(f"  [Token Optimizer] daemon restart failed: {_e}", file=sys.stderr)
+            # v5.4.19 (Fix #8): serialise concurrent ensure-health updates so
+            # two Claude sessions starting simultaneously don't both write the
+            # daemon script and fight over launchctl kickstart. soft_fail=True
+            # means the second session just skips the update (the first will
+            # land it within milliseconds).
+            with _daemon_install_lock(soft_fail=True) as acquired:
+                if not acquired:
+                    # Another session is already refreshing -- no-op.
+                    pass
+                else:
+                    # Make sure the per-install token exists before writing
+                    # the new script (which references DAEMON_TOKEN_PATH).
+                    _get_or_create_daemon_token()
+                    new_script = _generate_daemon_script()
+                    # Torture-room H-5 (2026-04-16): track per-path write
+                    # outcomes so we can detect silent drift (e.g., legacy
+                    # path is unwritable and every SessionStart loops through
+                    # this code printing "Auto-updated" without the daemon
+                    # ever actually picking up the new script).
+                    write_failures = []
+                    wrote_any = False
+                    for p in candidate_paths:
+                        try:
+                            p.parent.mkdir(parents=True, exist_ok=True)
+                            p.write_text(new_script, encoding="utf-8")
+                            wrote_any = True
+                        except OSError as e:
+                            write_failures.append((p, e))
+                    if write_failures and not wrote_any:
+                        # All candidate paths failed: surface so user can
+                        # debug instead of silently no-oping every session.
+                        sys.stderr.write(
+                            "[Token Optimizer] Warning: daemon auto-update "
+                            "could not write any dashboard-server.py path:\n"
+                        )
+                        for p, e in write_failures:
+                            sys.stderr.write(f"  {p}: {e}\n")
+                        # Bail out of the refresh flow — don't kickstart a
+                        # daemon we haven't actually updated.
+                        return
+                    elif write_failures:
+                        # Partial success: one path landed, another didn't.
+                        # Log once so silent drift on the failing path is
+                        # visible, then proceed with kickstart on the path
+                        # that did update.
+                        sys.stderr.write(
+                            "[Token Optimizer] Note: daemon auto-update "
+                            "skipped unwritable path(s):\n"
+                        )
+                        for p, e in write_failures:
+                            sys.stderr.write(f"  {p}: {e}\n")
+                    # Restart the daemon so the new script takes effect.
+                    try:
+                        import subprocess as _sp
+                        _sys = platform.system()
+                        if _sys == "Darwin":
+                            uid = _sp.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
+                            _sp.run(
+                                ["launchctl", "kickstart", "-k", f"gui/{uid}/{DAEMON_LABEL}"],
+                                capture_output=True, timeout=5
+                            )
+                        elif _sys == "Linux":
+                            _sp.run(
+                                ["systemctl", "--user", "restart", SYSTEMD_UNIT_NAME],
+                                capture_output=True, timeout=10
+                            )
+                        elif _sys == "Windows":
+                            # v5.4.8: /End is async, /Run issued too soon races on
+                            # port 24842. Fixed sleep of 2s lets /End settle.
+                            # Locale-independent: avoids parsing schtasks text output
+                            # which is localized on non-EN Windows (breaks polling).
+                            # /Run errors ("Task already running") are swallowed.
+                            _sp.run(
+                                ["schtasks", "/End", "/TN", WINDOWS_TASK_NAME],
+                                capture_output=True, timeout=5
+                            )
+                            import time as _t
+                            _t.sleep(2)
+                            _sp.run(
+                                ["schtasks", "/Run", "/TN", WINDOWS_TASK_NAME],
+                                capture_output=True, timeout=5
+                            )
+                        print(f"  [Token Optimizer] Auto-updated daemon to v{TOKEN_OPTIMIZER_VERSION}")
+                    except Exception as _e:
+                        print(f"  [Token Optimizer] daemon restart failed: {_e}", file=sys.stderr)
     except Exception as _e:
         print(f"  [Token Optimizer] daemon auto-update check failed: {_e}", file=sys.stderr)
 
