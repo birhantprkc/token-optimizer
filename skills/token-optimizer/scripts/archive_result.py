@@ -27,7 +27,7 @@ from pathlib import Path
 import hashlib
 
 from plugin_env import resolve_snapshot_dir
-from session_store import SessionStore
+from session_store import SessionStore, _sanitize_session_id as sanitize_sid
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -48,10 +48,7 @@ SNAPSHOT_DIR = resolve_snapshot_dir()
 # ---------------------------------------------------------------------------
 
 def _sanitize_session_id(sid: str | None) -> str:
-    """Sanitize session ID for safe use in filenames. Prevents path traversal."""
-    if not sid or not re.match(r'^[a-zA-Z0-9_-]+$', sid):
-        return "unknown"
-    return sid
+    return sanitize_sid(sid or "")
 
 
 def _read_stdin_hook_input(max_bytes: int = _STDIN_MAX_BYTES) -> dict:
@@ -233,8 +230,7 @@ def archive_result(quiet: bool = False) -> None:
     char_count = _ARCHIVE_MAX_SIZE if truncated else original_char_count
     token_est = int(char_count / CHARS_PER_TOKEN)
 
-    # Save full result with 0o600 permissions
-    entry_data = {
+    meta = {
         "tool_name": tool_name,
         "tool_use_id": tool_use_id,
         "chars": char_count,
@@ -243,29 +239,17 @@ def archive_result(quiet: bool = False) -> None:
         "truncated": truncated,
         "timestamp": now.isoformat(),
         "archived_from": "PostToolUse",
-        "response": tool_response,
     }
+
     entry_path = archive_dir / f"{tool_use_id}.json"
     fd = os.open(str(entry_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(entry_data, f)
+        json.dump({**meta, "response": tool_response}, f)
 
-    # Update manifest (append-only JSONL for crash safety) with 0o600
     manifest_path = archive_dir / "manifest.jsonl"
-    manifest_entry = {
-        "tool_name": tool_name,
-        "tool_use_id": tool_use_id,
-        "chars": char_count,
-        "original_chars": original_char_count,
-        "tokens_est": token_est,
-        "truncated": truncated,
-        "timestamp": now.isoformat(),
-        "archived_from": "PostToolUse",
-    }
-
     fd = os.open(str(manifest_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as f:
-        f.write(json.dumps(manifest_entry) + "\n")
+        f.write(json.dumps(meta) + "\n")
 
     if not quiet:
         print(f"[Tool Archive] Archived {tool_name} result ({char_count:,} chars, ~{token_est:,} tokens): {tool_use_id}", file=sys.stderr)

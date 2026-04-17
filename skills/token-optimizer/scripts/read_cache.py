@@ -216,10 +216,8 @@ def _log_decision(
     entry.update(extra)
     log_path = _decisions_log_path(session_id)
     try:
-        if not log_path.exists():
-            fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            os.close(fd)
-        with open(log_path, "a", encoding="utf-8") as handle:
+        fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, sort_keys=True) + "\n")
     except OSError:
         pass
@@ -684,11 +682,12 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
             entry["ranges_seen"] = [[offset, limit]]
         else:
             ranges_seen.append([offset, limit])
+            if len(ranges_seen) > 20:
+                ranges_seen = ranges_seen[-20:]
             entry["ranges_seen"] = ranges_seen
         entry["tokens_est"] = max(1, current_stat.st_size // 4) if current_stat.st_size else 0
         entry["read_count"] = int(entry.get("read_count", 0) or 0) + 1
         entry["last_access"] = time.time()
-        # Cache content for future delta diffs (v5.0) - only whole-file reads
         if delta_enabled and offset == 0 and limit == 0 and not entry.get("cached_content"):
             try:
                 from delta_diff import is_delta_eligible, content_hash, MAX_CONTENT_CACHE_BYTES
