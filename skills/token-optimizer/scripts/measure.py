@@ -13052,6 +13052,144 @@ def generate_compact_instructions(as_json=False, install=False, dry_run=False):
     return instructions_text
 
 
+_DYNAMIC_COMPACT_CAP = 2000
+_STATIC_COMPACT_FALLBACK = (
+    "COMPACTION GUIDANCE: Preserve code changes, key decisions, "
+    "and file paths. Discard intermediate attempts, explanations, "
+    "and verbose tool output."
+)
+
+
+def dynamic_compact_instructions(session_id=None):
+    """Generate session-aware compaction guidance from Session Knowledge Store.
+
+    Called by PreCompact hook. Produces PRESERVE/DROP sections based on
+    actual session data: frequently read files, error signals, context
+    intelligence summaries. Falls back to static guidance if store is
+    unavailable.
+
+    Prints guidance to stdout (hook output).
+    """
+    try:
+        from session_store import SessionStore
+    except ImportError:
+        print(_STATIC_COMPACT_FALLBACK)
+        return
+
+    if not session_id:
+        session_id = os.environ.get("CLAUDE_SESSION_ID", "")
+    if not session_id:
+        print(_STATIC_COMPACT_FALLBACK)
+        return
+
+    try:
+        store = SessionStore(session_id)
+    except Exception:
+        print(_STATIC_COMPACT_FALLBACK)
+        return
+
+    try:
+        active_files = store.get_recent_file_reads(limit=8, min_read_count=2)
+        one_time = store.get_one_time_reads(limit=8)
+        high_value = store.get_high_value_outputs(min_tokens=500, limit=5)
+        intel_events = store.get_intel_events(limit=10)
+    except Exception:
+        store.close()
+        print(_STATIC_COMPACT_FALLBACK)
+        return
+
+    has_data = active_files or intel_events or high_value
+
+    if not has_data:
+        store.close()
+        print(_STATIC_COMPACT_FALLBACK)
+        return
+
+    parts: list[str] = ["COMPACTION GUIDANCE (session-specific):"]
+
+    if active_files:
+        parts.append("")
+        parts.append("PRESERVE - Files actively being worked on:")
+        for f in active_files:
+            fp = f["file_path"]
+            short = fp.replace(str(Path.home()), "~")
+            parts.append(f"  - {short} (read {f['read_count']}x)")
+
+    if intel_events:
+        parts.append("")
+        parts.append("PRESERVE - Key findings from tool outputs:")
+        for ev in intel_events:
+            summary_line = ev["summary"].split("\n")[0][:100]
+            parts.append(f"  - {summary_line}")
+
+    error_signals = []
+    for ev in intel_events:
+        for line in ev["summary"].split("\n"):
+            if line.startswith("ERR:"):
+                error_signals.append(line[:100])
+                if len(error_signals) >= 3:
+                    break
+        if len(error_signals) >= 3:
+            break
+
+    if error_signals:
+        parts.append("")
+        parts.append("PRESERVE - Errors encountered:")
+        for e in error_signals:
+            parts.append(f"  - {e}")
+
+    if high_value:
+        parts.append("")
+        parts.append("PRESERVE - High-value tool outputs:")
+        for h in high_value:
+            cmd = h.get("command_or_path", h.get("tool_name", "?"))
+            if cmd and len(cmd) > 60:
+                cmd = cmd[:57] + "..."
+            tokens = h["output_tokens_est"]
+            parts.append(f"  - {cmd} ({tokens} tokens)")
+
+    drop_candidates: list[str] = []
+    for f in one_time:
+        fp = f["file_path"]
+        short = fp.replace(str(Path.home()), "~")
+        tok = f.get("tokens_est", 0)
+        if tok > 200:
+            drop_candidates.append(f"  - {short} (read once, ~{tok} tokens)")
+
+    if drop_candidates:
+        parts.append("")
+        parts.append("DROP - Safe to discard:")
+        parts.extend(drop_candidates[:5])
+
+    parts.append("")
+    parts.append(
+        "Always preserve the specific next step with enough detail "
+        "to continue without asking."
+    )
+
+    try:
+        quality_raw = store.get_meta("quality_score")
+        if quality_raw:
+            quality = float(quality_raw)
+            if quality < 60:
+                parts.append("")
+                parts.append(
+                    f"WARNING: Context quality has degraded ({quality:.0f}/100). "
+                    "Consider starting a new session or compacting with focused "
+                    "instructions for your current task."
+                )
+    except (TypeError, ValueError):
+        pass
+
+    store.close()
+
+    text = "\n".join(parts)
+    if len(text) > _DYNAMIC_COMPACT_CAP:
+        text = text[:_DYNAMIC_COMPACT_CAP - 3] + "..."
+
+    print(text)
+
+
 # ========== Session Continuity Engine (v2.0) ==========
 # Extends Smart Compaction for session death recovery.
 
@@ -16543,6 +16681,10 @@ if __name__ == "__main__":
         install = "--install" in args
         dry = "--dry-run" in args
         generate_compact_instructions(as_json=output_json, install=install, dry_run=dry)
+    elif args[0] == "dynamic-compact-instructions":
+        hook_input = _read_stdin_hook_input()
+        sid = hook_input.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "")
+        dynamic_compact_instructions(session_id=sid)
     elif args[0] == "setup-smart-compact":
         dry = "--dry-run" in args
         uninstall = "--uninstall" in args
