@@ -479,7 +479,10 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
     store = _make_store(session_id)
     if store is None:
         return
-    entry = store.get_file_entry(file_path)
+    try:
+        entry = store.get_file_entry(file_path)
+    except Exception:
+        return
 
     if entry is None:
         try:
@@ -939,13 +942,18 @@ def handle_invalidate(hook_input: dict[str, Any], quiet: bool) -> None:
     file_path = str(Path(raw_path).resolve())
     session_id = str(hook_input.get("agent_id") or hook_input.get("session_id") or "unknown")
     store = _make_store(session_id)
-    existing = store.get_file_entry(file_path)
+    if store is None:
+        return
 
-    if existing is not None:
-        store.delete_file_entry(file_path)
-        store.delete_cached_content(file_path)
-        if not quiet:
-            print(f"[Read Cache] Invalidated: {file_path}", file=sys.stderr)
+    try:
+        existing = store.get_file_entry(file_path)
+        if existing is not None:
+            store.delete_file_entry(file_path)
+            store.delete_cached_content(file_path)
+            if not quiet:
+                print(f"[Read Cache] Invalidated: {file_path}", file=sys.stderr)
+    except Exception:
+        pass
 
 
 def handle_stats(session_id: str) -> None:

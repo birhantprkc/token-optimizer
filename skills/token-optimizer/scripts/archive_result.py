@@ -214,19 +214,16 @@ def archive_result(quiet: bool = False) -> None:
         return
 
     archive_dir = _archive_dir_for_session(session_id)
-    archive_dir.mkdir(parents=True, exist_ok=True)
 
     now = datetime.now(timezone.utc)
     original_char_count = len(tool_response)
     truncated = original_char_count > _ARCHIVE_MAX_SIZE
 
-    # Truncate oversized responses
     if truncated:
         tool_response = tool_response[:_ARCHIVE_MAX_SIZE] + (
             f"\n\n[TRUNCATED at 5MB. Original size: {original_char_count} chars]"
         )
 
-    # chars = content size before truncation marker (consistent metric)
     char_count = _ARCHIVE_MAX_SIZE if truncated else original_char_count
     token_est = int(char_count / CHARS_PER_TOKEN)
 
@@ -241,15 +238,19 @@ def archive_result(quiet: bool = False) -> None:
         "archived_from": "PostToolUse",
     }
 
-    entry_path = archive_dir / f"{tool_use_id}.json"
-    fd = os.open(str(entry_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({**meta, "response": tool_response}, f)
+    try:
+        archive_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        entry_path = archive_dir / f"{tool_use_id}.json"
+        fd = os.open(str(entry_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({**meta, "response": tool_response}, f)
 
-    manifest_path = archive_dir / "manifest.jsonl"
-    fd = os.open(str(manifest_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    with os.fdopen(fd, "a", encoding="utf-8") as f:
-        f.write(json.dumps(meta) + "\n")
+        manifest_path = archive_dir / "manifest.jsonl"
+        fd = os.open(str(manifest_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(json.dumps(meta) + "\n")
+    except OSError:
+        pass
 
     if not quiet:
         print(f"[Tool Archive] Archived {tool_name} result ({char_count:,} chars, ~{token_est:,} tokens): {tool_use_id}", file=sys.stderr)
