@@ -51,8 +51,7 @@ Then in Claude Code: `/token-optimizer`
 
 > **Please enable auto-update after installing.** Claude Code ships third-party marketplaces with auto-update **off by default**, and plugin authors cannot change that default. So you won't get bug fixes automatically unless you turn it on. In Claude Code: `/plugin` → **Marketplaces** tab → select `alexgreensh-token-optimizer` → **Enable auto-update**. One-time, 10 seconds, and you'll never miss a fix again. Token Optimizer also prints a one-time reminder on your first SessionStart so you don't forget.
 
-<details>
-<summary><h3>Seeing <code>Unknown skill: plugin</code>?</h3></summary>
+### Seeing `Unknown skill: plugin`?
 
 That means your Claude Code is out of date. The `/plugin` command was added in a recent Claude Code release. Update first:
 
@@ -62,10 +61,7 @@ That means your Claude Code is out of date. The `/plugin` command was added in a
 
 Then restart Claude Code and re-run the two `/plugin` commands above.
 
-</details>
-
-<details>
-<summary><h3>Windows users: read this first</h3></summary>
+### Windows users: read this first
 
 The plugin install above is the **only** path you should use on Windows. Do **not** also run the `install.sh` script described below — that's a bash installer for macOS/Linux/WSL, and combining the two creates an `EBUSY: resource busy or locked` error because Git Bash holds Windows file handles open while the plugin system is trying to clone.
 
@@ -83,10 +79,7 @@ If you've already hit the EBUSY error:
 
 **Manual ZIP fallback** (if plugin install repeatedly fails): download [the repo ZIP](https://github.com/alexgreensh/token-optimizer/archive/refs/heads/main.zip) (~800 KB), extract to `C:\Users\<you>\.claude\token-optimizer\`, then run `python measure.py setup-quality-bar` from that directory. Note: on Windows the command is `python`, not `python3`.
 
-</details>
-
-<details>
-<summary><h3>macOS / Linux only: script install (alternative)</h3></summary>
+### macOS / Linux only: script install (alternative)
 
 If you prefer a script-managed install on macOS or Linux, this works too and auto-updates daily via `git pull --ff-only`. **Do not run this on Windows, and do not run it alongside the plugin install above on any platform.** Pick one method.
 
@@ -97,10 +90,9 @@ bash ~/.claude/token-optimizer/install.sh
 
 Works on Claude Code and [OpenClaw](#openclaw-plugin). Each platform has its own native plugin (Python for Claude Code, TypeScript for OpenClaw). No bridging, no shared runtime, zero cross-platform dependencies.
 
-</details>
+---
 
-<details>
-<summary><h2>Full Visibility: See Every Token, Every Dollar, Every Turn</h2></summary>
+## Full Visibility: See Every Token, Every Dollar, Every Turn
 
 Most tools tell you your context is full. Token Optimizer shows you exactly where every token went, how much each turn cost, which skills and MCP servers actually fired, and which ones are just sitting there eating your budget.
 
@@ -134,10 +126,9 @@ python3 measure.py dashboard --serve      # One-time serve over HTTP
 
 Throughout this README, whenever a feature mentions it's also visible on the dashboard, that means it lives inside this same HTML page. One place, everything tracked.
 
-</details>
+---
 
-<details>
-<summary><h2>What Makes This Different</h2></summary>
+## What Makes This Different
 
 ### Two kinds of token waste, and most tools only fix one
 
@@ -159,10 +150,9 @@ Token Optimizer runs as an external process. It doesn't inject instructions into
 
 `/context` tells you that your context is 73% full. Token Optimizer tells you which 12K are wasted on skills you never use, flags 47 orphaned MEMORY.md topic files Claude can't see, checkpoints your decisions before compaction destroys them, and gives you a quality score that tracks how much dumber your AI is getting as the session wears on.
 
-</details>
+---
 
-<details>
-<summary><h2>Real Savings</h2></summary>
+## Real Savings
 
 One real snapshot from 30 days of heavy Opus use: 942 sessions, 6.13B input tokens, 90% Opus, 82% cache hit rate.
 
@@ -174,10 +164,9 @@ One real snapshot from 30 days of heavy Opus use: 942 sessions, 6.13B input toke
 
 Lighter users see proportional savings. Structural audit wins (unused skills, duplicate configs, orphaned memory entries) are immediate regardless of volume, and they compound because a smaller prefix means a smaller cache-read bill on every single turn that follows.
 
-</details>
+---
 
-<details>
-<summary><h2>Trust & Safety FAQ</h2></summary>
+## Trust & Safety FAQ
 
 <details>
 <summary>🎯 <strong>Can Token Optimizer degrade my context quality?</strong></summary>
@@ -224,10 +213,9 @@ Claude Code and OpenClaw today, with native plugins for each (Python for Claude 
 Windsurf and Cursor are next on the roadmap. Codex is waiting for the plugin API to stabilize.
 </details>
 
-</details>
+---
 
-<details>
-<summary><h2>Why install this first</h2></summary>
+## Why install this first
 
 Every Claude Code session starts with invisible overhead: system prompt, tool definitions, skills, MCP servers, CLAUDE.md, MEMORY.md. A typical power user burns 50-70K tokens before typing a word.
 
@@ -245,10 +233,9 @@ Token Optimizer tracks all of this. Quality score, degradation bands, compaction
 
 > **"But doesn't removing tokens hurt the model?"** No. Token Optimizer only touches what's safe to touch. Structural optimization removes genuinely unused components (duplicate configs, unused skill frontmatter, orphaned memory entries), never the conversation itself. Active Compression works on new content entering your window (smart re-reads, credential-safe command summaries) and on the compaction boundary (checkpoints before auto-compact, restore after). Nothing already in your context gets edited or removed, which means your prompt cache stays intact. The 7-signal quality score tracks degradation in real time, and most users see scores improve after optimization because the model has more room for real work.
 
-</details>
+---
 
-<details>
-<summary><h2>Smart Compaction and Session Continuity</h2></summary>
+## Smart Compaction and Session Continuity
 
 When auto-compact fires, 60-70% of your conversation vanishes. Decisions, error-fix sequences, agent state, all gone.
 
@@ -289,10 +276,9 @@ Enable optional local-only checkpoint telemetry to see whether checkpoints are f
 TOKEN_OPTIMIZER_CHECKPOINT_TELEMETRY=1 python3 measure.py checkpoint-stats --days 7
 ```
 
-</details>
+---
 
-<details>
-<summary><h2>Quality Scoring</h2></summary>
+## Quality Scoring
 
 Seven signals, weighted to reflect real-world impact:
 
@@ -334,10 +320,9 @@ Real session. 708 messages, 2 compactions, 88% of the original context gone. Wit
 
 ![Real session quality breakdown](skills/token-optimizer/assets/quality-example.svg)
 
-</details>
+---
 
-<details>
-<summary><h2>Active Compression (v5)</h2></summary>
+## Active Compression (v5)
 
 Token Optimizer no longer just measures context bloat. It actively reduces it. Five features target specific waste patterns, each with honest risk assessment and dashboard toggles.
 
@@ -461,10 +446,9 @@ python3 measure.py compression-stats --days 30
 
 Output shows total events per feature, tokens saved, compression ratio, and quality preservation rate. The `verified` flag distinguishes exact measurements (delta mode knows the precise before/after) from estimates (structure map is heuristic).
 
-</details>
+---
 
-<details>
-<summary><h2>Live Quality Bar</h2></summary>
+## Live Quality Bar
 
 A glance at your terminal tells you if you're in trouble. Colors shift from green to red as quality degrades. When quality drops below 75, session duration appears as a warning. Running subagents show with their model and elapsed time so you can spot misrouted models.
 
@@ -488,10 +472,9 @@ This removes the components and writes `quality_bar_disabled: true` to `~/.claud
 
 **I want to keep my own custom statusline and also see the quality score.** The custom-statusline path is still respected when you run `setup-quality-bar` directly. You'll get integration instructions for reading `~/.claude/token-optimizer/quality-cache.json` from your own script instead.
 
-</details>
+---
 
-<details>
-<summary><h2>Coach Mode and Fleet Auditor</h2></summary>
+## Coach Mode and Fleet Auditor
 
 Token Optimizer is not just reactive. It's also proactive.
 
@@ -542,19 +525,17 @@ python3 measure.py inject-routing --dry-run   # Preview what would be injected
 python3 measure.py inject-routing              # Inject (with approval)
 ```
 
-</details>
+---
 
-<details>
-<summary><h2>Dashboard: Post-Audit Walkthrough</h2></summary>
+## Dashboard: Post-Audit Walkthrough
 
 The Full Visibility dashboard up top auto-tracks every session. After you run `/token-optimizer` and the 6-agent audit finishes, the same dashboard opens on an audit-focused view where every component is clickable. Expand any item to see why it matters, the trade-offs, and what would change. Toggle the fixes you want, copy a ready-to-paste optimization prompt, and apply with approval.
 
 Hover help on every column explains `Cache`, `TTL`, `Pacing`, `Cache R`, and `Cache W` without jargon. Session drill-downs key off stable session identity for consistent expansion across refreshes.
 
-</details>
+---
 
-<details>
-<summary><h2>What questions can you ask?</h2></summary>
+## What questions can you ask?
 
 | Command | What You Get |
 |---------|-------------|
@@ -577,10 +558,9 @@ Hover help on every column explains `Cache`, `TTL`, `Pacing`, `Cache R`, and `Ca
 | `expand` | **"Get that result back."** Retrieves a tool result the model archived automatically. Usually the model calls this itself when it needs the full output again, but you can also run it manually. |
 | `/token-optimizer` | **"Fix it for me."** Interactive audit with 6 parallel agents. Guided fixes with diffs and backups. |
 
-</details>
+---
 
-<details>
-<summary><h2>How It Compares</h2></summary>
+## How It Compares
 
 | Capability | Token Optimizer | `/context` | context-mode | Proxy compressors |
 |---|---|---|---|---|
@@ -608,12 +588,9 @@ Some tools claim to reduce tokens by modifying or removing blocks already in you
 
 Token Optimizer never modifies content already in your context. Structural optimization runs between sessions. Active Compression works on new content entering your window, or on the compaction boundary. Your cache prefix stays intact.
 
-</details>
+---
 
-<details>
-<summary><h2>Memory Health</h2></summary>
-
-Your MEMORY.md Is Probably Broken
+## Memory Health: Your MEMORY.md Is Probably Broken
 
 Claude auto-loads the first 200 lines of MEMORY.md every session. Everything after line 200 is silently truncated. The tokens still count against your window, but Claude never sees the content. Most power users don't know this is happening.
 
@@ -638,10 +615,9 @@ The dashboard shows CLAUDE.md Health and MEMORY.md Health cards on the Overview 
 
 For contradiction detection (two rules saying opposite things), run the audit in a Claude session. The tool extracts all NEVER/ALWAYS/MUST rules from both files. Claude reviews them semantically in context, no extra LLM call needed.
 
-</details>
+---
 
-<details>
-<summary><h2>Read-Cache and Context Tools</h2></summary>
+## Read-Cache and Context Tools
 
 ### PreToolUse Read-Cache (automatic deduplication)
 
@@ -709,10 +685,9 @@ Tracks cumulative dollar savings from setup optimization, checkpoint restores, a
 python3 measure.py savings                      # Dollar savings report (last 30 days)
 ```
 
-</details>
+---
 
-<details>
-<summary><h2>Usage Analytics</h2></summary>
+## Usage Analytics
 
 **Trends**: Which skills do you actually invoke vs just having installed? Which models are you using? How has your overhead changed over time?
 
@@ -725,10 +700,9 @@ python3 measure.py health           # Session hygiene check
 python3 measure.py plugin-cleanup   # Detect duplicate skills and archive local/plugin overlaps
 ```
 
-</details>
+---
 
-<details>
-<summary><h2>VS Code Users</h2></summary>
+## VS Code Users
 
 Using Claude Code in the VS Code extension? Most of Token Optimizer works identically:
 
@@ -749,10 +723,9 @@ Using Claude Code in the VS Code extension? Most of Token Optimizer works identi
 
 > **Note on `--bare` mode**: Running Claude Code with the `--bare` flag (for scripted/CI usage) skips all hooks and plugin sync. Token Optimizer's Smart Compaction, quality tracking, and session data collection require hooks and won't activate in `--bare` mode. This is expected. `--bare` is designed for lightweight scripted calls.
 
-</details>
+---
 
-<details>
-<summary><h2>OpenClaw Plugin</h2></summary>
+## OpenClaw Plugin
 
 Native TypeScript plugin for OpenClaw agent systems. Zero Python dependency, zero runtime dependencies, zero telemetry. Works with any model your gateway is configured against: Claude, GPT-5, Gemini, DeepSeek, local via Ollama.
 
@@ -789,7 +762,7 @@ Inside OpenClaw, run `/token-optimizer` for a guided audit with coaching.
 
 See [`openclaw/README.md`](openclaw/README.md) for full docs.
 
-</details>
+---
 
 ## License
 
