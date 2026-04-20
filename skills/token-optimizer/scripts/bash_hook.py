@@ -9,7 +9,7 @@ Exit behavior:
 - JSON output = rewrite command via updatedInput
 - Any error = exit silently (fail open)
 
-Controlled by: TOKEN_OPTIMIZER_BASH_COMPRESS=1 (default: OFF)
+Controlled by: TOKEN_OPTIMIZER_BASH_COMPRESS=0 to disable (default: ON)
 """
 
 import json
@@ -48,7 +48,7 @@ _WHITELIST_SINGLE = frozenset({
     # v5.1 extended test runners (read-only test execution)
     "mocha", "karma",
     # v5.5 read-only utilities
-    "sqlite3", "wc", "du", "df", "printenv",
+    "sqlite3", "wc", "du", "df",
 })
 _WHITELIST_COMPOUND = {
     ("git", "status"), ("git", "log"), ("git", "diff"), ("git", "show"), ("git", "branch"),
@@ -83,7 +83,6 @@ _WHITELIST_COMPOUND = {
     ("npx", "mocha"),
     ("npx", "karma"),
     # v5.5 docker/kubectl read-only inspection
-    ("docker", "exec"),
     ("docker", "logs"),
     ("docker", "inspect"),
     ("kubectl", "get"),
@@ -136,9 +135,9 @@ def _is_whitelisted(command_str):
     if (cmd, subcmd) in _WHITELIST_COMPOUND:
         if cmd == "git" and subcmd in _GIT_WRITE_SUBCMDS:
             return False
-        if cmd == "docker" and subcmd == "exec":
+        if cmd == "kubectl":
             remaining = tokens[cmd_start + 2:]
-            if any(arg in ("-it", "-i", "-t") for arg in remaining):
+            if any(arg in ("secret", "secrets") for arg in remaining):
                 return False
         return True
 
@@ -166,8 +165,8 @@ def _is_whitelisted(command_str):
 
 
 def _is_bash_compress_enabled():
-    """Check if bash compression is enabled. Default OFF — opt-in via flag/env."""
-    return is_v5_flag_enabled("v5_bash_compress", "TOKEN_OPTIMIZER_BASH_COMPRESS", default=False)
+    """Check if bash compression is enabled. Default ON since v5.5."""
+    return is_v5_flag_enabled("v5_bash_compress", "TOKEN_OPTIMIZER_BASH_COMPRESS", default=True)
 
 
 def main():

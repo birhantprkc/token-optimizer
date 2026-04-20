@@ -7779,7 +7779,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.4.23"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.5.0"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -8091,14 +8091,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         with open(cfg_path, "r", encoding="utf-8") as _cf:
                             cfg = _json.load(_cf)
                         feature_keys = {{
-                            "quality_nudges": "v5_quality_nudges",
-                            "loop_detection": "v5_loop_detection",
-                            "delta_mode": "v5_delta_mode",
-                            "structure_map_beta": "v5_structure_map_beta",
-                            "bash_compress": "v5_bash_compress",
+                            "quality_nudges": ("v5_quality_nudges", True),
+                            "loop_detection": ("v5_loop_detection", True),
+                            "delta_mode": ("v5_delta_mode", True),
+                            "structure_map_beta": ("v5_structure_map_beta", False),
+                            "bash_compress": ("v5_bash_compress", True),
                         }}
-                        for short, cfg_key in feature_keys.items():
-                            v5_features[short] = {{"enabled": bool(cfg.get(cfg_key, False))}}
+                        for short, (cfg_key, feat_default) in feature_keys.items():
+                            v5_features[short] = {{"enabled": bool(cfg.get(cfg_key, feat_default))}}
                 except (OSError, ValueError):
                     pass
                 self._json_response(200, {{"ok": True, "msg": result.stdout.strip(), "v5_features": v5_features}})
@@ -14642,15 +14642,15 @@ V5_FEATURES = {
     "bash_compress": {
         "env_var": "TOKEN_OPTIMIZER_BASH_COMPRESS",
         "config_key": "v5_bash_compress",
-        "default": False,
+        "default": True,
         "label": "Bash Output Compression",
         "what": "Rewrites 'git status', 'pytest', 'npm install' etc. to return compressed summaries instead of verbose output.",
         "value": "Strips hundreds of lines of test/build/git output down to just the essentials. Best for sessions with lots of CLI commands.",
         "impact_pct": 10,  # benchmark showed 38% on compressible commands, adjusted for session mix
         "how": "A PreToolUse hook intercepts safe read-only commands and routes them through a compression wrapper. Only whitelisted commands (git status/log/diff, pytest, jest, npm install, ls) are touched. Compound commands (anything with &&, ;, |, $()) are never touched.",
-        "risk": "Moderate. Compression is lossy by design: 'git diff' truncates to 30 lines on large diffs, 'pytest' shows pass/fail counts but strips individual passing tests, 'git log' drops merge commit details. For routine checks this is fine. For careful diff review or debugging specific test failures, it could hide information. OFF by default -- opt-in only.",
-        "risk_level": "moderate",
-        "recommended": False,
+        "risk": "Low. Compression is lossy by design: 'git diff' truncates to 30 lines on large diffs, 'pytest' shows pass/fail counts but strips individual passing tests, 'git log' drops merge commit details. For routine checks this is fine. For careful diff review or debugging specific test failures, set TOKEN_OPTIMIZER_BASH_COMPRESS=0 to disable temporarily.",
+        "risk_level": "low",
+        "recommended": True,
     },
 }
 
@@ -14716,7 +14716,7 @@ def _show_v5_welcome():
     print("    - Quality Nudges      ON  (harmless, just warnings)")
     print("    - Loop Detection      ON  (harmless, just warnings)")
     print("    - Delta Mode          ON  (smart re-reads, big savings)")
-    print("    - Bash Compression    OFF (lossy, opt-in only)")
+    print("    - Bash Compression    ON  (lossy, disable: TOKEN_OPTIMIZER_BASH_COMPRESS=0)")
     print("    - Structure Map Beta  OFF (telemetry only)")
     print()
     print("  Want to change these? Three ways:")

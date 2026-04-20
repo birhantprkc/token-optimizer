@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.4.26-green" alt="Version 5.4.26"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.5.0-green" alt="Version 5.5.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.3.0-brightgreen" alt="OpenClaw v2.3.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg" alt="License: PolyForm Noncommercial"></a>
@@ -50,19 +50,6 @@ Works on <strong>Claude Code</strong> and <strong>OpenClaw</strong> today. Winds
 Then in Claude Code: `/token-optimizer`
 
 > **Please enable auto-update after installing.** Claude Code ships third-party marketplaces with auto-update **off by default**, and plugin authors cannot change that default. So you won't get bug fixes automatically unless you turn it on. In Claude Code: `/plugin` → **Marketplaces** tab → select `alexgreensh-token-optimizer` → **Enable auto-update**. One-time, 10 seconds, and you'll never miss a fix again. Token Optimizer also prints a one-time reminder on your first SessionStart so you don't forget.
-
-<details>
-<summary><h3>Seeing <code>Unknown skill: plugin</code>?</h3></summary>
-
-That means your Claude Code is out of date. The `/plugin` command was added in a recent Claude Code release. Update first:
-
-- **Homebrew**: `brew upgrade claude-code`
-- **npm**: `npm update -g @anthropic-ai/claude-code`
-- **Native installer**: re-run the install command from [claude.com/product/claude-code](https://claude.com/product/claude-code)
-
-Then restart Claude Code and re-run the two `/plugin` commands above.
-
-</details>
 
 <details>
 <summary><h3>Windows users: read this first</h3></summary>
@@ -180,7 +167,7 @@ Lighter users see proportional savings. Structural audit wins (unused skills, du
 <details>
 <summary>🎯 <strong>Can Token Optimizer degrade my context quality?</strong></summary>
 
-No. Structural optimization only removes genuinely unused components (skills you never invoke, duplicate configs, orphaned memory entries). Active Compression features are independently toggleable, and the lossy ones (like Bash Compression) are OFF by default. The 7-signal quality score actively tracks degradation, so if anything ever hurt quality, the score would show it.
+No. Structural optimization only removes genuinely unused components (skills you never invoke, duplicate configs, orphaned memory entries). Active Compression features are independently toggleable, and the lossy ones (like Bash Compression) can be disabled with a single command or env var. The 7-signal quality score actively tracks degradation, so if anything ever hurt quality, the score would show it.
 </details>
 
 <details>
@@ -205,7 +192,7 @@ No network calls. No analytics. No opt-out telemetry because there's nothing to 
 <details>
 <summary>🛟 <strong>Can it hurt my session?</strong></summary>
 
-No. All hooks are non-blocking with fail-open design. If a Token Optimizer script ever errors, your command runs normally. Compression is opt-in. Checkpoints are additive. Quality scoring is read-only measurement.
+No. All hooks are non-blocking with fail-open design. If a Token Optimizer script ever errors, your command runs normally. Compression features are all individually toggleable. Checkpoints are additive. Quality scoring is read-only measurement.
 </details>
 
 <details>
@@ -337,8 +324,8 @@ Token Optimizer no longer just measures context bloat. It actively reduces it. F
 
 ![v5 Active Compression overview](skills/token-optimizer/assets/v5-hero.svg)
 
-**On by default**: Quality Nudges, Loop Detection, Delta Mode.
-**Opt-in**: Bash Compression (7 handlers as of v5.1.0) and Structure Map Beta.
+**On by default**: Quality Nudges, Loop Detection, Delta Mode, Bash Compression (16 handlers).
+**Opt-in**: Structure Map Beta (local measurement only).
 
 All five features are independently toggleable from the Manage tab in the dashboard, via CLI (`measure.py v5 enable|disable <feature>`), or with environment variables.
 
@@ -348,7 +335,7 @@ All five features are independently toggleable from the Manage tab in the dashbo
 | Loop Detection | ON | ~8% (caught loops) | None |
 | Delta Mode | ON | ~20% (smart re-reads) | Low |
 | Structure Map Beta (local measurement) | OFF (opt-in) | Measurement only | None |
-| Bash Compression | OFF (opt-in) | ~10% (CLI output) | Moderate |
+| Bash Compression | ON | ~10% (CLI output) | Low |
 
 > **Privacy note**: Every feature runs 100% on your machine. Nothing is ever sent anywhere. No analytics endpoint, no phone-home, no cloud sync. "Measurement" and "beta telemetry" always mean local-only SQLite writes to a file you own, and you can inspect, export, or delete that file at any time. Token Optimizer has zero network calls by design.
 
@@ -402,7 +389,7 @@ Writes measurement events to your local SQLite database when a code file is read
 
 ![Bash Output Compression: git status and pytest before/after](skills/token-optimizer/assets/v5-bash-compression.svg)
 
-### Bash Output Compression (OFF, opt-in, lossy)
+### Bash Output Compression (ON by default, lossy)
 
 Rewrites common CLI commands to return compressed summaries instead of verbose output. v5.1.0 ships seven new handlers covering the command families that eat the most context: lint (rule-code grouping for eslint, ruff, flake8, shellcheck, rubocop, golangci-lint), log tails (adjacent-duplicate collapse), tree (depth-2 truncation), docker build and pull (progress filtering), long listings (pip list, npm ls, docker ps, with top-N plus tail marker), JS/TS/Go build output (error-and-summary view), and test runner routing (cypress, playwright, mocha, karma all route through the unified pytest compressor).
 
@@ -414,9 +401,9 @@ Together with the existing git and pytest handlers, that's full coverage for ~90
 
 **Security**: `shell=True` is never used. Credentials (AWS keys, GitHub PATs, Slack tokens, Stripe keys, OpenAI keys, HTTP basic-auth URLs) are scanned pre-compression and preserved verbatim. Multilingual error lines survive the preservation path. Partial output on timeout is returned raw, never compressed.
 
-**How to enable**: `measure.py v5 enable bash_compress` or `TOKEN_OPTIMIZER_BASH_COMPRESS=1`
+**How to disable**: `measure.py v5 disable bash_compress` or `TOKEN_OPTIMIZER_BASH_COMPRESS=0`
 
-**Risk**: moderate. Compression is lossy by design. For routine checks this is fine. For careful diff review or debugging specific test failures, it could hide information. OFF by default, opt-in only.
+**Risk**: low. Compression is lossy by design. For routine checks this is fine. For careful diff review or debugging specific test failures, disable temporarily with the command above.
 
 ### Managing v5 features
 
@@ -437,7 +424,7 @@ python3 measure.py compression-stats            # see actual measured savings fr
 TOKEN_OPTIMIZER_QUALITY_NUDGES=0        # kill switch for nudges
 TOKEN_OPTIMIZER_LOOP_DETECTION=0        # kill switch for loop detection
 TOKEN_OPTIMIZER_READ_CACHE_DELTA=1      # enable delta mode
-TOKEN_OPTIMIZER_BASH_COMPRESS=1         # enable bash compression
+TOKEN_OPTIMIZER_BASH_COMPRESS=0         # disable bash compression
 TOKEN_OPTIMIZER_STRUCTURE_MAP=beta      # enable beta telemetry
 ```
 
@@ -576,7 +563,7 @@ Hover help on every column explains `Cache`, `TTL`, `Pacing`, `Cache R`, and `Ca
 | Structural waste audit | Deep, per-component | Summary only | No | No |
 | Quality degradation tracking | 7-signal score with grades | Capacity % only | No | No |
 | Compaction survival | Progressive checkpoints plus restore | No | Session guide only | No |
-| Runtime output compression | 30+ CLI commands, credential-safe, opt-in where lossy | No | Yes | Yes, always-on (cannot disable) |
+| Runtime output compression | 16 CLI handlers, credential-safe, individually toggleable | No | Yes | Yes, always-on (cannot disable) |
 | Measures if compression actually helped | Yes, local telemetry with before/after tokens | No | No | No |
 | Read deduplication and smart diff on re-reads | Yes | No | No | No |
 | Behavioral coaching and model routing | 9 detectors, cost-ranked subagent breakdown | Basic suggestions | No | No |

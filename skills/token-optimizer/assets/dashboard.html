@@ -2186,12 +2186,12 @@ var DB = (function() {
       env_var: 'TOKEN_OPTIMIZER_STRUCTURE_MAP'
     },
     bash_compress: {
-      default: false, recommended: false, impact_pct: 10, risk_level: 'moderate',
+      default: true, recommended: true, impact_pct: 10, risk_level: 'low',
       label: 'Bash Output Compression',
       what: "Rewrites 'git status', 'pytest', 'npm install' etc. to return compressed summaries instead of verbose output.",
       value: "Strips hundreds of lines of test/build/git output down to just the essentials. Best for sessions with lots of CLI commands.",
       how: "A PreToolUse hook intercepts safe read-only commands and routes them through a compression wrapper. Only whitelisted commands (git status/log/diff, pytest, jest, npm install, ls) are touched. Compound commands (anything with &&, ;, |, $()) are never touched.",
-      risk: "Moderate. Compression is lossy by design: 'git diff' truncates to 30 lines on large diffs, 'pytest' shows pass/fail counts but strips individual passing tests, 'git log' drops merge commit details. For routine checks this is fine. For careful diff review or debugging specific test failures, it could hide information. OFF by default -- opt-in only.",
+      risk: "Low. Compression is lossy by design: 'git diff' truncates to 30 lines on large diffs, 'pytest' shows pass/fail counts but strips individual passing tests, 'git log' drops merge commit details. For routine checks this is fine. For careful diff review or debugging specific test failures, set TOKEN_OPTIMIZER_BASH_COMPRESS=0 to disable temporarily.",
       env_var: 'TOKEN_OPTIMIZER_BASH_COMPRESS'
     }
   };

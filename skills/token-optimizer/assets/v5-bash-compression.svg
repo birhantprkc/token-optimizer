@@ -9,7 +9,7 @@
   <rect width="800" height="520" rx="12" fill="#1e1e2e"/>
 
   <!-- Title -->
-  <text x="400" y="38" fill="#f9e2af" font-family="'SF Mono','Fira Code',monospace" font-size="20" font-weight="bold" text-anchor="middle">Bash Output Compression (opt-in)</text>
+  <text x="400" y="38" fill="#f9e2af" font-family="'SF Mono','Fira Code',monospace" font-size="20" font-weight="bold" text-anchor="middle">Bash Output Compression (on by default)</text>
   <text x="400" y="60" fill="#a6adc8" font-family="'SF Mono','Fira Code',monospace" font-size="12" text-anchor="middle">Whitelisted commands only &#183; Credentials preserved &#183; Lossy by design</text>
 
   <!-- git status example -->
