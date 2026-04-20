@@ -775,6 +775,24 @@ See [`openclaw/README.md`](openclaw/README.md) for full docs.
 
 ## License
 
-**PolyForm Noncommercial 1.0.0**. Free for personal, research, educational, and non-commercial use. Commercial use requires a separate license. Contact [Alex Greenshpun](https://linkedin.com/in/alexgreensh) for commercial licensing.
+**PolyForm Noncommercial 1.0.0**. Free for personal, research, educational, and non-commercial use.
+
+_This FAQ is informational guidance, not a modification of the license terms. Last updated: April 2026._
+
+### 🧑‍💻 Personal / hobby / research / education?
+Go for it. Full source, zero cost, runs locally. That's the whole point.
+
+### 🏢 Small team (under 5 people OR under $20k/month revenue)?
+You're good. Use it freely, no paperwork needed.
+If you want to [sponsor the project](https://github.com/sponsors/alexgreensh) or buy me a coffee, not required, but always appreciated ☕
+
+### 🔄 Started personal, now it's turning into a business?
+Your past use is totally fine. The license has a built-in 32-day grace period after any written notice, so there's plenty of runway.
+When you're ready, just reach out for a commercial license. Terms are reasonable and size-appropriate.
+
+### 🏗️ Larger company / commercial use?
+Let's talk. Contact [Alex Greenshpun](https://linkedin.com/in/alexgreensh) or me@alexgreenshpun.com.
+
+---
 
 Created by [Alex Greenshpun](https://linkedin.com/in/alexgreensh).
