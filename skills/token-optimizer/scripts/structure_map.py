@@ -41,15 +41,15 @@ LANGUAGE_LABELS = {
 NON_CODE_SUFFIXES = frozenset({".md", ".json", ".yaml", ".yml", ".toml"})
 
 MIN_TOKENS_FOR_STRUCTURE = 1000
-MAX_AST_BYTES = 300 * 1024
-MAX_AST_LINES = 5000
+MAX_AST_BYTES = 800 * 1024
+MAX_AST_LINES = 20000
 MAX_JS_TS_BYTES = 400 * 1024
 MAX_JS_TS_LINES = 5000
 
 MAX_REPLACEMENT_CHARS = {
-    "signatures": 500,
-    "top_level": 700,
-    "skeleton": 1200,
+    "signatures": 800,
+    "top_level": 1200,
+    "skeleton": 2400,
     "digest": 900,
 }
 

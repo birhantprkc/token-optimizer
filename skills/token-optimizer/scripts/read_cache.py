@@ -71,7 +71,7 @@ MAX_CONTEXTIGNORE_PATTERNS = 200
 READ_CACHE_MODES = frozenset({"shadow", "warn", "soft_block", "block"})
 DEFAULT_MODE = "soft_block"
 
-MIN_STRUCTURE_CONFIDENCE = 0.84
+MIN_STRUCTURE_CONFIDENCE = 0.75
 REASON_ONLY_TOKENS_EST = 10
 STRICT_CONTEXT_CAPS = {
     "signatures": 350,
@@ -79,7 +79,7 @@ STRICT_CONTEXT_CAPS = {
     "skeleton": 850,
     "digest": 500,
 }
-MAX_ADDITIONAL_CONTEXT_CHARS = 1500
+MAX_ADDITIONAL_CONTEXT_CHARS = 2600
 STRICT_ADDITIONAL_CONTEXT_CHARS = 1000
 
 # All binary extensions (early-return path). Token-cost warnings use the
