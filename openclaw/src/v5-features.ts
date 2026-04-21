@@ -58,7 +58,9 @@ export const V5_FEATURES: Record<V5FeatureId, V5Feature> = {
       "Surface a short hint to the session when the quality signal drops sharply between two scored turns.",
     defaultEnabled: false,
     risk: "medium",
-    status: "shipped",
+    // Deferred: OpenClaw's plugin API does not expose a session-visible
+    // notification surface for inline context injection.
+    status: "deferred",
   },
   loop_detection: {
     id: "loop_detection",
@@ -67,7 +69,8 @@ export const V5_FEATURES: Record<V5FeatureId, V5Feature> = {
       "Flag when the same tool call is repeating with the same arguments inside a single turn.",
     defaultEnabled: false,
     risk: "medium",
-    status: "shipped",
+    // Deferred: requires the same notification surface as quality_nudge.
+    status: "deferred",
   },
   bash_compression: {
     id: "bash_compression",

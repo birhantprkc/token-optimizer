@@ -18,11 +18,11 @@ Automatically captures session state before OpenClaw compacts context, and resto
 
 ## Events
 
-- **session:compact:before**: Saves the last 20 messages as a markdown checkpoint
-- **session:compact:after**: Injects the checkpoint back into context
+- **session:compact:before**: Captures session state via intelligent extraction (decisions, errors, instructions, active tasks, modified files). Falls back to raw last-20-messages if extraction fails.
+- **session:compact:after**: Restores the checkpoint into context with injection mitigation framing.
 
 ## Storage
 
-Checkpoints saved to `~/.openclaw/token-optimizer/checkpoints/{sessionId}.md`
+Checkpoints saved to `~/.openclaw/token-optimizer/checkpoints/{sessionId}/`
 
-Old checkpoints (>7 days) are cleaned up on gateway startup.
+Progressive checkpoints fire at context fill bands (20%, 35%, 50%, 65%, 80%) and quality thresholds (80, 70, 50, 40). Old checkpoints (>7 days) are cleaned up on gateway startup.

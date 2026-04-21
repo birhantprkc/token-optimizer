@@ -1,6 +1,6 @@
 # Token Optimizer for OpenClaw
 
-Version: `2.3.0`
+Version: `2.3.1`
 
 **Your AI is getting dumber and you can't see it.**
 
@@ -281,10 +281,11 @@ CLI subcommand.
 **Still not ported from Claude Code:** Quality Nudges and Loop Detection
 (require a session-visible notification surface that the current OpenClaw
 plugin API does not expose; revisit when that lands), Bash Output
-Compression (requires a tool-result mutation hook that the OpenClaw plugin
-API does not yet provide), Live Quality Bar (status line), Memory Health
-audit, Attention Optimizer, JSONL trim/dedup tools, routing injection,
-tool result archive.
+Compression (requires a tool-input mutation hook that the OpenClaw plugin
+API does not yet provide), Context Intel Promotion (post-compaction tool
+output digest), MCP Tool Introspection (Claude Code-specific server
+config), Live Quality Bar (status line), Memory Health audit, Attention
+Optimizer, JSONL trim/dedup tools, routing injection, tool result archive.
 
 ## License
 

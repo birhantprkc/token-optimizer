@@ -61,7 +61,7 @@ function redactPaths(obj) {
         : val));
 }
 function printUsage() {
-    console.log(`Token Optimizer for OpenClaw v2.3.0
+    console.log(`Token Optimizer for OpenClaw v2.3.1
 
 Usage:
   token-optimizer scan         [--days N] [--json]   Scan sessions and show token usage

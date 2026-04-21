@@ -42,7 +42,7 @@ function redactPaths(obj: unknown): unknown {
 }
 
 function printUsage(): void {
-  console.log(`Token Optimizer for OpenClaw v2.3.0
+  console.log(`Token Optimizer for OpenClaw v2.3.1
 
 Usage:
   token-optimizer scan         [--days N] [--json]   Scan sessions and show token usage
