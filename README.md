@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.5.1-green" alt="Version 5.5.1"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.3.1-brightgreen" alt="OpenClaw v2.3.0"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.3.1-brightgreen" alt="OpenClaw v2.3.1"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg" alt="License: PolyForm Noncommercial"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/token-optimizer" alt="GitHub Stars"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/commits/main"><img src="https://img.shields.io/github/last-commit/alexgreensh/token-optimizer" alt="Last Commit"></a>
@@ -761,15 +761,15 @@ See [`openclaw/README.md`](openclaw/README.md) for full docs.
 
 ## License
 
-**PolyForm Noncommercial 1.0.0**. Free for personal, research, educational, and non-commercial use.
+**PolyForm Noncommercial 1.0.0**. Source-available. Personal, research, educational, and non-commercial use requires no license purchase.
 
 _This FAQ is informational guidance, not a modification of the license terms. Last updated: April 2026._
 
 ### 🧑‍💻 Personal / hobby / research / education?
-Go for it. Full source, zero cost, runs locally. That's the whole point.
+Go for it. Full source, runs locally, no license purchase needed. That's the whole point.
 
 ### 🏢 Small team (under 5 people OR under $20k/month revenue)?
-You're good. Use it freely, no paperwork needed.
+You're good. No paperwork needed.
 If you want to [sponsor the project](https://github.com/sponsors/alexgreensh) or buy me a coffee, not required, but always appreciated ☕
 
 ### 🔄 Started personal, now it's turning into a business?

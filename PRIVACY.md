@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Token Optimizer** is an open-source Claude Code plugin that runs entirely on your local machine.
+**Token Optimizer** is a source-available Claude Code plugin that runs entirely on your local machine.
 
 ## Data Collection
 
@@ -28,9 +28,9 @@ All of this data stays on your machine. The generated dashboard, snapshots, and 
 
 Before making any changes, Token Optimizer creates local backups of your configuration files. These backups are stored in `~/.claude/_backups/` on your machine and are never transmitted anywhere.
 
-## Open Source
+## Source Available
 
-Token Optimizer is licensed under [PolyForm Noncommercial 1.0.0](LICENSE). The full source code is available at [github.com/alexgreensh/token-optimizer](https://github.com/alexgreensh/token-optimizer) and can be audited by anyone.
+Token Optimizer is licensed under [PolyForm Noncommercial 1.0.0](LICENSE). The full source code is published at [github.com/alexgreensh/token-optimizer](https://github.com/alexgreensh/token-optimizer) and can be audited by anyone. Non-commercial use (personal, research, education) requires no license purchase. Commercial use requires a separate license.
 
 ## Contact
 
