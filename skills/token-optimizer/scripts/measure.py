@@ -14296,19 +14296,17 @@ def _maybe_nudge(result, cache_path, quality_data, quiet=False):
     result["_nudge_count"] = nudge_count + 1
     result["_nudge_last_epoch"] = now
 
-    # Log to compression_events with estimated token savings.
-    # A nudge that triggers /compact typically recovers 20-40% of context.
-    # Conservative: assume 10K tokens recovered per nudge via compaction or
-    # behavior change (user switches approach, stops bloating context).
-    est_tokens_saved = 10000
+    # Log the nudge as a behavioral intervention. Store fill_pct so
+    # PostCompact can measure the actual token recovery if the user
+    # compacts after seeing this nudge.
     session_id = Path(cache_path).stem.replace("quality-cache-", "", 1) if cache_path else None
+    fill_pct = result.get("fill_pct", 0)
+    result["_nudge_fill_pct_at_fire"] = fill_pct
     _log_compression_event(
         feature="quality_nudge",
-        original_text=" " * (est_tokens_saved * 4),
-        compressed_text=f"nudge:score={score}",
         session_id=session_id,
-        detail=f"score={score} prev={previous_score} drop={drop} est_saved={est_tokens_saved}",
-        verified=True,
+        detail=f"score={score} prev={previous_score} drop={drop} fill_pct={fill_pct}",
+        verified=False,
     )
 
     return (
@@ -14337,18 +14335,26 @@ def _maybe_loop_warning(result, cache_path, quality_data, quiet=False):
 
     result["_loop_warning_count"] = loop_count + 1
 
-    # Log to compression_events with estimated token savings.
-    # A caught loop prevents at least 2 wasted turns of input replay + output.
-    # Conservative estimate: 15K tokens per caught loop (avg turn from trends.db).
-    est_prevented_turns = max(best.get("count", 2) - 1, 1)
-    est_tokens_saved = est_prevented_turns * 15000
+    # Measure token waste from the actual loop turns.
+    # quality_data.messages has (idx, role, text_length, is_substantive).
+    # Sum the text_length of the looping turns as measured content, then
+    # estimate tokens at chars/4. This is measured from the session, not
+    # a made-up constant.
+    loop_count_n = best.get("count", 2)
+    messages = quality_data.get("messages", [])
+    loop_turn_chars = 0
+    if messages:
+        recent = messages[-loop_count_n * 2:]  # user+assistant pairs
+        loop_turn_chars = sum(m[2] for m in recent)
+    measured_loop_tokens = max(loop_turn_chars // CHARS_PER_TOKEN, 500)
+
     session_id = Path(cache_path).stem.replace("quality-cache-", "", 1) if cache_path else None
     _log_compression_event(
         feature="loop_detection",
-        original_text=" " * (est_tokens_saved * 4),
+        original_text=" " * (measured_loop_tokens * 4),
         compressed_text=f"loop:{best['type']}",
         session_id=session_id,
-        detail=f"type={best['type']} confidence={best['confidence']:.2f} count={best.get('count', 0)} est_saved={est_tokens_saved}",
+        detail=f"type={best['type']} confidence={best['confidence']:.2f} count={loop_count_n} measured_chars={loop_turn_chars} measured_tokens={measured_loop_tokens}",
         verified=True,
     )
 
@@ -14423,7 +14429,21 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
         _write_quality_cache(cache_path, result)
         return 100
 
+    # Carry forward nudge/loop state from previous cache (survives across
+    # UserPromptSubmit → PostCompact boundary for follow-through measurement)
+    prev_result = {}
+    if cache_path.exists():
+        try:
+            prev_result = _read_quality_cache(cache_path) or {}
+        except Exception:
+            prev_result = {}
+
     result = compute_quality_score(quality_data)
+    for carry_key in ("_nudge_fill_pct_at_fire", "_nudge_count", "_nudge_last_epoch",
+                       "_nudge_previous_score", "_loop_warning_count",
+                       "progressive_bands_captured"):
+        if carry_key in prev_result and carry_key not in result:
+            result[carry_key] = prev_result[carry_key]
     result["total_messages"] = len(quality_data["messages"])
     result["decisions_found"] = len(quality_data["decisions"])
     result["compactions"] = quality_data["compactions"]
@@ -14461,6 +14481,26 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
                 print(json.dumps({"systemMessage": msg}))
             except Exception:
                 pass
+
+    # Nudge follow-through: if PostCompact triggered this run (force=True)
+    # and a nudge preceded the compact, measure the actual fill_pct recovery.
+    if force and result.get("fill_pct", 0) > 0:
+        nudge_fill = result.get("_nudge_fill_pct_at_fire", 0)
+        if nudge_fill > 0:
+            current_fill = result["fill_pct"]
+            fill_delta = nudge_fill - current_fill
+            if fill_delta > 5:
+                context_size = detect_context_window()[0]
+                measured_tokens_recovered = int(context_size * fill_delta / 100)
+                _log_compression_event(
+                    feature="quality_nudge",
+                    original_text=" " * (measured_tokens_recovered * 4),
+                    compressed_text=f"nudge_followthrough:fill={nudge_fill}->{current_fill}",
+                    session_id=Path(cache_path).stem.replace("quality-cache-", "", 1) if cache_path else None,
+                    detail=f"measured_recovery: fill {nudge_fill}%->{current_fill}% = {measured_tokens_recovered} tokens on {context_size} context",
+                    verified=True,
+                )
+            result.pop("_nudge_fill_pct_at_fire", None)
 
     # Progressive checkpoints (v3.0)
     if _PROGRESSIVE_ENABLED and result.get("fill_pct", 0) > 0:
