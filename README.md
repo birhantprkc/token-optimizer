@@ -235,9 +235,9 @@ Token Optimizer tracks all of this. Quality score, degradation bands, compaction
 
 When auto-compact fires, 60-70% of your conversation vanishes. Decisions, error-fix sequences, agent state, all gone.
 
-Smart Compaction catches all of it as checkpoints before compaction fires, then restores what the summary dropped. Sessions pick up where you left off, even after a crash or /clear. Checkpoint history and compaction loss per session are also visible on the dashboard.
+Smart Compaction catches all of it as checkpoints before compaction fires, then restores what the summary dropped. It also injects a digest of large tool outputs the model previously processed, so after compaction the model knows what it already saw without re-reading everything from scratch. Sessions pick up where you left off, even after a crash or /clear. Checkpoint history and compaction loss per session are also visible on the dashboard.
 
-Compression savings only stick if your session survives the compaction. Saving tokens on `git status` doesn't help if the next auto-compact wipes out the decision that made you run `git status` in the first place. Smart Compaction closes that loop.
+Compression savings only stick if your session survives the compaction. Saving tokens on `git status` doesn't help if the next auto-compact wipes out the decision that made you run `git status` in the first place. Smart Compaction closes that loop: checkpoint your decisions, restore them after compaction, and remind the model what outputs it already processed so it doesn't waste tokens re-reading them.
 
 ```bash
 python3 measure.py setup-smart-compact    # checkpoint + restore hooks
@@ -324,17 +324,16 @@ Token Optimizer no longer just measures context bloat. It actively reduces it. F
 
 ![v5 Active Compression overview](skills/token-optimizer/assets/v5-hero.svg)
 
-**On by default**: Quality Nudges, Loop Detection, Delta Mode, Bash Compression (16 handlers).
-**Opt-in**: Structure Map Beta (local measurement only).
+**On by default**: Quality Nudges, Loop Detection, Delta Mode, Structure Map, Bash Compression (16 handlers).
 
-All five features are independently toggleable from the Manage tab in the dashboard, via CLI (`measure.py v5 enable|disable <feature>`), or with environment variables.
+All features are independently toggleable from the Manage tab in the dashboard, via CLI (`measure.py v5 enable|disable <feature>`), or with environment variables.
 
 | Feature | Default | Potential Savings | Risk |
 |---|---|---|---|
 | Quality Nudges | ON | ~5% (prevented waste) | None |
 | Loop Detection | ON | ~8% (caught loops) | None |
 | Delta Mode | ON | ~20% (smart re-reads) | Low |
-| Structure Map Beta (local measurement) | OFF (opt-in) | Measurement only | None |
+| Structure Map | ON (soft-block) | ~30% (large file re-reads, up to 99% per file) | Low |
 | Bash Compression | ON | ~10% (CLI output) | Low |
 
 > **Privacy note**: Every feature runs 100% on your machine. Nothing is ever sent anywhere. No analytics endpoint, no phone-home, no cloud sync. "Measurement" and "beta telemetry" always mean local-only SQLite writes to a file you own, and you can inspect, export, or delete that file at any time. Token Optimizer has zero network calls by design.
@@ -375,17 +374,17 @@ When the AI re-reads a file after editing it, the Read call returns only what ch
 
 **Risk**: low. If the AI needed the full file to understand the change in context, the diff alone might not be enough. Fails open on large changes and big files. Set `TOKEN_OPTIMIZER_READ_CACHE_DELTA=0` to disable.
 
-### Structure Map Beta (local measurement only, OFF by default)
+### Structure Map (ON in soft-block mode, your biggest win on large files)
 
-Writes measurement events to your local SQLite database when a code file is read multiple times and gets replaced with a function/class summary. The feature itself already runs in `soft_block` mode. This flag just adds measurement so you can see if it actually helped on your sessions.
+When Claude re-reads a code file it already saw this session, the Read call is blocked and replaced with a compact structural summary: function signatures, class hierarchies, imports, and module docstrings. A 720KB Python file (180,000 tokens) becomes a 250-token skeleton. Works on Python files up to 800KB/20K lines and JS/TS files up to 400KB/5K lines.
 
-**Not cloud telemetry.** Nothing is sent anywhere. Events land in `~/.claude/_backups/token-optimizer/trends.db` on your machine only.
+**Value**: code-heavy sessions re-read the same large files 3-17 times. Structure Map compresses every re-read after the first by 95-99%. On a 180K-token file re-read 5 times, that's ~900K tokens saved in a single session.
 
-**Value**: helps you prove (or disprove) whether structure maps help on your code-heavy sessions. Run `measure.py compression-stats --days 30` after a few weeks to see.
+**How it works**: on first read, caches the file content and generates an AST-based summary (Python) or regex-based summary (JS/TS). On subsequent reads of the same unchanged file, returns the summary via `additionalContext` and blocks the full re-read. Falls back to full read on files below 1,000 tokens, generated/minified files, partial-range reads, or if the AST parse fails.
 
-**How to enable**: `measure.py v5 enable structure_map_beta` or `TOKEN_OPTIMIZER_STRUCTURE_MAP=beta`
+**Measurement**: enable `measure.py v5 enable structure_map_beta` or `TOKEN_OPTIMIZER_STRUCTURE_MAP=beta` to log compression events to your local SQLite for `compression-stats`. Nothing sent anywhere.
 
-**Risk**: none. Adds a local SQLite row per event. Nothing else.
+**Risk**: low. The model works from the summary instead of full source. For files where implementation details matter (not just structure), the model can request a full read. Disable with `TOKEN_OPTIMIZER_READ_CACHE_MODE=shadow`.
 
 ![Bash Output Compression: git status and pytest before/after](skills/token-optimizer/assets/v5-bash-compression.svg)
 
@@ -562,7 +561,7 @@ Hover help on every column explains `Cache`, `TTL`, `Pacing`, `Cache R`, and `Ca
 |---|---|---|---|---|
 | Structural waste audit | Deep, per-component | Summary only | No | No |
 | Quality degradation tracking | 7-signal score with grades | Capacity % only | No | No |
-| Compaction survival | Progressive checkpoints plus restore | No | Session guide only | No |
+| Compaction survival | Progressive checkpoints, restore, plus tool output digest | No | Session guide only | No |
 | Runtime output compression | 16 CLI handlers, credential-safe, individually toggleable | No | Yes | Yes, always-on (cannot disable) |
 | Measures if compression actually helped | Yes, local telemetry with before/after tokens | No | No | No |
 | Read deduplication and smart diff on re-reads | Yes | No | No | No |
@@ -617,7 +616,7 @@ For contradiction detection (two rules saying opposite things), run the audit in
 
 ### PreToolUse Read-Cache (automatic deduplication)
 
-Detects redundant file reads automatically and, in warn mode, drops a short in-context note so Claude knows the file hasn't changed since the last read. In block mode, it returns a structural digest in place of the re-read and the model works off that. Default ON in warn mode. Saves 8-30% tokens from read deduplication across a typical session.
+Detects redundant file reads automatically. On the first re-read of an unchanged file, returns a structural code summary (function signatures, class hierarchy, imports) instead of the full source. A 180,000-token file re-read becomes a 250-token skeleton. Works on Python files up to 800KB and JS/TS files up to 400KB. Default ON in soft-block mode. Saves 8-30% tokens from read deduplication across a typical session, with 95%+ compression on large code files.
 
 ```bash
 # Read-cache is ON by default (warn mode). To disable:

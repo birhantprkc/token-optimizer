@@ -14667,14 +14667,14 @@ V5_FEATURES = {
         "env_var": "TOKEN_OPTIMIZER_STRUCTURE_MAP",
         "config_key": "v5_structure_map_beta",
         "default": False,
-        "label": "Structure Map Beta (Local Measurement)",
-        "what": "Tracks when the structure map feature fires on your machine so YOU can measure if it's helping.",
-        "value": "Writes local-only SQLite rows so you can check `measure.py compression-stats` later. Nothing sent anywhere. Helps you prove (or disprove) whether structure maps help on your code-heavy sessions.",
-        "impact_pct": 0,  # measurement only, no direct savings
-        "how": "Writes one row to your local SQLite (~/.claude/_backups/token-optimizer/trends.db) when a code file is read multiple times and gets replaced with a function/class summary. Zero network calls. You can sqlite3 the file or delete it anytime.",
-        "risk": "None. Local SQLite writes only, no external connections. Ever.",
+        "label": "Structure Map Measurement",
+        "what": "Logs compression events when structure map fires, so you can track actual savings via compression-stats.",
+        "value": "Structure Map itself is always ON (soft-block mode). This flag enables local measurement logging. A 180K-token file re-read becomes 250 tokens.",
+        "impact_pct": 30,
+        "how": "Writes one row to your local SQLite when a code file re-read gets replaced with a function/class summary. The substitution runs regardless of this flag. This only controls whether savings events are recorded.",
+        "risk": "None. Local SQLite writes only. The actual substitution is controlled by the read-cache mode, not this flag.",
         "risk_level": "none",
-        "recommended": False,
+        "recommended": True,
     },
     "bash_compress": {
         "env_var": "TOKEN_OPTIMIZER_BASH_COMPRESS",
@@ -14754,7 +14754,7 @@ def _show_v5_welcome():
     print("    - Loop Detection      ON  (harmless, just warnings)")
     print("    - Delta Mode          ON  (smart re-reads, big savings)")
     print("    - Bash Compression    ON  (lossy, disable: TOKEN_OPTIMIZER_BASH_COMPRESS=0)")
-    print("    - Structure Map Beta  OFF (telemetry only)")
+    print("    - Structure Map        ON  (soft-block, measurement: TOKEN_OPTIMIZER_STRUCTURE_MAP=beta)")
     print()
     print("  Want to change these? Three ways:")
     print("    1. Dashboard:  token-dashboard  (visit the Manage tab)")

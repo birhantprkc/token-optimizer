@@ -2177,12 +2177,12 @@ var DB = (function() {
       env_var: 'TOKEN_OPTIMIZER_READ_CACHE_DELTA'
     },
     structure_map_beta: {
-      default: false, recommended: false, impact_pct: 0, risk_level: 'none',
-      label: 'Structure Map Beta (Local Measurement)',
-      what: "Tracks when the structure map feature fires on your machine so YOU can measure if it's helping.",
-      value: "Writes local-only SQLite rows so you can check `measure.py compression-stats` later. Nothing sent anywhere. Helps you prove (or disprove) whether structure maps help on your code-heavy sessions.",
-      how: "Writes one row to your local SQLite (~/.claude/_backups/token-optimizer/trends.db) when a code file is read multiple times and gets replaced with a function/class summary. Zero network calls. You can sqlite3 the file or delete it anytime.",
-      risk: "None. Local SQLite writes only, no external connections. Ever.",
+      default: false, recommended: true, impact_pct: 30, risk_level: 'low',
+      label: 'Structure Map Measurement',
+      what: "Logs compression events when structure map fires, so you can track actual savings via compression-stats.",
+      value: "Structure Map itself is always ON (soft-block mode). This flag enables local measurement logging so you can see the actual token savings per file. A 180K-token file re-read becomes 250 tokens.",
+      how: "Writes one row to your local SQLite when a code file re-read gets replaced with a function/class summary. The substitution runs regardless of this flag. This only controls whether savings events are recorded. Zero network calls.",
+      risk: "None. Local SQLite writes only. The actual substitution is controlled by the read-cache mode, not this flag.",
       env_var: 'TOKEN_OPTIMIZER_STRUCTURE_MAP'
     },
     bash_compress: {
