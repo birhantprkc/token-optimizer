@@ -142,7 +142,7 @@ function cmdV5Toggle(featureId: string, on: boolean): void {
 
 function cmdV5Welcome(): void {
   const features = listV5Features();
-  console.log(`\nWelcome to Token Optimizer v2.3.0!`);
+  console.log(`\nWelcome to Token Optimizer v2.3.1!`);
   console.log("=".repeat(50));
   console.log(
     "v5 Active Compression is now live in OpenClaw. The low-risk features ship ON by default; the rest stay opt-in until you flip them on:\n"

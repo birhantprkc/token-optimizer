@@ -5,9 +5,9 @@
  * Mirrors the Python Token Optimizer v5 feature catalog so both plugins
  * speak the same feature identifiers when writing telemetry. Low-risk
  * features (delta read, structure map beta) ship ON by default; higher-risk
- * features stay opt-in. Bash Output Compression is deferred in OpenClaw
- * v2.3.0 because the current OpenClaw plugin API does not expose a
- * tool-result mutation hook — tracked externally.
+ * features stay opt-in. Bash Output Compression, Quality Nudges, and
+ * Loop Detection are deferred because the current OpenClaw plugin API
+ * does not expose tool-input mutation or session notification hooks.
  *
  * Toggle state is persisted to `~/.openclaw/token-optimizer/v5-features.json`
  * so a gateway restart preserves user choices.
