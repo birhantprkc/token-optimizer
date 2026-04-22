@@ -938,6 +938,77 @@ class StaleCronConfig(BaseDetector):
         return findings
 
 
+class BlockingHookDetector(BaseDetector):
+    """Detect Stop hooks that re-invoke the model via decision:block on every turn."""
+    name = "blocking_hook"
+    tier = 1
+    description = "Stop hook re-invokes model every turn via decision:block"
+
+    def detect(self, runs: list[AgentRun], config: dict, system: str) -> list[WasteFinding]:
+        hooks = config.get("hooks", {})
+        if not hooks:
+            return []
+
+        findings = []
+        for hook_name, hook_list in hooks.items():
+            if not isinstance(hook_list, list):
+                continue
+            for entry in hook_list:
+                # Handle both flat {command: ...} and nested {hooks: [{command: ...}]}
+                cmds_to_check = []
+                if isinstance(entry, dict):
+                    if "command" in entry:
+                        cmds_to_check.append(entry["command"])
+                    for inner in entry.get("hooks", []):
+                        if isinstance(inner, dict):
+                            cmds_to_check.append(inner.get("command", ""))
+
+                for cmd in cmds_to_check:
+                    if not cmd:
+                        continue
+                    if "decision" in cmd and "block" in cmd:
+                        avg_turns = sum(r.message_count for r in runs) / max(len(runs), 1) if runs else 20
+                        est_per_turn_tokens = 80
+                        est_monthly_cost = 0.0
+                        if runs:
+                            days = max(1, len({r.timestamp.strftime("%Y-%m-%d") for r in runs}))
+                            sessions_per_month = (len(runs) / days) * 30
+                            est_monthly_tokens = sessions_per_month * avg_turns * est_per_turn_tokens
+                            est_monthly_cost = est_monthly_tokens * 3.0 / 1_000_000
+
+                        findings.append(WasteFinding(
+                            system=system,
+                            waste_type=self.name,
+                            tier=self.tier,
+                            severity="medium" if est_monthly_cost > 1.0 else "low",
+                            confidence=0.8,
+                            description=(
+                                f"{hook_name} hook uses decision:block, re-invoking the model "
+                                f"on every turn (~{est_per_turn_tokens} tok/turn, "
+                                f"~{avg_turns:.0f} turns/session)"
+                            ),
+                            recommendation=(
+                                f"Remove the decision:block pattern from the {hook_name} hook. "
+                                "Use additionalContext injection instead of blocking+re-invoking."
+                            ),
+                            evidence={"hook_event": hook_name, "command_preview": cmd[:100]},
+                            monthly_waste_tokens=int(est_monthly_cost / 3.0 * 1_000_000),
+                            monthly_waste_usd=round(est_monthly_cost, 2),
+                        ))
+                    if any(kw in cmd for kw in ("curl ", " anthropic", " openai", " gemini")):
+                        findings.append(WasteFinding(
+                            system=system,
+                            waste_type="heavyweight_hook",
+                            tier=self.tier,
+                            severity="low",
+                            confidence=0.6,
+                            description=f"{hook_name} hook calls external API on every invocation",
+                            recommendation="Consider caching API responses or moving to an async pattern.",
+                            evidence={"hook_event": hook_name, "command_preview": cmd[:80]},
+                        ))
+        return findings
+
+
 class HeartbeatOverFrequency(BaseDetector):
     """Detect heartbeat intervals < 5 minutes."""
     name = "heartbeat_over_frequency"
@@ -1165,6 +1236,7 @@ DETECTOR_REGISTRY: list[type[BaseDetector]] = [
     # Tier 1: Static Config
     HeartbeatModelWaste,
     HeartbeatOverFrequency,
+    BlockingHookDetector,
     SkillBloat,
     ToolDefinitionBloat,
     MemoryConfigOverhead,

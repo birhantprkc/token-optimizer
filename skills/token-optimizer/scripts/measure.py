@@ -4370,10 +4370,34 @@ def generate_coach_data(focus=None, components=None, trends=None):
         from detectors.registry import run_all_detectors, triage
         recent_files = _find_all_jsonl_files(days=7)[:10]  # cap at 10 sessions
         all_findings = []
+
+        # Inject CLAUDE.md content once for cache_instability detector
+        _claude_md_content = ""
+        for key in ("claude_md_global", "claude_md_home", "claude_md_project", "claude_md_dotclaude"):
+            md_comp = components.get(key, {})
+            if md_comp.get("exists") and md_comp.get("content"):
+                _claude_md_content = md_comp["content"]
+                break
+        if not _claude_md_content:
+            for path in (CLAUDE_DIR / "CLAUDE.md", Path.home() / "CLAUDE.md", Path.cwd() / "CLAUDE.md"):
+                if path.exists():
+                    try:
+                        _claude_md_content = path.read_text(encoding="utf-8", errors="replace")[:50_000]
+                    except (PermissionError, OSError):
+                        pass
+                    if _claude_md_content:
+                        break
+
         for jf, _, _ in recent_files:
             parsed = _parse_session_jsonl(str(jf))
             if parsed and parsed.get("total_input_tokens", 0) > 0:
                 parsed["jsonl_path"] = str(jf)
+                parsed["claude_md_content"] = _claude_md_content
+                # Enrich with per-turn data for output_waste detector
+                try:
+                    parsed["turns"] = parse_session_turns(str(jf))
+                except Exception:
+                    parsed["turns"] = []
                 session_findings = run_all_detectors(parsed)
                 all_findings.extend(session_findings)
 
