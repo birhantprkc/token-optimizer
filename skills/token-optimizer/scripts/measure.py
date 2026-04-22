@@ -1067,17 +1067,39 @@ def measure_components():
         "has_rules": bool(global_deny_rules or project_deny_rules),
     }
 
-    # Hooks
+    # Hooks — analyze both structure and content for per-turn cost patterns
     hooks_configured = False
     hook_names = []
+    hook_warnings = []
+    hook_est_per_turn_tokens = 0
     if _cached_settings:
         hooks = _cached_settings.get("hooks", {})
         if hooks:
             hooks_configured = True
             hook_names = list(hooks.keys())
+            for event_name, hook_list in hooks.items():
+                if not isinstance(hook_list, list):
+                    continue
+                for entry in hook_list:
+                    inner_hooks = entry.get("hooks", []) if isinstance(entry, dict) else []
+                    for h in inner_hooks:
+                        cmd = h.get("command", "")
+                        if not cmd:
+                            continue
+                        if "decision" in cmd and "block" in cmd:
+                            hook_est_per_turn_tokens += 80
+                            hook_warnings.append(
+                                f"{event_name} hook re-invokes model via decision:block (~80+ tok/turn)"
+                            )
+                        if any(kw in cmd for kw in ("curl ", "anthropic", "openai", "gemini")):
+                            hook_warnings.append(
+                                f"{event_name} hook calls external API ({cmd[:60]})"
+                            )
     components["hooks"] = {
         "configured": hooks_configured,
         "names": hook_names,
+        "warnings": hook_warnings,
+        "est_per_turn_tokens": hook_est_per_turn_tokens,
     }
 
     # .claude/rules/ directory
@@ -2234,6 +2256,8 @@ def print_snapshot_summary(snapshot):
         excl_str = f"{total_rules} deny rules ({', '.join(parts)})"
     print(f"\n  File exclusion rules: {excl_str}")
     print(f"  Hooks: {', '.join(hooks.get('names', [])) if hooks.get('configured') else 'NONE'}")
+    for hw in hooks.get("warnings", []):
+        print(f"    WARNING: {hw}")
 
     # Settings env vars
     settings_env = c.get("settings_env", {})

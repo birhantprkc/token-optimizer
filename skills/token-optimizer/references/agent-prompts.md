@@ -332,6 +332,10 @@ Output file: {COORD_PATH}/audit/advanced.md
    - Check .claude/settings.json (project-level)
    - Check for PreCompact, SessionStart, PostToolUse hooks
    - If no hooks: flag as HIGH PRIORITY opportunity
+   - Flag Stop hooks containing "decision":"block" — these re-invoke the model
+     every turn (~80+ tokens per turn overhead, adds up fast in long sessions)
+   - Flag hooks calling external APIs (curl, anthropic, openai) — per-turn latency + cost
+   - Flag heavyweight PreToolUse/PostToolUse hooks that inject guidance on every tool call
 
 2. Prompt caching structure:
    - Read CLAUDE.md and check if static content comes FIRST (cacheable)
