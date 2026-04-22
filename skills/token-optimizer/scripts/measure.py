@@ -1088,7 +1088,7 @@ def measure_components():
                         cmd = h.get("command", "")
                         if not cmd:
                             continue
-                        if "decision" in cmd and "block" in cmd:
+                        if '"decision"' in cmd and '"block"' in cmd:
                             hook_est_per_turn_tokens += 80
                             hook_warnings.append(
                                 f"{event_name} hook re-invokes model via decision:block (~80+ tok/turn)"
@@ -4388,20 +4388,22 @@ def generate_coach_data(focus=None, components=None, trends=None):
                     if _claude_md_content:
                         break
 
+        _claude_md_content = _claude_md_content[:50_000]
+
+        total_messages_scanned = 0
         for jf, _, _ in recent_files:
             parsed = _parse_session_jsonl(str(jf))
             if parsed and parsed.get("total_input_tokens", 0) > 0:
                 parsed["jsonl_path"] = str(jf)
                 parsed["claude_md_content"] = _claude_md_content
-                # Enrich with per-turn data for output_waste detector
                 try:
                     parsed["turns"] = parse_session_turns(str(jf))
                 except Exception:
                     parsed["turns"] = []
+                total_messages_scanned += parsed.get("message_count", 0)
                 session_findings = run_all_detectors(parsed)
                 all_findings.extend(session_findings)
 
-        # Deduplicate by detector name, keep highest confidence per type
         best_by_name = {}
         for f in all_findings:
             name = f.get("name", "")
@@ -4409,13 +4411,6 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 best_by_name[name] = f
 
         triaged = triage(list(best_by_name.values()))
-
-        # Calculate total messages across scanned sessions for proportional thresholds
-        total_messages_scanned = 0
-        for jf, _, _ in recent_files[:10]:
-            p = _parse_session_jsonl(str(jf))
-            if p:
-                total_messages_scanned += p.get("message_count", 0)
 
         for f in triaged:
             # Only flag detectors when they affect a significant percentage (>5%)

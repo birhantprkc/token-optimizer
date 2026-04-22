@@ -964,13 +964,16 @@ class BlockingHookDetector(BaseDetector):
                 for cmd in cmds_to_check:
                     if not cmd:
                         continue
-                    if "decision" in cmd and "block" in cmd:
-                        avg_turns = sum(r.message_count for r in runs) / max(len(runs), 1) if runs else 20
+                    if '"decision"' in cmd and '"block"' in cmd:
+                        recent_runs = [r for r in runs
+                                       if (datetime.now(timezone.utc) - r.timestamp).days <= 30]
+                        avg_turns = (sum(r.message_count for r in recent_runs) / max(len(recent_runs), 1)
+                                     if recent_runs else 20)
                         est_per_turn_tokens = 80
                         est_monthly_cost = 0.0
-                        if runs:
-                            days = max(1, len({r.timestamp.strftime("%Y-%m-%d") for r in runs}))
-                            sessions_per_month = (len(runs) / days) * 30
+                        if recent_runs:
+                            days = max(1, len({r.timestamp.strftime("%Y-%m-%d") for r in recent_runs}))
+                            sessions_per_month = (len(recent_runs) / days) * 30
                             est_monthly_tokens = sessions_per_month * avg_turns * est_per_turn_tokens
                             est_monthly_cost = est_monthly_tokens * 3.0 / 1_000_000
 
