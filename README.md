@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.5.1-green" alt="Version 5.5.1"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.6.0-green" alt="Version 5.6.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.3.1-brightgreen" alt="OpenClaw v2.3.1"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.4.0-brightgreen" alt="OpenClaw v2.4.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg" alt="License: PolyForm Noncommercial"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/token-optimizer" alt="GitHub Stars"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/commits/main"><img src="https://img.shields.io/github/last-commit/alexgreensh/token-optimizer" alt="Last Commit"></a>
@@ -320,21 +320,23 @@ Real session. 708 messages, 2 compactions, 88% of the original context gone. Wit
 
 ## Active Compression (v5)
 
-Token Optimizer no longer just measures context bloat. It actively reduces it. Five features target specific waste patterns, each with honest risk assessment and dashboard toggles.
+Token Optimizer no longer just measures context bloat. It actively reduces it. Seven features target specific waste patterns, each with honest risk assessment and dashboard toggles.
 
 ![v5 Active Compression overview](skills/token-optimizer/assets/v5-hero.svg)
 
-**On by default**: Quality Nudges, Loop Detection, Delta Mode, Structure Map, Bash Compression (16 handlers).
+**On by default**: Quality Nudges, Loop Detection, Delta Mode, Structure Map, Bash Compression (16 handlers), Activity Mode Detection, Decision Extraction.
 
 All features are independently toggleable from the Manage tab in the dashboard, via CLI (`measure.py v5 enable|disable <feature>`), or with environment variables.
 
 | Feature | Default | Potential Savings | Risk |
 |---|---|---|---|
-| Quality Nudges | ON | ~5% (prevented waste) | None |
-| Loop Detection | ON | ~8% (caught loops) | None |
+| Quality Nudges | ON | Measured per-compact (fill% recovery) | None |
+| Loop Detection | ON | Measured per-loop (actual turn content) | None |
 | Delta Mode | ON | ~20% (smart re-reads) | Low |
 | Structure Map | ON (soft-block) | ~30% (large file re-reads, up to 99% per file) | Low |
 | Bash Compression | ON | ~10% (CLI output) | Low |
+| Activity Mode | ON | Adapts compaction to session phase | None |
+| Decision Extraction | ON | Preserves decisions across compactions | None |
 
 > **Privacy note**: Every feature runs 100% on your machine. Nothing is ever sent anywhere. No analytics endpoint, no phone-home, no cloud sync. "Measurement" and "beta telemetry" always mean local-only SQLite writes to a file you own, and you can inspect, export, or delete that file at any time. Token Optimizer has zero network calls by design.
 
@@ -354,9 +356,9 @@ Claude sees that note on the next turn and surfaces the warning to you naturally
 
 ### Loop Detection (ON by default, fully automatic)
 
-Catches the AI getting stuck on a retry loop before it burns through tokens. When similarity crosses the threshold, a short inline note lands in the context flagging the loop so the model breaks out of it, with no user action needed. A single caught loop typically saves 10-50K tokens.
+Catches the AI getting stuck on a retry loop before it burns through tokens. When similarity crosses the threshold, a short inline note lands in the context flagging the loop so the model breaks out of it, with no user action needed. Savings are measured from the actual content of the looping turns, not estimated.
 
-**Value**: post-hoc detectors found that loop sessions average 47K wasted tokens. Real-time detection prevents this.
+**Value**: post-hoc detectors found that loop sessions average 47K wasted tokens. Real-time detection prevents this. Every caught loop logs the measured token cost of the loop turns to your local telemetry.
 
 **How it works**: compares the last 4 user messages and last 5 tool results for similarity. Fires at confidence ≥0.7 with a session cap of 2 notes. Uses fixed message templates and never echoes user content back.
 
@@ -403,6 +405,22 @@ Together with the existing git and pytest handlers, that's full coverage for ~90
 **How to disable**: `measure.py v5 disable bash_compress` or `TOKEN_OPTIMIZER_BASH_COMPRESS=0`
 
 **Risk**: low. Compression is lossy by design. For routine checks this is fine. For careful diff review or debugging specific test failures, disable temporarily with the command above.
+
+### Activity Mode Detection (ON by default, v5.6)
+
+Classifies your session into one of five modes (code, debug, review, infra, general) using a sliding window of the last 10 tool calls. The mode label feeds into compaction guidance so PRESERVE/DROP priorities adapt to what you're actually doing: debug mode preserves error signals and stack traces, code mode preserves edited files and their tests, review mode keeps findings and decisions while dropping full file contents.
+
+**How it works**: the PostToolUse hook classifies each tool call into a bucket (edit, read, bash_infra, bash_git, web, etc.) and stores it in the per-session SQLite. Mode classification runs on every tool call with zero latency impact (single INSERT + bounded SELECT). The activity log auto-prunes at 30 rows.
+
+**Risk**: none. Mode detection is read-only context, never modifies or blocks anything.
+
+### Decision Extraction (ON by default, v5.6)
+
+Detects decision statements ("chose X because Y", "going with Z over W", "switched to") in real-time from tool outputs and stores them incrementally in the session database. At compaction time, these decisions are injected as CRITICAL DECISIONS that the compaction summary must preserve verbatim. Combined with the new anchored compact state (which persists intent, changes, decisions, and errors across compaction cycles), this prevents the decision drift that makes post-compaction sessions lose context.
+
+**How it works**: regex-based extraction on the PostToolUse path (runs only on outputs >500 chars). Uses atomic read-modify-write (SQLite BEGIN IMMEDIATE) to prevent lost updates under concurrent hooks. Capped at 10 decisions per session.
+
+**Risk**: none. Only adds structured data to the compaction guidance, never removes anything.
 
 ### Managing v5 features
 
