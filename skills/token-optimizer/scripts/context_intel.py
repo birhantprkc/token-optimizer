@@ -174,8 +174,9 @@ def _extract_decisions(text: str, store: SessionStore) -> None:
 
     Uses split-then-filter to avoid catastrophic regex backtracking on
     large outputs without sentence-ending punctuation (build logs, JSON).
-    Wraps the read-modify-write in BEGIN IMMEDIATE to prevent lost updates
-    under concurrent PostToolUse subprocesses.
+    Uses SessionStore's auto-commit get_meta/set_meta (no explicit transaction)
+    to avoid conflicting with the implicit transaction from log_tool_use on
+    the same shared connection.
     """
     if len(text) < 50:
         return
@@ -198,35 +199,19 @@ def _extract_decisions(text: str, store: SessionStore) -> None:
         return
 
     try:
-        conn = store._connect()
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            row = conn.execute(
-                "SELECT value FROM session_meta WHERE key = ?",
-                ("session_decisions",),
-            ).fetchone()
-            existing = json.loads(row[0]) if row else []
+        existing_raw = store.get_meta("session_decisions")
+        existing = json.loads(existing_raw) if existing_raw else []
 
-            if len(existing) >= _MAX_DECISIONS:
-                conn.execute("COMMIT")
-                return
+        if len(existing) >= _MAX_DECISIONS:
+            return
 
-            for d in new_decisions:
-                if d not in existing:
-                    existing.append(d)
-                    if len(existing) >= _MAX_DECISIONS:
-                        break
+        for d in new_decisions:
+            if d not in existing:
+                existing.append(d)
+                if len(existing) >= _MAX_DECISIONS:
+                    break
 
-            conn.execute(
-                "INSERT OR REPLACE INTO session_meta (key, value) VALUES (?, ?)",
-                ("session_decisions", json.dumps(existing, ensure_ascii=False)),
-            )
-            conn.execute("COMMIT")
-        except Exception:
-            try:
-                conn.execute("ROLLBACK")
-            except Exception:
-                pass
+        store.set_meta("session_decisions", json.dumps(existing, ensure_ascii=False))
     except Exception:
         pass
 

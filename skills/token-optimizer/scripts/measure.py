@@ -1083,6 +1083,8 @@ def measure_components():
                 for entry in hook_list:
                     inner_hooks = entry.get("hooks", []) if isinstance(entry, dict) else []
                     for h in inner_hooks:
+                        if not isinstance(h, dict):
+                            continue
                         cmd = h.get("command", "")
                         if not cmd:
                             continue
