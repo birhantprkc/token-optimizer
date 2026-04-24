@@ -30,6 +30,8 @@ REQUIRED_FILES = (
     "skills/token-optimizer/scripts/codex_session.py",
     "skills/token-optimizer/scripts/codex_compact_prompt.py",
     "skills/token-optimizer/scripts/codex_install.py",
+    "skills/token-optimizer/scripts/bash_hook.py",
+    "skills/token-optimizer/scripts/bash_compress.py",
     "skills/token-optimizer/scripts/context_intel.py",
     "skills/token-optimizer/scripts/archive_result.py",
     "skills/token-optimizer/scripts/measure.py",
@@ -196,6 +198,66 @@ def _project_hook_check(project: Path) -> dict[str, str]:
     return _check("FAIL", "Project hooks", f"Token Optimizer not installed in {hooks_path}; run measure.py codex-install --project {project}")
 
 
+def _project_feature_checks(project: Path) -> list[dict[str, str]]:
+    hooks_path = project / ".codex" / "hooks.json"
+    data, error = _load_json(hooks_path)
+    if error or not isinstance(data, dict) or not isinstance(data.get("hooks"), dict):
+        return []
+
+    hooks = data.get("hooks", {})
+    checks = []
+    if _has_project_hook(hooks, "PreToolUse", "Bash", "bash_hook.py"):
+        checks.append(_check("OK", "Feature: Bash compression", "enabled for PreToolUse(Bash)"))
+    else:
+        checks.append(_check("WARN", "Feature: Bash compression", "opt-in; rerun codex-install with --enable-bash-compression after reviewing command rewrite risk"))
+
+    required_features = (
+        ("Prompt quality nudges", "UserPromptSubmit", None, "codex_hook_bridge.py"),
+        ("Session continuity", "Stop", None, "compact-capture"),
+        ("Tool output archive", "PostToolUse", "Bash", "archive_result.py"),
+        ("Context intelligence", "PostToolUse", "Bash", "context_intel.py"),
+    )
+    for feature, event, matcher, needle in required_features:
+        if _has_project_hook(hooks, event, matcher, needle):
+            checks.append(_check("OK", f"Feature: {feature}", "available in current Codex adapter"))
+        else:
+            checks.append(_check("FAIL", f"Feature: {feature}", f"missing valid {event} hook for {needle}; rerun measure.py codex-install --project {project}"))
+
+    parser_path = _repo_root() / "skills/token-optimizer/scripts/codex_session.py"
+    if parser_path.exists():
+        checks.append(_check("OK", "Feature: Dashboard session parsing", "available in current Codex adapter"))
+    else:
+        checks.append(_check("FAIL", "Feature: Dashboard session parsing", f"missing {parser_path}"))
+
+    checks.append(
+        _check(
+            "WARN",
+            "Codex API limitations",
+            "read deltas, structure maps, dynamic compaction, auto dashboard refresh, and StopFailure recovery need additional Codex hook payloads",
+        )
+    )
+
+    return checks
+
+
+def _has_project_hook(hooks: dict[str, Any], event: str, matcher: str | None, command_needle: str) -> bool:
+    groups = hooks.get(event)
+    if not isinstance(groups, list):
+        return False
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        if matcher is not None and group.get("matcher") not in (matcher, f"^{matcher}$"):
+            continue
+        for hook in group.get("hooks", []):
+            if not isinstance(hook, dict) or hook.get("type") != "command":
+                continue
+            command = hook.get("command", "")
+            if isinstance(command, str) and command_needle in command:
+                return True
+    return False
+
+
 def run_checks(project: Path | None = None) -> list[dict[str, str]]:
     root = _repo_root()
     project = project or Path.cwd()
@@ -210,6 +272,7 @@ def run_checks(project: Path | None = None) -> list[dict[str, str]]:
     checks.extend(_hook_config_checks(root))
     checks.append(_compact_prompt_check())
     checks.append(_project_hook_check(project))
+    checks.extend(_project_feature_checks(project))
     return checks
 
 

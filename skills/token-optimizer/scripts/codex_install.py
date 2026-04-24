@@ -15,7 +15,7 @@ from typing import Any
 import codex_compact_prompt
 
 TOKEN_OPTIMIZER_MARKER = "token-optimizer/scripts"
-SUPPORTED_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop")
+SUPPORTED_EVENTS = ("PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "Stop")
 
 
 def _repo_root() -> Path:
@@ -33,8 +33,8 @@ def _hook_command(script: str, *args: str, redirect_quiet: bool = False) -> str:
     return command
 
 
-def _managed_hooks() -> dict[str, list[dict[str, Any]]]:
-    return {
+def _managed_hooks(*, enable_bash_compression: bool = False) -> dict[str, list[dict[str, Any]]]:
+    hooks = {
         "SessionStart": [
             {
                 "hooks": [
@@ -46,7 +46,7 @@ def _managed_hooks() -> dict[str, list[dict[str, Any]]]:
                         ),
                         "timeout": 15,
                     }
-                ]
+                ],
             }
         ],
         "UserPromptSubmit": [
@@ -110,6 +110,23 @@ def _managed_hooks() -> dict[str, list[dict[str, Any]]]:
             }
         ],
     }
+    if enable_bash_compression:
+        hooks["PreToolUse"] = [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": _hook_command(
+                            "skills/token-optimizer/scripts/bash_hook.py",
+                            "--quiet",
+                        ),
+                        "timeout": 8,
+                    }
+                ],
+            }
+        ]
+    return hooks
 
 
 def _resolve_project(project: Path) -> Path:
@@ -166,16 +183,18 @@ def _is_token_optimizer_group(group: Any) -> bool:
     return TOKEN_OPTIMIZER_MARKER in json.dumps(group, sort_keys=True)
 
 
-def _merge_hooks(existing: dict[str, Any]) -> dict[str, Any]:
+def _merge_hooks(existing: dict[str, Any], *, enable_bash_compression: bool = False) -> dict[str, Any]:
     result = json.loads(json.dumps(existing))
     hooks = result.setdefault("hooks", {})
-    managed = _managed_hooks()
+    managed = _managed_hooks(enable_bash_compression=enable_bash_compression)
     for event in SUPPORTED_EVENTS:
         groups = hooks.get(event, [])
         if not isinstance(groups, list):
             groups = []
         hooks[event] = [group for group in groups if not _is_token_optimizer_group(group)]
-        hooks[event].extend(managed[event])
+        hooks[event].extend(managed.get(event, []))
+        if not hooks[event]:
+            hooks.pop(event, None)
     return result
 
 
@@ -220,10 +239,11 @@ def install(
     dry_run: bool = False,
     skip_compact_prompt: bool = False,
     force_compact_prompt: bool = False,
+    enable_bash_compression: bool = False,
 ) -> tuple[Path, str]:
     path = _hooks_path(project)
     existing = _load_hooks(path)
-    updated = _merge_hooks(existing)
+    updated = _merge_hooks(existing, enable_bash_compression=enable_bash_compression)
     if not dry_run:
         if not skip_compact_prompt:
             codex_compact_prompt.install(force=force_compact_prompt)
@@ -247,6 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--uninstall", action="store_true", help="Remove Token Optimizer hooks from the project")
     parser.add_argument("--skip-compact-prompt", action="store_true", help="Do not install Codex compact prompt")
     parser.add_argument("--force-compact-prompt", action="store_true", help="Replace existing compact-prompt settings")
+    parser.add_argument("--enable-bash-compression", action="store_true", help="Opt into Codex PreToolUse(Bash) command rewriting")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable output")
     return parser
 
@@ -263,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 skip_compact_prompt=args.skip_compact_prompt,
                 force_compact_prompt=args.force_compact_prompt,
+                enable_bash_compression=args.enable_bash_compression,
             )
     except ValueError as exc:
         print(f"[Token Optimizer] {exc}", file=sys.stderr)
