@@ -83,6 +83,28 @@ def _safe_codex_child(*parts: str) -> Path:
     return target
 
 
+def _validate_codex_target(path: Path) -> None:
+    home = codex_home()
+    if home.exists():
+        if home.is_symlink() or not home.is_dir():
+            raise ValueError(f"{home} must be a real directory")
+        home_resolved = home.resolve(strict=True)
+    else:
+        home_resolved = home.resolve(strict=False)
+
+    parent = path.parent
+    if parent.exists():
+        if parent.is_symlink() or not parent.is_dir():
+            raise ValueError(f"{parent} must be a real directory")
+        if not parent.resolve(strict=True).is_relative_to(home_resolved):
+            raise ValueError(f"{parent} escapes Codex home")
+    if path.exists():
+        if path.is_symlink():
+            raise ValueError(f"{path} must not be a symlink")
+        if not path.resolve(strict=True).is_relative_to(home_resolved):
+            raise ValueError(f"{path} escapes Codex home")
+
+
 def _managed_block(prompt_path: Path) -> str:
     return "\n".join(
         [
@@ -123,6 +145,31 @@ def _replace_or_append_config(config_text: str, prompt_path: Path, *, force: boo
 
     suffix = "" if not config_text or config_text.endswith("\n") else "\n"
     return config_text + suffix + "\n" + block, "installed"
+
+
+def plan_install(force: bool = False) -> dict[str, str | bool]:
+    """Validate a compact-prompt install without writing files."""
+    prompt_path = _prompt_path()
+    config_path = _config_path()
+    _validate_codex_target(prompt_path)
+    _validate_codex_target(config_path)
+
+    try:
+        config_text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        config_text = ""
+
+    if INLINE_COMPACT_RE.search(config_text) and not force:
+        raise ValueError("config.toml already has compact_prompt; rerun with --force after reviewing precedence")
+
+    _, action = _replace_or_append_config(config_text, prompt_path, force=force)
+    return {
+        "action": action,
+        "prompt_path": str(prompt_path),
+        "config_path": str(config_path),
+        "would_create_prompt": not prompt_path.exists(),
+        "would_create_config": not config_path.exists(),
+    }
 
 
 def _atomic_write(path: Path, content: str, mode: int = 0o600) -> None:

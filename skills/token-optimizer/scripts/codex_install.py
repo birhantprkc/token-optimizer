@@ -240,24 +240,32 @@ def install(
     skip_compact_prompt: bool = False,
     force_compact_prompt: bool = False,
     enable_bash_compression: bool = False,
-) -> tuple[Path, str]:
+) -> tuple[Path, str, dict[str, Any]]:
     path = _hooks_path(project)
     existing = _load_hooks(path)
     updated = _merge_hooks(existing, enable_bash_compression=enable_bash_compression)
+    details: dict[str, Any] = {
+        "hook_events": sorted(updated.get("hooks", {}).keys()),
+        "bash_compression": enable_bash_compression,
+        "compact_prompt": "skipped" if skip_compact_prompt else None,
+    }
+    if dry_run and not skip_compact_prompt:
+        details["compact_prompt"] = codex_compact_prompt.plan_install(force=force_compact_prompt)
     if not dry_run:
         if not skip_compact_prompt:
-            codex_compact_prompt.install(force=force_compact_prompt)
+            details["compact_prompt"] = codex_compact_prompt.install(force=force_compact_prompt)
         _atomic_write_json(path, updated)
-    return path, "installed"
+    return path, "installed", details
 
 
-def uninstall(project: Path, *, dry_run: bool = False) -> tuple[Path, str]:
+def uninstall(project: Path, *, dry_run: bool = False) -> tuple[Path, str, dict[str, Any]]:
     path = _hooks_path(project)
     existing = _load_hooks(path)
     updated = _remove_hooks(existing)
+    details = {"hook_events": sorted(updated.get("hooks", {}).keys())}
     if not dry_run:
         _atomic_write_json(path, updated)
-    return path, "removed"
+    return path, "removed", details
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -277,9 +285,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         project = _resolve_project(Path(args.project))
         if args.uninstall:
-            path, action = uninstall(project, dry_run=args.dry_run)
+            path, action, details = uninstall(project, dry_run=args.dry_run)
         else:
-            path, action = install(
+            path, action, details = install(
                 project,
                 dry_run=args.dry_run,
                 skip_compact_prompt=args.skip_compact_prompt,
@@ -290,7 +298,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[Token Optimizer] {exc}", file=sys.stderr)
         return 1
 
-    payload = {"action": action, "project": str(project), "hooks_path": str(path), "dry_run": args.dry_run}
+    payload = {
+        "action": action,
+        "project": str(project),
+        "hooks_path": str(path),
+        "dry_run": args.dry_run,
+        "details": details,
+    }
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
