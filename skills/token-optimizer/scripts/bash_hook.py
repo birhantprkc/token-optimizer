@@ -157,8 +157,8 @@ def _is_whitelisted(command_str):
                 return False
         return True
 
-    # Check for sudo/su prefix (never rewrite)
-    if cmd in ("sudo", "su"):
+    # Never rewrite shell interpreters or privilege-escalation wrappers (also prevents recursion on rewritten commands).
+    if cmd in ("bash", "sh", "zsh", "dash", "fish", "sudo", "su"):
         return False
 
     return False
@@ -201,6 +201,12 @@ def main():
     if not compress_path.exists():
         return  # Wrapper missing, exit silently
 
+    # Route through python-launcher.sh so Windows Store shim / py launcher are handled.
+    plugin_root = script_dir.parent.parent.parent
+    launcher_path = plugin_root / "hooks" / "python-launcher.sh"
+    if not launcher_path.exists():
+        return  # Launcher missing, exit silently
+
     # Build rewritten command with proper quoting for each token
     try:
         original_tokens = shlex.split(command)
@@ -208,7 +214,11 @@ def main():
         return
 
     # Re-quote each token to handle paths with spaces safely (ARCH-F3)
-    rewritten = "python3 " + shlex.quote(str(compress_path)) + " " + " ".join(shlex.quote(t) for t in original_tokens)
+    rewritten = (
+        "bash " + shlex.quote(str(launcher_path))
+        + " " + shlex.quote(str(compress_path))
+        + " " + " ".join(shlex.quote(t) for t in original_tokens)
+    )
 
     # Log rewrite event to sidecar JSONL
     try:
@@ -229,6 +239,7 @@ def main():
     # Emit updatedInput response
     response = {
         "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
             "updatedInput": {
                 "command": rewritten,
