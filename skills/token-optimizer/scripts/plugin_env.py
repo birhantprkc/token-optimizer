@@ -17,8 +17,9 @@ Hot-path safe: only stdlib imports, no I/O at import time. Discovery results are
 cached with lru_cache(maxsize=1) so repeated calls within a single hook process
 share one filesystem traversal.
 
-Security: all returned paths are confined under ~/.claude/ and reject symlinks
-to prevent registry-key path traversal and symlink-based write redirection.
+Security: all returned paths are confined under the active runtime home and
+reject symlinks to prevent registry-key path traversal and symlink-based write
+redirection.
 """
 
 from __future__ import annotations
@@ -29,13 +30,15 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-_HOME = Path.home()
-_CLAUDE_BASE = _HOME / ".claude"
-_USER_CONFIG_DIR = _CLAUDE_BASE / "token-optimizer"
-_LEGACY_BACKUP_DIR = _CLAUDE_BASE / "_backups" / "token-optimizer"
-_INSTALLED_PLUGINS = _CLAUDE_BASE / "plugins" / "installed_plugins.json"
-_PLUGIN_DATA_BASE = _CLAUDE_BASE / "plugins" / "data"
+from runtime_env import plugin_data_env_vars, runtime_home
+
+_RUNTIME_HOME = runtime_home()
+_USER_CONFIG_DIR = _RUNTIME_HOME / "token-optimizer"
+_LEGACY_BACKUP_DIR = _RUNTIME_HOME / "_backups" / "token-optimizer"
+_INSTALLED_PLUGINS = _RUNTIME_HOME / "plugins" / "installed_plugins.json"
+_PLUGIN_DATA_BASE = _RUNTIME_HOME / "plugins" / "data"
 _PLUGIN_NAME = "token-optimizer"
+_PLUGIN_DATA_ENV_VARS = plugin_data_env_vars()
 
 # Bound JSON reads in hot-path hooks. 1 MB is generous for plugin metadata and
 # user config; larger files are treated as malformed and skipped silently.
@@ -59,6 +62,15 @@ def _is_safe_subdir(candidate: Path, base: Path) -> bool:
         return False
 
 
+def _plugin_data_env_value() -> str | None:
+    """Return the first runtime-appropriate plugin-data env value."""
+    for env_var in _PLUGIN_DATA_ENV_VARS:
+        value = os.environ.get(env_var)
+        if value:
+            return value
+    return None
+
+
 def _safe_load_json(path: Path):
     """Read and parse JSON with size + recursion guards. Returns None on failure."""
     try:
@@ -77,21 +89,22 @@ def resolve_plugin_data_dir() -> Path | None:
     """Return the active plugin-data directory.
 
     Priority:
-      1. $CLAUDE_PLUGIN_DATA (set by Claude Code when invoking hooks)
+      1. Runtime-appropriate plugin data env var
       2. installed_plugins.json lookup for the active marketplace install
       3. Glob fallback to most-recently-modified token-optimizer-* data dir
       4. None (caller falls back to the legacy _backups/ path)
 
-    All discovered paths are confined under ~/.claude/plugins/data/ and reject
-    symlinks. The env-var path must resolve under ~/.claude/.
+    All discovered paths are confined under the active runtime's plugin-data
+    tree and reject symlinks. The env-var path must resolve under that runtime
+    home.
     """
-    env_val = os.environ.get("CLAUDE_PLUGIN_DATA")
+    env_val = _plugin_data_env_value()
     if env_val:
         try:
             env_path = Path(env_val)
             resolved = env_path.resolve(strict=False)
-            if resolved.is_relative_to(_CLAUDE_BASE.resolve(strict=False)):
-                return env_path
+            if _is_safe_subdir(resolved, _PLUGIN_DATA_BASE):
+                return resolved
         except (OSError, ValueError):
             pass
 
@@ -153,8 +166,8 @@ def is_v5_flag_enabled(
     """Check a v5 feature flag in priority order.
 
     1. Environment variable
-    2. User config: ~/.claude/token-optimizer/config.json
-    3. Plugin-data config: $CLAUDE_PLUGIN_DATA/config/config.json
+    2. User config: <runtime-home>/token-optimizer/config.json
+    3. Plugin-data config: <plugin-data>/config/config.json
     4. default
 
     Env parsing: when env_truthy_value is None (default), accepts the common

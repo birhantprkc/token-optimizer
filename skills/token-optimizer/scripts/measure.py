@@ -55,7 +55,7 @@ Usage:
     Global flags:
     --context-size N                      # Override context window (e.g., 1000000)
 
-Snapshots are saved to SNAPSHOT_DIR (default: ~/.claude/_backups/token-optimizer/)
+Snapshots are saved to SNAPSHOT_DIR under the active runtime home.
 
 Copyright (C) 2026 Alex Greenshpun
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -85,6 +85,7 @@ from pathlib import Path
 
 from hook_io import read_stdin_hook_input as _read_stdin_hook_input_shared
 from plugin_env import resolve_plugin_data_dir
+from runtime_env import claude_home, runtime_home
 
 try:
     import fcntl
@@ -95,20 +96,19 @@ except ImportError:
 CHARS_PER_TOKEN = 4.0
 
 HOME = Path.home()
-CLAUDE_DIR = HOME / ".claude"
+RUNTIME_DIR = runtime_home()
+CLAUDE_DIR = claude_home()
 
-# Plugin-data-aware paths: prefer CLAUDE_PLUGIN_DATA if set (v2.1.78+),
+# Plugin-data-aware paths: prefer runtime-specific plugin data when set,
 # else discover via installed_plugins.json so dashboard CLI runs find live data
 # (v5.4.23+), else fall back to legacy paths for symlink/script installs.
-# _PLUGIN_DATA stays env-only — the migration check at SessionStart looks at
-# either source so CLI-discovered data dirs also get a one-time legacy copy.
-_PLUGIN_DATA = os.environ.get("CLAUDE_PLUGIN_DATA")
 _RESOLVED_PLUGIN_DATA = resolve_plugin_data_dir()
+_PLUGIN_DATA = str(_RESOLVED_PLUGIN_DATA) if _RESOLVED_PLUGIN_DATA else None
 if _RESOLVED_PLUGIN_DATA is not None:
     SNAPSHOT_DIR = _RESOLVED_PLUGIN_DATA / "data"
     _CONFIG_BASE = _RESOLVED_PLUGIN_DATA / "config"
 else:
-    SNAPSHOT_DIR = CLAUDE_DIR / "_backups" / "token-optimizer"
+    SNAPSHOT_DIR = RUNTIME_DIR / "_backups" / "token-optimizer"
     _CONFIG_BASE = None  # resolved below after constants
 
 DASHBOARD_PATH = SNAPSHOT_DIR / "dashboard.html"
@@ -182,7 +182,7 @@ PRICING_TIERS = {
     },
 }
 
-CONFIG_DIR = _CONFIG_BASE if _CONFIG_BASE else CLAUDE_DIR / "token-optimizer"
+CONFIG_DIR = _CONFIG_BASE if _CONFIG_BASE else RUNTIME_DIR / "token-optimizer"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
 
@@ -2976,7 +2976,7 @@ def generate_dashboard(coord_path):
     # v5.3.6 / v5.4.10: mirror the same HTML to BOTH dashboard paths so
     # the daemon serves fresh audit content regardless of which path it
     # was configured to use. Same dual-path pattern as v5.4.7 daemon script.
-    legacy_dashboard = CLAUDE_DIR / "_backups" / "token-optimizer" / "dashboard.html"
+    legacy_dashboard = RUNTIME_DIR / "_backups" / "token-optimizer" / "dashboard.html"
     wrote_mirror = False
     for mirror_path in {DASHBOARD_PATH, legacy_dashboard}:
         try:
@@ -3607,11 +3607,11 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
 
     # v5.4.10: dual-path write (same pattern as daemon script in v5.4.7).
     # DASHBOARD_PATH depends on SNAPSHOT_DIR which resolves differently in
-    # plugin-hook context (CLAUDE_PLUGIN_DATA set) vs standalone CLI.
+    # plugin-hook context (runtime plugin data set) vs standalone CLI.
     # The daemon script's DASHBOARD constant points to whichever path was
     # active when setup-daemon ran. Write to BOTH so the daemon always
     # serves current content regardless of which path it expects.
-    legacy_dashboard = CLAUDE_DIR / "_backups" / "token-optimizer" / "dashboard.html"
+    legacy_dashboard = RUNTIME_DIR / "_backups" / "token-optimizer" / "dashboard.html"
     write_paths = {DASHBOARD_PATH, legacy_dashboard}
     wrote_any = False
     for wp in write_paths:
@@ -8273,7 +8273,7 @@ def _generate_plist():
 
 _HOOKS_JSON_CANDIDATES = [
     # Script install path (installed by install.sh to ~/.claude/token-optimizer)
-    Path.home() / ".claude" / "token-optimizer" / "hooks" / "hooks.json",
+    RUNTIME_DIR / "token-optimizer" / "hooks" / "hooks.json",
     # Dev path (symlinked/local checkout at ~/CascadeProjects/...)
     Path(__file__).resolve().parents[3] / "hooks" / "hooks.json",
 ]
@@ -9811,8 +9811,8 @@ def setup_daemon(dry_run=False, uninstall=False):
 # Measures content QUALITY inside a session, not just quantity.
 # Pure JSONL analysis, no model calls, no hooks required.
 
-CHECKPOINT_DIR = CLAUDE_DIR / "token-optimizer" / "checkpoints"
-CHECKPOINT_EVENT_LOG = CLAUDE_DIR / "token-optimizer" / "checkpoint-events.jsonl"
+CHECKPOINT_DIR = RUNTIME_DIR / "token-optimizer" / "checkpoints"
+CHECKPOINT_EVENT_LOG = RUNTIME_DIR / "token-optimizer" / "checkpoint-events.jsonl"
 
 # Quality signal weights (must sum to 1.0)
 # context_fill_degradation is the most important signal at large context windows
@@ -13718,7 +13718,7 @@ def setup_smart_compact(dry_run=False, uninstall=False, status_only=False):
     print("  To remove: python3 measure.py setup-smart-compact --uninstall")
 
 
-QUALITY_CACHE_DIR = CLAUDE_DIR / "token-optimizer"
+QUALITY_CACHE_DIR = RUNTIME_DIR / "token-optimizer"
 QUALITY_CACHE_PATH = QUALITY_CACHE_DIR / "quality-cache.json"  # legacy global fallback
 
 
@@ -15885,7 +15885,7 @@ def _run_ensure_health():
     # to BOTH locations so whichever one the service manager expects gets served.
     try:
         current_marker = f'TOKEN_OPTIMIZER_DAEMON_VERSION = "{TOKEN_OPTIMIZER_VERSION}"'
-        legacy_dir = CLAUDE_DIR / "_backups" / "token-optimizer"
+        legacy_dir = RUNTIME_DIR / "_backups" / "token-optimizer"
         candidate_paths = {SNAPSHOT_DIR / "dashboard-server.py",
                            legacy_dir / "dashboard-server.py"}
         needs_refresh = False
@@ -16075,8 +16075,8 @@ def _run_ensure_health():
         # the OSError would otherwise propagate through _run_ensure_health
         # and miss the outer dispatch's _HookTimeout catch.
         try:
-            _legacy_data = CLAUDE_DIR / "_backups" / "token-optimizer"
-            _legacy_config = CLAUDE_DIR / "token-optimizer"
+            _legacy_data = RUNTIME_DIR / "_backups" / "token-optimizer"
+            _legacy_config = RUNTIME_DIR / "token-optimizer"
             _migrated_marker = Path(_migration_target) / ".migrated"
             if not _migrated_marker.exists():
                 import shutil
@@ -16180,7 +16180,7 @@ def _run_ensure_health():
         print(f"  [Token Optimizer] quality bar setup failed: {_e}", file=sys.stderr)
     # Auto-update check (once per day, script-installed users only)
     try:
-        install_dir = Path.home() / ".claude" / "token-optimizer"
+        install_dir = RUNTIME_DIR / "token-optimizer"
         update_marker = install_dir / ".last-update-check"
         if (install_dir / ".git").is_dir():
             should_check = True
@@ -16708,7 +16708,7 @@ if __name__ == "__main__":
         if args[0] == "setup-coach-injection" and "--uninstall" in args:
             cwd = Path.cwd()
             for candidate in [cwd / "CLAUDE.md", cwd / ".claude" / "CLAUDE.md",
-                              HOME / ".claude" / "CLAUDE.md"]:
+                              CLAUDE_DIR / "CLAUDE.md"]:
                 if candidate.exists():
                     r = remove_managed_block(str(candidate), "COACH")
                     if r["action"] == "removed":
@@ -16745,7 +16745,7 @@ if __name__ == "__main__":
         section = args[1] if len(args) > 1 else "COACH"
         cwd = Path.cwd()
         for candidate in [cwd / "CLAUDE.md", cwd / ".claude" / "CLAUDE.md",
-                          HOME / ".claude" / "CLAUDE.md"]:
+                          CLAUDE_DIR / "CLAUDE.md"]:
             if candidate.exists():
                 s = check_staleness(str(candidate), section)
                 if s["exists"] and s["stale"]:

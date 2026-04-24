@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"./hooks/python-launcher.sh\" \"./hooks/run.py\" skills/token-optimizer/scripts/codex_hook_bridge.py session-start",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"./hooks/python-launcher.sh\" \"./hooks/run.py\" skills/token-optimizer/scripts/codex_hook_bridge.py user-prompt-submit",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"./hooks/python-launcher.sh\" \"./hooks/run.py\" skills/token-optimizer/scripts/context_intel.py --quiet",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"./hooks/python-launcher.sh\" \"./hooks/run.py\" skills/token-optimizer/scripts/archive_result.py --quiet >/dev/null 2>&1",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"./hooks/python-launcher.sh\" \"./hooks/run.py\" skills/token-optimizer/scripts/measure.py compact-capture --trigger stop --quiet",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

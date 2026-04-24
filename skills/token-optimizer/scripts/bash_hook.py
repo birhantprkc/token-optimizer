@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from plugin_env import is_v5_flag_enabled, resolve_plugin_data_dir
+from runtime_env import runtime_home
 
 # Categorical exclusion: if ANY of these appear in the raw command string,
 # never rewrite. Checked BEFORE shlex tokenization to catch all forms.
@@ -222,7 +223,7 @@ def main():
 
     # Log rewrite event to sidecar JSONL
     try:
-        log_dir = resolve_plugin_data_dir() or (Path.home() / ".claude" / "token-optimizer")
+        log_dir = resolve_plugin_data_dir() or (runtime_home() / "token-optimizer")
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "bash-rewrites.jsonl"
         event = json.dumps({

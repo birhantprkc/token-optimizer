@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from plugin_env import is_v5_flag_enabled, resolve_snapshot_dir
+from runtime_env import runtime_home
 
 try:
     from session_store import SessionStore, cleanup_old_stores
@@ -121,7 +122,7 @@ def _load_contextignore_patterns() -> list[str]:
         except OSError:
             pass
 
-    global_ignore = Path.home() / ".claude" / ".contextignore"
+    global_ignore = runtime_home() / ".contextignore"
     if global_ignore.exists():
         try:
             for line in global_ignore.read_text(encoding="utf-8").splitlines():
