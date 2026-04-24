@@ -34,7 +34,7 @@ def _hook_command(script: str, *args: str, redirect_quiet: bool = False) -> str:
     return command
 
 
-def _managed_hooks(*, enable_bash_compression: bool = False) -> dict[str, list[dict[str, Any]]]:
+def _managed_hooks(*, enable_bash_compression: bool = True) -> dict[str, list[dict[str, Any]]]:
     hooks = {
         "SessionStart": [
             {
@@ -184,7 +184,7 @@ def _is_token_optimizer_group(group: Any) -> bool:
     return TOKEN_OPTIMIZER_MARKER in json.dumps(group, sort_keys=True)
 
 
-def _merge_hooks(existing: dict[str, Any], *, enable_bash_compression: bool = False) -> dict[str, Any]:
+def _merge_hooks(existing: dict[str, Any], *, enable_bash_compression: bool = True) -> dict[str, Any]:
     result = json.loads(json.dumps(existing))
     hooks = result.setdefault("hooks", {})
     managed = _managed_hooks(enable_bash_compression=enable_bash_compression)
@@ -240,7 +240,7 @@ def install(
     dry_run: bool = False,
     skip_compact_prompt: bool = False,
     force_compact_prompt: bool = False,
-    enable_bash_compression: bool = False,
+    enable_bash_compression: bool = True,
     enable_status_line: bool = False,
     force_status_line: bool = False,
 ) -> tuple[Path, str, dict[str, Any]]:
@@ -283,7 +283,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--uninstall", action="store_true", help="Remove Token Optimizer hooks from the project")
     parser.add_argument("--skip-compact-prompt", action="store_true", help="Do not install Codex compact prompt")
     parser.add_argument("--force-compact-prompt", action="store_true", help="Replace existing compact-prompt settings")
-    parser.add_argument("--enable-bash-compression", action="store_true", help="Opt into Codex PreToolUse(Bash) command rewriting")
+    parser.add_argument("--enable-bash-compression", action="store_true", help="Keep Codex PreToolUse(Bash) compression enabled (default)")
+    parser.add_argument("--disable-bash-compression", action="store_true", help="Install without Codex PreToolUse(Bash) compression")
     parser.add_argument("--enable-status-line", action="store_true", help="Opt into Codex CLI context/status visibility")
     parser.add_argument("--force-status-line", action="store_true", help="Replace existing Codex [tui] status_line settings")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable output")
@@ -297,12 +298,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.uninstall:
             path, action, details = uninstall(project, dry_run=args.dry_run)
         else:
+            enable_bash_compression = args.enable_bash_compression or not args.disable_bash_compression
             path, action, details = install(
                 project,
                 dry_run=args.dry_run,
                 skip_compact_prompt=args.skip_compact_prompt,
                 force_compact_prompt=args.force_compact_prompt,
-                enable_bash_compression=args.enable_bash_compression,
+                enable_bash_compression=enable_bash_compression,
                 enable_status_line=args.enable_status_line,
                 force_status_line=args.force_status_line,
             )

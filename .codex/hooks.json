@@ -54,6 +54,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -lc 'root=$(git rev-parse --show-toplevel 2>/dev/null || pwd); TOKEN_OPTIMIZER_RUNTIME=codex bash \"$root/hooks/python-launcher.sh\" \"$root/hooks/run.py\" skills/token-optimizer/scripts/bash_hook.py --quiet'",
+            "timeout": 8
+          }
+        ]
+      }
     ]
   }
 }

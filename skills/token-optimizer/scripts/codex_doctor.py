@@ -220,7 +220,7 @@ def _project_feature_checks(project: Path) -> list[dict[str, str]]:
     if _has_project_hook(hooks, "PreToolUse", "Bash", "bash_hook.py"):
         checks.append(_check("OK", "Feature: Bash compression", "enabled for PreToolUse(Bash)"))
     else:
-        checks.append(_check("WARN", "Feature: Bash compression", "opt-in; rerun codex-install with --enable-bash-compression after reviewing command rewrite risk"))
+        checks.append(_check("WARN", "Feature: Bash compression", "missing; rerun codex-install, or pass --disable-bash-compression to leave it off"))
 
     required_features = (
         ("Prompt quality nudges", "UserPromptSubmit", None, "codex_hook_bridge.py"),

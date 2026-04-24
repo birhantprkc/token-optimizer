@@ -3188,10 +3188,10 @@ def _collect_codex_hook_status_for_dashboard():
         },
         "codex_bash_compression": {
             "installed": _ok("Feature: Bash compression"),
-            "label": "Bash Compression (Opt-In)",
-            "description": "Optionally rewrites safe Bash commands through the compression wrapper. Leave off unless you want command-output compression.",
-            "install_cmd": base + " --enable-bash-compression",
-            "uninstall_cmd": base,
+            "label": "Bash Compression",
+            "description": "Rewrites safe whitelisted Bash commands through the compression wrapper. Matches Claude default behavior; disable if you need exact raw output.",
+            "install_cmd": base,
+            "uninstall_cmd": base + " --disable-bash-compression",
         },
         "codex_status_line": {
             "installed": _ok("Codex CLI status line"),
@@ -3226,7 +3226,7 @@ def _collect_management_data(components=None, trends=None):
             "codex": {
                 "project": str(project),
                 "install_cmd": base,
-                "install_with_bash_compression_cmd": base + " --enable-bash-compression",
+                "install_without_bash_compression_cmd": base + " --disable-bash-compression",
                 "install_with_status_line_cmd": base + " --enable-status-line",
                 "refresh_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} session-end-flush --trigger manual",
                 "doctor_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} doctor",

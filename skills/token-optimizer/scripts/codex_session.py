@@ -84,8 +84,9 @@ def _tool_name(name: str) -> str:
     return TOOL_ALIASES.get(name, name or "unknown")
 
 
-def _estimate_tokens(text: str) -> int:
-    return max(0, int(len(text) / CHARS_PER_TOKEN))
+def _estimate_tokens(text: str | int) -> int:
+    chars = text if isinstance(text, int) else len(text)
+    return max(0, int(chars / CHARS_PER_TOKEN))
 
 
 def _safe_int(value: Any) -> int:
