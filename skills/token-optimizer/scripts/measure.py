@@ -85,7 +85,9 @@ from pathlib import Path
 
 from hook_io import read_stdin_hook_input as _read_stdin_hook_input_shared
 from plugin_env import resolve_plugin_data_dir
-from runtime_env import claude_home, runtime_home
+from runtime_env import claude_home, detect_runtime, runtime_home, runtime_name_for_humans
+
+import codex_session
 
 try:
     import fcntl
@@ -112,6 +114,11 @@ else:
     _CONFIG_BASE = None  # resolved below after constants
 
 DASHBOARD_PATH = SNAPSHOT_DIR / "dashboard.html"
+
+
+def _use_codex_session_adapter(filepath=None):
+    """True when session JSONL should be parsed with the Codex adapter."""
+    return detect_runtime() == "codex" or (filepath is not None and codex_session.is_codex_session_path(filepath))
 
 # Tokens per skill frontmatter (loaded at startup)
 TOKENS_PER_SKILL_APPROX = 100
@@ -2832,6 +2839,21 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
             print("\n  Server stopped.")
 
 
+def _sanitize_codex_dashboard_paths(data):
+    """Avoid embedding full Codex session paths in dashboard HTML."""
+    if data.get("runtime") != "codex":
+        return data
+    trends = data.get("trends")
+    if not isinstance(trends, dict):
+        return data
+    for day in trends.get("daily", []) or []:
+        for session in day.get("session_details", []) or []:
+            path = session.get("jsonl_path")
+            if path:
+                session["jsonl_path"] = Path(path).name
+    return data
+
+
 def generate_dashboard(coord_path):
     """Generate an interactive HTML dashboard from audit results."""
     coord = Path(coord_path)
@@ -2952,7 +2974,10 @@ def generate_dashboard(coord_path):
         "auto_plan": auto_plan_flag,
         "generated_at": datetime.now().isoformat(),
         "version": TOKEN_OPTIMIZER_VERSION,
+        "runtime": detect_runtime(),
+        "runtime_label": runtime_name_for_humans(),
     }
+    data = _sanitize_codex_dashboard_paths(data)
 
     # Load template and inject data
     template = template_path.read_text(encoding="utf-8")
@@ -3593,7 +3618,10 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
         "claude_md_health": claude_md_health,
         "v5_recommendation": _get_v5_savings_recommendation(),
         "version": TOKEN_OPTIMIZER_VERSION,
+        "runtime": detect_runtime(),
+        "runtime_label": runtime_name_for_humans(),
     }
+    data = _sanitize_codex_dashboard_paths(data)
 
     template = template_path.read_text(encoding="utf-8")
     data_json = json.dumps(data, ensure_ascii=True, default=str)
@@ -4653,6 +4681,9 @@ def generate_coach_block(components=None, trends=None):
 
 def _find_all_jsonl_files(days=30):
     """Find all JSONL session files across all projects within the given day window."""
+    if _use_codex_session_adapter():
+        return codex_session.find_all_jsonl_files(days)
+
     projects_base = CLAUDE_DIR / "projects"
     if not projects_base.exists():
         return []
@@ -4952,6 +4983,9 @@ def _parse_session_jsonl(filepath):
     Returns a dict with extracted session metrics, or None if the file
     is empty or unparseable.
     """
+    if _use_codex_session_adapter(filepath):
+        return codex_session.parse_session_jsonl(filepath)
+
     skills_used = {}
     subagents_used = {}
     tool_calls = {}
@@ -5191,6 +5225,9 @@ def parse_session_turns(filepath):
 
     Returns empty list if file is empty/unparseable.
     """
+    if _use_codex_session_adapter(filepath):
+        return codex_session.parse_session_turns(filepath)
+
     turns = []
     turn_index = 0
     tier = _load_pricing_tier()
@@ -9891,6 +9928,9 @@ def _parse_jsonl_for_quality(filepath):
     system reminders, messages, and compaction markers. Returns None if
     the file is empty or unparseable.
     """
+    if _use_codex_session_adapter(filepath):
+        return codex_session.parse_jsonl_for_quality(filepath)
+
     reads = []       # (index, path, timestamp)
     writes = []      # (index, path, timestamp)
     tool_results = []  # (index, tool_name, result_size_chars, referenced_later)
@@ -10383,6 +10423,9 @@ def _find_current_session_jsonl():
     For non-hook contexts (manual CLI), results are the same since the most
     recently modified JSONL is almost always the currently active session.
     """
+    if _use_codex_session_adapter():
+        return codex_session.find_current_session_jsonl()
+
     projects_base = CLAUDE_DIR / "projects"
     if not projects_base.exists():
         return None
@@ -10401,6 +10444,9 @@ def _find_session_jsonl_by_id(session_id):
     safe_id = _sanitize_session_id(session_id)
     if safe_id == "unknown":
         return None
+    if _use_codex_session_adapter():
+        return codex_session.find_session_jsonl_by_id(safe_id)
+
     projects_base = CLAUDE_DIR / "projects"
     if not projects_base.exists():
         return None
@@ -10441,9 +10487,13 @@ def quality_analyzer(session_id=None, as_json=False):
         return None
 
     result = compute_quality_score(quality_data)
-    result["session_file"] = str(filepath)
+    result["session_file"] = Path(filepath).name
     result["total_messages"] = len(quality_data["messages"])
     result["decisions_found"] = len(quality_data["decisions"])
+    result["runtime"] = detect_runtime()
+    result["runtime_label"] = runtime_name_for_humans()
+    if quality_data.get("estimated"):
+        result["estimated"] = True
 
     if as_json:
         print(json.dumps(result, indent=2))
@@ -10564,6 +10614,11 @@ def _collect_quality_for_dashboard():
         result = compute_quality_score(quality_data)
         result["total_messages"] = len(quality_data["messages"])
         result["decisions_found"] = len(quality_data["decisions"])
+        result["runtime"] = detect_runtime()
+        result["runtime_label"] = runtime_name_for_humans()
+        result["session_file"] = Path(filepath).name
+        if quality_data.get("estimated"):
+            result["estimated"] = True
         return result
     except Exception:
         return None

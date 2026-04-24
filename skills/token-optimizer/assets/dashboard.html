@@ -2686,17 +2686,22 @@ var DB = (function() {
     var el = document.getElementById('view-trends');
     if (!el) return;
     var t = data.trends;
+    var runtimeLabel = data.runtime_label || 'Claude Code';
+    var isCodex = data.runtime === 'codex';
 
     var ts = data.generated_at ? new Date(data.generated_at).toLocaleString() : 'unknown';
     var html = '<div class="section-header">' +
       '<div class="label">Analytics</div>' +
       '<h1>Usage Trends</h1>' +
-      '<p>How you use Claude Code across sessions.</p>' +
+      '<p>How you use ' + esc(runtimeLabel) + ' across sessions.</p>' +
       '</div>' +
       '<div class="last-updated">Last updated: ' + esc(ts) + '</div>';
 
     if (!t) {
-      html += '<div class="empty-state">No trends data yet. Sessions are collected automatically via the SessionEnd hook. Run a few sessions first, or manually: <span class="update-cmd">python3 measure.py collect</span></div>';
+      var collectNote = isCodex
+        ? 'Codex sessions can be collected manually for now: <span class="update-cmd">TOKEN_OPTIMIZER_RUNTIME=codex python3 measure.py collect</span>'
+        : 'Sessions are collected automatically via the SessionEnd hook. Run a few sessions first, or manually: <span class="update-cmd">python3 measure.py collect</span>';
+      html += '<div class="empty-state">No trends data yet. ' + collectNote + '</div>';
       el.innerHTML = html;
       return;
     }
@@ -2740,18 +2745,24 @@ var DB = (function() {
       .filter(function(label) { return !!label; })
       .join(' | ');
 
-    // Hero stat cards — v5.4.8 added Total Tokens + Messages for Desktop parity.
-    // Billable tokens (fresh_input + output + cache_create) match Desktop methodology.
-    // cache_read is tracked separately since it bills at ~10% of fresh input.
+    var tokenLabel = isCodex ? 'Measured/Estimated Tokens' : 'Billable Tokens';
+    var tokenNote = isCodex
+      ? 'Codex logs use token_count snapshots when present; older sessions fall back to local estimates.'
+      : 'Fresh input + cache writes + output (what your invoice bills at full rate).';
+    var cacheLabel = isCodex ? 'Cached Input Share' : 'Avg Cache Hit Rate';
+    var cacheNote = isCodex
+      ? 'Codex exposes cached_input_tokens but not Claude-style cache-write TTL fields.'
+      : 'Above 90% is normal for longer sessions. It means prompt caching is working well.';
+
     html += '<div class="stat-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:var(--s-3)">' +
       '<div class="stat-card"><div class="stat-card-value">' + t.session_count + '</div><div class="stat-card-label">Sessions (' + t.period_days + 'd)</div></div>' +
-      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_tokens || 0) + '</div><div class="stat-card-label">Billable Tokens (' + t.period_days + 'd)</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Fresh input + cache writes + output (what your invoice bills at full rate).</div><div style="font-size:10px;color:var(--c-text-dim);margin-top:2px">fresh:' + fn(t.total_fresh_input || 0) + ' · cache-write:' + fn(t.total_cache_create || 0) + ' · out:' + fn(t.total_output_tokens || 0) + '</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_tokens || 0) + '</div><div class="stat-card-label">' + tokenLabel + ' (' + t.period_days + 'd)</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + tokenNote + '</div><div style="font-size:10px;color:var(--c-text-dim);margin-top:2px">fresh:' + fn(t.total_fresh_input || 0) + ' · cache-write:' + fn(t.total_cache_create || 0) + ' · out:' + fn(t.total_output_tokens || 0) + '</div></div>' +
       '<div class="stat-card"><div class="stat-card-value">' + fn(t.total_messages || 0) + '</div><div class="stat-card-label">Messages (' + t.period_days + 'd)</div></div>' +
       '</div>' +
       '<div class="stat-row" style="grid-template-columns:repeat(3,1fr)">' +
       '<div class="stat-card"><div class="stat-card-value">' + Math.round(t.avg_duration_minutes || 0) + 'm</div><div class="stat-card-label">Avg Duration</div></div>' +
       '<div class="stat-card"><div class="stat-card-value">' + fn((t.avg_input_tokens || 0) + (t.avg_output_tokens || 0)) + '</div><div class="stat-card-label">Avg Tokens/Session</div></div>' +
-      '<div class="stat-card"><div class="stat-card-value" style="color:#22c55e">' + avgCacheHit + (avgCacheHit !== 'N/A' ? '%' : '') + '</div><div class="stat-card-label">Avg Cache Hit Rate</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Cache writes: ' + esc(globalTtlMix) + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + esc(globalTtlSessionLabel) + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + esc(ttlPeriodSummary || 'TTL period summary unavailable') + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Above 90% is normal for longer sessions. It means prompt caching is working well.</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value" style="color:#22c55e">' + avgCacheHit + (avgCacheHit !== 'N/A' ? '%' : '') + '</div><div class="stat-card-label">' + cacheLabel + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Cache writes: ' + esc(globalTtlMix) + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + esc(globalTtlSessionLabel) + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + esc(ttlPeriodSummary || 'TTL period summary unavailable') + '</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">' + cacheNote + '</div></div>' +
       '</div>';
 
     // Shared data for skills sections
@@ -3278,9 +3289,11 @@ var DB = (function() {
       var qColor = qs >= 85 ? 'var(--c-accent-cyan)' : qs >= 70 ? '#4ecdc4' : qs >= 50 ? '#ff9f43' : '#ff6b6b';
       var qBand = qs >= 85 ? 'Excellent' : qs >= 70 ? 'Good' : qs >= 50 ? 'Degraded' : 'Critical';
       var sessionFile = q.session_file ? q.session_file.replace(/.*\//, '') : null;
+      var runtimeLabel = q.runtime_label || data.runtime_label || 'Claude Code';
+      var estimateNote = q.estimated ? ' Some Codex quality signals are inferred from local session events.' : '';
       html += '<div class="card wide"><div class="card-header"><span>Context Quality</span><span class="label">v2.0</span></div>' +
-        '<div style="padding:8px var(--s-3) 0;font-size:12px;color:var(--c-text-dim);">This score measures your most recently active session, not an average across sessions. It reflects the quality of context in that specific conversation based on 6 signals.</div>' +
-        (sessionFile ? '<div style="padding:4px var(--s-3) 0;font-size:13px;color:var(--c-text-dim);">Session: <code style="font-family:var(--font-mono);color:var(--c-text-main);">' + esc(sessionFile) + '</code><span style="margin-left:8px;color:var(--c-text-dim);font-size:12px;">(most recently active in this project)</span></div>' : '') +
+        '<div style="padding:8px var(--s-3) 0;font-size:12px;color:var(--c-text-dim);">This score measures your most recently active ' + esc(runtimeLabel) + ' session, not an average across sessions. It reflects context quality based on 7 signals.' + estimateNote + '</div>' +
+        (sessionFile ? '<div style="padding:4px var(--s-3) 0;font-size:13px;color:var(--c-text-dim);">Session: <code style="font-family:var(--font-mono);color:var(--c-text-main);">' + esc(sessionFile) + '</code><span style="margin-left:8px;color:var(--c-text-dim);font-size:12px;">(most recently active)</span></div>' : '') +
         '<div style="text-align:center;padding:var(--s-3) 0;">' +
         '<div style="font-size:56px;font-weight:700;font-family:var(--font-mono);color:' + qColor + ';text-shadow:0 0 15px ' + qColor + ';">' + qs + '</div>' +
         '<div class="label" style="font-size:16px;color:' + qColor + ';">' + qBand + '</div>' +
@@ -3289,7 +3302,8 @@ var DB = (function() {
       // Breakdown bars
       var bd = q.breakdown || {};
       var signals = [
-        { key: 'stale_reads', label: 'Stale Reads', icon: '\uD83D\uDCC4', tip: 'Files read earlier that have since changed. Claude may be working with outdated content.' },
+        { key: 'context_fill_degradation', label: 'Context Fill', icon: '\uD83D\uDCCA', tip: 'How full the active context is. Higher fill raises degradation risk.' },
+        { key: 'stale_reads', label: 'Stale Reads', icon: '\uD83D\uDCC4', tip: 'Files read earlier that have since changed. The model may be working with outdated content.' },
         { key: 'bloated_results', label: 'Bloated Results', icon: '\uD83D\uDCE6', tip: 'Tool outputs sitting in context that were never referenced. Wasted space.' },
         { key: 'duplicates', label: 'Duplicates', icon: '\uD83D\uDD04', tip: 'Same system reminders or content injected multiple times. Pure waste.' },
         { key: 'compaction_depth', label: 'Compactions', icon: '\uD83D\uDDDC', tip: 'Each compaction loses 60-70% of conversation. After 2: ~88% gone.' },

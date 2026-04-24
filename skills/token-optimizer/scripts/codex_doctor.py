@@ -27,6 +27,7 @@ REQUIRED_FILES = (
     "hooks/python-launcher.sh",
     "hooks/run.py",
     "skills/token-optimizer/scripts/codex_hook_bridge.py",
+    "skills/token-optimizer/scripts/codex_session.py",
     "skills/token-optimizer/scripts/codex_compact_prompt.py",
     "skills/token-optimizer/scripts/codex_install.py",
     "skills/token-optimizer/scripts/context_intel.py",
