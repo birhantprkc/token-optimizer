@@ -34,8 +34,39 @@ def _hook_command(script: str, *args: str, redirect_quiet: bool = False) -> str:
     return command
 
 
-def _managed_hooks(*, enable_bash_compression: bool = True) -> dict[str, list[dict[str, Any]]]:
+def _managed_hooks(
+    *,
+    enable_bash_compression: bool = False,
+    enable_hot_path_hooks: bool = False,
+    enable_prompt_hooks: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    """Build Codex project hooks.
+
+    Codex Desktop currently renders every successful hook as a visible row.
+    Keep the default install low-noise: one Stop hook for collection/continuity,
+    and require explicit opt-in for prompt/tool hot-path hooks.
+    """
     hooks = {
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": _hook_command(
+                            "skills/token-optimizer/scripts/measure.py",
+                            "session-end-flush",
+                            "--trigger",
+                            "stop",
+                            "--quiet",
+                        ),
+                        "timeout": 45,
+                    }
+                ]
+            }
+        ],
+    }
+    if enable_prompt_hooks:
+        hooks.update({
         "SessionStart": [
             {
                 "hooks": [
@@ -64,7 +95,9 @@ def _managed_hooks(*, enable_bash_compression: bool = True) -> dict[str, list[di
                 ]
             }
         ],
-        "PostToolUse": [
+        })
+    if enable_hot_path_hooks:
+        hooks["PostToolUse"] = [
             {
                 "matcher": "Bash",
                 "hooks": [
@@ -92,25 +125,7 @@ def _managed_hooks(*, enable_bash_compression: bool = True) -> dict[str, list[di
                     }
                 ],
             },
-        ],
-        "Stop": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": _hook_command(
-                            "skills/token-optimizer/scripts/measure.py",
-                            "session-end-flush",
-                            "--trigger",
-                            "stop",
-                            "--quiet",
-                        ),
-                        "timeout": 45,
-                    }
-                ]
-            }
-        ],
-    }
+        ]
     if enable_bash_compression:
         hooks["PreToolUse"] = [
             {
@@ -184,10 +199,20 @@ def _is_token_optimizer_group(group: Any) -> bool:
     return TOKEN_OPTIMIZER_MARKER in json.dumps(group, sort_keys=True)
 
 
-def _merge_hooks(existing: dict[str, Any], *, enable_bash_compression: bool = True) -> dict[str, Any]:
+def _merge_hooks(
+    existing: dict[str, Any],
+    *,
+    enable_bash_compression: bool = False,
+    enable_hot_path_hooks: bool = False,
+    enable_prompt_hooks: bool = False,
+) -> dict[str, Any]:
     result = json.loads(json.dumps(existing))
     hooks = result.setdefault("hooks", {})
-    managed = _managed_hooks(enable_bash_compression=enable_bash_compression)
+    managed = _managed_hooks(
+        enable_bash_compression=enable_bash_compression,
+        enable_hot_path_hooks=enable_hot_path_hooks,
+        enable_prompt_hooks=enable_prompt_hooks,
+    )
     for event in SUPPORTED_EVENTS:
         groups = hooks.get(event, [])
         if not isinstance(groups, list):
@@ -240,16 +265,25 @@ def install(
     dry_run: bool = False,
     skip_compact_prompt: bool = False,
     force_compact_prompt: bool = False,
-    enable_bash_compression: bool = True,
+    enable_bash_compression: bool = False,
+    enable_hot_path_hooks: bool = False,
+    enable_prompt_hooks: bool = False,
     enable_status_line: bool = False,
     force_status_line: bool = False,
 ) -> tuple[Path, str, dict[str, Any]]:
     path = _hooks_path(project)
     existing = _load_hooks(path)
-    updated = _merge_hooks(existing, enable_bash_compression=enable_bash_compression)
+    updated = _merge_hooks(
+        existing,
+        enable_bash_compression=enable_bash_compression,
+        enable_hot_path_hooks=enable_hot_path_hooks,
+        enable_prompt_hooks=enable_prompt_hooks,
+    )
     details: dict[str, Any] = {
         "hook_events": sorted(updated.get("hooks", {}).keys()),
         "bash_compression": enable_bash_compression,
+        "hot_path_hooks": enable_hot_path_hooks,
+        "prompt_hooks": enable_prompt_hooks,
         "compact_prompt": "skipped" if skip_compact_prompt else None,
         "status_line": "skipped" if not enable_status_line else None,
     }
@@ -277,14 +311,16 @@ def uninstall(project: Path, *, dry_run: bool = False) -> tuple[Path, str, dict[
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Install Token Optimizer hooks into a Codex project.")
+    parser = argparse.ArgumentParser(description="Install Token Optimizer for a Codex project.")
     parser.add_argument("--project", default=".", help="Project directory to configure")
     parser.add_argument("--dry-run", action="store_true", help="Validate and print intended action without writing")
     parser.add_argument("--uninstall", action="store_true", help="Remove Token Optimizer hooks from the project")
     parser.add_argument("--skip-compact-prompt", action="store_true", help="Do not install Codex compact prompt")
     parser.add_argument("--force-compact-prompt", action="store_true", help="Replace existing compact-prompt settings")
-    parser.add_argument("--enable-bash-compression", action="store_true", help="Keep Codex PreToolUse(Bash) compression enabled (default)")
-    parser.add_argument("--disable-bash-compression", action="store_true", help="Install without Codex PreToolUse(Bash) compression")
+    parser.add_argument("--enable-bash-compression", action="store_true", help="Opt into visible PreToolUse(Bash) compression hook")
+    parser.add_argument("--disable-bash-compression", action="store_true", help="Deprecated no-op; Bash compression is off by default")
+    parser.add_argument("--enable-hot-path-hooks", action="store_true", help="Opt into visible PostToolUse tool-output hooks")
+    parser.add_argument("--enable-prompt-hooks", action="store_true", help="Opt into visible SessionStart/UserPromptSubmit guidance hooks")
     parser.add_argument("--enable-status-line", action="store_true", help="Opt into Codex CLI context/status visibility")
     parser.add_argument("--force-status-line", action="store_true", help="Replace existing Codex [tui] status_line settings")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable output")
@@ -298,13 +334,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.uninstall:
             path, action, details = uninstall(project, dry_run=args.dry_run)
         else:
-            enable_bash_compression = args.enable_bash_compression or not args.disable_bash_compression
+            enable_bash_compression = args.enable_bash_compression
             path, action, details = install(
                 project,
                 dry_run=args.dry_run,
                 skip_compact_prompt=args.skip_compact_prompt,
                 force_compact_prompt=args.force_compact_prompt,
                 enable_bash_compression=enable_bash_compression,
+                enable_hot_path_hooks=args.enable_hot_path_hooks,
+                enable_prompt_hooks=args.enable_prompt_hooks,
                 enable_status_line=args.enable_status_line,
                 force_status_line=args.force_status_line,
             )

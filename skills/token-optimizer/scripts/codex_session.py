@@ -368,6 +368,7 @@ def parse_session_jsonl(filepath: str | Path) -> dict[str, Any] | None:
         "total_cache_create": 0,
         "total_cache_create_1h": 0,
         "total_cache_create_5m": 0,
+        "model_context_window": last_usage["model_context_window"] if last_usage else None,
         "cache_hit_rate": cache_read / estimated_input if estimated_input else 0.0,
         "avg_call_gap_seconds": None,
         "max_call_gap_seconds": None,

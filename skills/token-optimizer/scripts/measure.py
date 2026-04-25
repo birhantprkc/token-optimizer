@@ -82,6 +82,10 @@ from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+try:
+    import tomllib
+except ImportError:  # pragma: no cover - Python < 3.11 fallback
+    tomllib = None
 
 from hook_io import read_stdin_hook_input as _read_stdin_hook_input_shared
 from plugin_env import resolve_plugin_data_dir
@@ -195,16 +199,37 @@ OPENAI_MODEL_PRICING = {
     "gpt-5.1-codex": {"input": 1.25, "cache_read": 0.125, "output": 10.0},
     "gpt-5.1-codex-mini": {"input": 0.25, "cache_read": 0.025, "output": 2.0},
     "gpt-5.1": {"input": 1.25, "cache_read": 0.125, "output": 10.0},
+    "gpt-5.2": {"input": 1.75, "cache_read": 0.175, "output": 14.0},
+    "gpt-5.2-codex": {"input": 1.75, "cache_read": 0.175, "output": 14.0},
     "gpt-5.3-codex": {"input": 1.75, "cache_read": 0.175, "output": 14.0},
     "gpt-5.4": {"input": 2.5, "cache_read": 0.25, "output": 15.0},
     "gpt-5.4-mini": {"input": 0.75, "cache_read": 0.075, "output": 4.5},
     "gpt-5.4-nano": {"input": 0.20, "cache_read": 0.02, "output": 1.25},
     "gpt-5.5": {"input": 5.0, "cache_read": 0.50, "output": 30.0},
+    "gpt-5.5-pro": {"input": 30.0, "cache_read": 30.0, "output": 180.0},
 }
 OPENAI_LONG_CONTEXT_PRICING = {
     "gpt-5.4": {"input": 5.0, "cache_read": 0.50, "output": 22.5},
 }
 OPENAI_LONG_CONTEXT_INPUT_THRESHOLD = 272_000
+
+OPENAI_MODEL_CONTEXT_WINDOWS = {
+    # Official API context windows. Codex Desktop/CLI can expose a smaller
+    # effective window; prefer logged Codex model_context_window over this map.
+    "gpt-5.5": 1_050_000,
+    "gpt-5.5-pro": 1_050_000,
+    "gpt-5.4": 1_050_000,
+    "gpt-5.4-mini": 400_000,
+    "gpt-5.4-nano": 400_000,
+    "gpt-5.3-codex": 400_000,
+    "gpt-5.2": 400_000,
+    "gpt-5.2-codex": 400_000,
+    "gpt-5.1-codex-mini": 400_000,
+    "gpt-5.1-codex": 400_000,
+    "gpt-5-codex": 400_000,
+    "gpt-5.1": 400_000,
+}
+CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW = 258_400
 
 CONFIG_DIR = _CONFIG_BASE if _CONFIG_BASE else RUNTIME_DIR / "token-optimizer"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -282,15 +307,18 @@ def _normalize_openai_model_name(model):
     if not value or value in {"codex", "openai", "unknown"}:
         return None
     aliases = (
+        "gpt-5.5-pro",
         "gpt-5.4-mini",
         "gpt-5.4-nano",
         "gpt-5.1-codex-mini",
         "gpt-5.1-codex",
         "gpt-5.3-codex",
+        "gpt-5.2-codex",
         "gpt-5-codex",
-        "gpt-5.1",
-        "gpt-5.4",
         "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.2",
+        "gpt-5.1",
     )
     for alias in aliases:
         if value == alias or value.startswith(alias + "-"):
@@ -1441,6 +1469,77 @@ def _is_1m_model(model_str):
     return True
 
 
+def _read_codex_config() -> dict:
+    path = RUNTIME_DIR / "config.toml"
+    if not path.exists() or tomllib is None:
+        return {}
+    try:
+        with path.open("rb") as handle:
+            data = tomllib.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def _codex_config_int(name: str) -> int | None:
+    value = _read_codex_config().get(name)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _codex_config_model() -> str | None:
+    value = _read_codex_config().get("model")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _latest_codex_logged_context_window() -> tuple[int | None, str | None]:
+    try:
+        files = codex_session.find_all_jsonl_files(days=30)
+    except Exception:
+        return None, None
+    for path, _mtime, _project in files[:25]:
+        try:
+            p = Path(path)
+            with p.open("rb") as handle:
+                try:
+                    size = handle.seek(0, os.SEEK_END)
+                    handle.seek(max(0, size - 1_000_000))
+                except OSError:
+                    handle.seek(0)
+                raw = handle.read()
+            for line in reversed(raw.decode("utf-8", errors="replace").splitlines()[-2000:]):
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = record.get("payload")
+                if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                    continue
+                info = payload.get("info")
+                if not isinstance(info, dict):
+                    continue
+                value = info.get("model_context_window")
+                try:
+                    parsed = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if parsed > 0:
+                    return parsed, p.name
+        except OSError:
+            continue
+    return None, None
+
+
+def _official_openai_context_window(model: str | None) -> int | None:
+    priced_model = _normalize_openai_model_name(model)
+    if not priced_model:
+        return None
+    return OPENAI_MODEL_CONTEXT_WINDOWS.get(priced_model)
+
+
 def detect_context_window():
     """Detect context window size. 1M default (since March 2026 GA).
 
@@ -1464,10 +1563,17 @@ def detect_context_window():
     if _cli_context_size:
         return _cli_context_size, "cli: --context-size"
     if detect_runtime() == "codex":
-        model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL")
-        if model:
-            return 1_000_000, f"runtime: Codex model {model} (override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"
-        return 1_000_000, "runtime: Codex default (override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"
+        logged_window, session_name = _latest_codex_logged_context_window()
+        if logged_window:
+            return logged_window, f"codex session log: {session_name}"
+        configured_window = _codex_config_int("model_context_window")
+        if configured_window:
+            return configured_window, "codex config: model_context_window"
+        model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL") or _codex_config_model()
+        official_window = _official_openai_context_window(model)
+        if official_window:
+            return official_window, f"OpenAI model metadata: {model} (override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"
+        return CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW, "Codex default effective window (override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"
     # Detect from model string in environment
     model = os.environ.get("CLAUDE_MODEL", "").lower()
     if not model:
@@ -3054,12 +3160,14 @@ def generate_dashboard(coord_path):
 
     calibration = detect_calibration_gap(components, totals, baselines)
 
+    ctx_window, ctx_source = detect_context_window()
     snapshot = {
         "components": components,
         "totals": totals,
         "session_baselines": baselines,
         "calibration": calibration,
-        "context_window": detect_context_window()[0],
+        "context_window": ctx_window,
+        "context_source": ctx_source,
     }
 
     # Read audit files
@@ -3252,7 +3360,7 @@ def _collect_codex_hook_status_for_dashboard():
         "codex_project": {
             "installed": _ok("Project hooks"),
             "label": "Codex Project Hooks",
-            "description": "Installs prompt quality nudges, context intelligence, archiving, Stop refresh, and checkpoint capture for this project.",
+            "description": "Installs the low-noise Stop hook for dashboard refresh and checkpoint capture. Prompt/tool hooks are opt-in because Codex Desktop shows every hook row.",
             "install_cmd": base,
             "uninstall_cmd": base + " --uninstall",
         },
@@ -3267,8 +3375,8 @@ def _collect_codex_hook_status_for_dashboard():
         "codex_bash_compression": {
             "installed": _ok("Feature: Bash compression"),
             "label": "Bash Compression",
-            "description": "Rewrites safe whitelisted Bash commands through the compression wrapper. Matches Claude default behavior; disable if you need exact raw output.",
-            "install_cmd": base,
+            "description": "Opt-in PreToolUse(Bash) compression. Useful, but Codex Desktop currently shows a visible hook row for every Bash call.",
+            "install_cmd": base + " --enable-bash-compression",
             "uninstall_cmd": base + " --disable-bash-compression",
         },
         "codex_status_line": {
@@ -3289,6 +3397,112 @@ def _collect_codex_hook_status_for_dashboard():
     }
 
 
+def _parse_skill_frontmatter(path: Path) -> dict:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    meta = {}
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            for line in text[3:end].splitlines():
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key in {"name", "description"}:
+                    meta[key] = value
+    if "name" not in meta:
+        meta["name"] = path.parent.name
+    meta["tokens"] = _estimate_tokens(text[:4000])
+    return meta
+
+
+def _collect_codex_skill_inventory(cfg: dict, *, project: Path) -> dict[str, list[dict]]:
+    disabled_paths = set()
+    skills_cfg = cfg.get("skills")
+    if isinstance(skills_cfg, dict):
+        entries = skills_cfg.get("config")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict) or entry.get("enabled", True):
+                    continue
+                raw_path = entry.get("path")
+                if isinstance(raw_path, str):
+                    disabled_paths.add(str(Path(raw_path).expanduser().resolve(strict=False)))
+
+    candidates: list[tuple[Path, str]] = []
+    for root, source in (
+        (project / ".codex" / "skills", "project"),
+        (RUNTIME_DIR / "skills", "user"),
+    ):
+        if root.exists():
+            candidates.extend((p, source) for p in root.rglob("SKILL.md"))
+
+    plugin_cache = RUNTIME_DIR / "plugins" / "cache"
+    if plugin_cache.exists():
+        candidates.extend((p, "plugin") for p in plugin_cache.rglob("skills/*/SKILL.md"))
+
+    active = []
+    disabled = []
+    seen: set[str] = set()
+    for path, source in candidates:
+        resolved = str(path.expanduser().resolve(strict=False))
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        meta = _parse_skill_frontmatter(path)
+        item = {
+            "name": meta.get("name") or path.parent.name,
+            "skill_name": meta.get("name") or path.parent.name,
+            "description": meta.get("description", ""),
+            "tokens": meta.get("tokens", 0),
+            "source": source,
+            "path": resolved,
+        }
+        if resolved in disabled_paths:
+            disabled.append(item)
+        else:
+            active.append(item)
+    active.sort(key=lambda item: (item["source"], item["name"]))
+    disabled.sort(key=lambda item: (item["source"], item["name"]))
+    return {"active": active, "disabled": disabled}
+
+
+def _collect_codex_mcp_inventory(cfg: dict) -> list[dict]:
+    servers = cfg.get("mcp_servers")
+    if not isinstance(servers, dict):
+        return []
+    items = []
+    for name, server in servers.items():
+        if not isinstance(server, dict):
+            server = {}
+        transport = "http" if server.get("url") else "stdio"
+        command = server.get("url") or server.get("command") or ""
+        items.append({
+            "name": name,
+            "command": str(command),
+            "transport": transport,
+            "tokens": TOKENS_PER_DEFERRED_TOOL,
+        })
+    return sorted(items, key=lambda item: item["name"])
+
+
+def _collect_codex_plugin_inventory(cfg: dict) -> list[dict]:
+    plugins = cfg.get("plugins")
+    if not isinstance(plugins, dict):
+        return []
+    items = []
+    for name, plugin_cfg in plugins.items():
+        enabled = True
+        if isinstance(plugin_cfg, dict):
+            enabled = bool(plugin_cfg.get("enabled", True))
+        items.append({"name": name, "enabled": enabled})
+    return sorted(items, key=lambda item: item["name"])
+
+
 def _collect_management_data(components=None, trends=None):
     """Collect data for the Manage tab: active/archived skills, MCP servers."""
     if components is None:
@@ -3299,19 +3513,25 @@ def _collect_management_data(components=None, trends=None):
         project = Path.cwd().resolve(strict=False)
         project_arg = shlex.quote(str(project))
         base = f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} codex-install --project {project_arg}"
+        cfg = _read_codex_config()
+        codex_skills = _collect_codex_skill_inventory(cfg, project=project)
+        codex_mcp = _collect_codex_mcp_inventory(cfg)
+        codex_plugins = _collect_codex_plugin_inventory(cfg)
         return {
             "mode": "codex",
             "codex": {
                 "project": str(project),
                 "install_cmd": base,
-                "install_without_bash_compression_cmd": base + " --disable-bash-compression",
+                "install_with_bash_compression_cmd": base + " --enable-bash-compression",
+                "install_with_hot_path_hooks_cmd": base + " --enable-hot-path-hooks --enable-prompt-hooks",
                 "install_with_status_line_cmd": base + " --enable-status-line",
                 "refresh_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} session-end-flush --trigger manual",
                 "doctor_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} doctor",
                 "dashboard_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} dashboard",
             },
-            "skills": {"active": [], "archived": []},
-            "mcp_servers": {"active": [], "disabled": [], "cloud": []},
+            "skills": {"active": codex_skills["active"], "archived": [], "disabled": codex_skills["disabled"]},
+            "mcp_servers": {"active": codex_mcp, "disabled": [], "cloud": []},
+            "plugins": codex_plugins,
             "v5_features": _get_v5_feature_status(),
         }
 
@@ -3715,12 +3935,14 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
 
     calibration = detect_calibration_gap(components, totals, baselines)
 
+    ctx_window, ctx_source = detect_context_window()
     snapshot = {
         "components": components,
         "totals": totals,
         "session_baselines": baselines,
         "calibration": calibration,
-        "context_window": detect_context_window()[0],
+        "context_window": ctx_window,
+        "context_source": ctx_source,
     }
 
     if not quiet:
@@ -3866,7 +4088,7 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
         "generated_at": datetime.now().isoformat(),
         "pricing_tier": pricing_tier,
         "pricing_tier_label": _pricing_tier_label(pricing_tier),
-        "pricing_tiers": {k: v["label"] for k, v in PRICING_TIERS.items()},
+        "pricing_tiers": {} if detect_runtime() == "codex" else {k: v["label"] for k, v in PRICING_TIERS.items()},
         "ttl_period_summary": ttl_period_summary,
         "session_turns": session_turns,
         "memory_review": mr_data,
@@ -7252,8 +7474,8 @@ def _find_session_version_for_pid(pid):
     return None  # No confident match; don't guess (causes false OUTDATED flags)
 
 
-def _collect_posix_claude_sessions():
-    """Collect running Claude CLI sessions via `ps` on macOS/Linux.
+def _collect_posix_claude_sessions(process_name="claude"):
+    """Collect running Claude/Codex CLI sessions via `ps` on macOS/Linux.
 
     Returns a list of session dicts. Returns None if `ps` itself raises a
     subprocess or OS error -- the caller treats None as "health check
@@ -7280,7 +7502,7 @@ def _collect_posix_claude_sessions():
         # Fields: PID TTY LSTART(5 fields) ETIME COMMAND...
         tty = parts[1]
         command = " ".join(parts[8:])
-        if not (command.strip() == "claude" or command.startswith("claude ")):
+        if not (command.strip() == process_name or command.startswith(process_name + " ")):
             continue
         try:
             pid = int(parts[0])
@@ -7504,29 +7726,32 @@ def _collect_health_data():
     callers that short-circuit on None keep working).
     """
     system = platform.system()
+    runtime = detect_runtime()
+    process_name = "codex" if runtime == "codex" else "claude"
 
     installed_version = None
     try:
         result = subprocess.run(
-            ["claude", "--version"],
+            [process_name, "--version"],
             capture_output=True, text=True, timeout=10,
         )
         if result.returncode == 0:
-            installed_version = result.stdout.strip().split()[0] if result.stdout.strip() else None
+            raw_version = result.stdout.strip()
+            installed_version = raw_version if runtime == "codex" else (raw_version.split()[0] if raw_version else None)
     except (subprocess.SubprocessError, FileNotFoundError, OSError):
         pass
 
     if system == "Windows":
         running_sessions = _collect_windows_claude_sessions()
     else:
-        running_sessions = _collect_posix_claude_sessions()
+        running_sessions = _collect_posix_claude_sessions(process_name=process_name)
         if running_sessions is None:
             return None
 
     # Version enrichment per session. _find_session_version_for_pid relies
     # on POSIX /proc-style discovery, so on Windows we set version=None.
     # Future: Windows version probe via Get-Process ProductVersion.
-    if system == "Windows":
+    if system == "Windows" or runtime == "codex":
         for session in running_sessions:
             session["version"] = None
     else:
@@ -7562,7 +7787,8 @@ def _collect_health_data():
             )
             if result.returncode == 0:
                 for line in result.stdout.strip().split("\n"):
-                    if "claude" in line.lower() or "anthropic" in line.lower():
+                    needles = ("codex", "token-optimizer.codex", "tokenoptimizer.codex") if runtime == "codex" else ("claude", "anthropic")
+                    if any(needle in line.lower() for needle in needles):
                         automated.append(line.strip())
         except (subprocess.SubprocessError, OSError):
             pass
@@ -7581,8 +7807,8 @@ def _collect_health_data():
                         continue
                     name = row[0]
                     lname = name.lower()
-                    if any(tok in lname for tok in
-                           ("claude", "token-optimizer", "tokenoptimizer", "anthropic")):
+                    needles = ("codex", "token-optimizer.codex", "tokenoptimizer.codex") if runtime == "codex" else ("claude", "token-optimizer", "tokenoptimizer", "anthropic")
+                    if any(tok in lname for tok in needles):
                         automated.append(name.strip())
         except (subprocess.SubprocessError, OSError, FileNotFoundError):
             pass
@@ -15275,6 +15501,12 @@ def _show_v5_welcome():
 def _get_v5_feature_status():
     """Return status dict for all v5 features (for dashboard/UI)."""
     status = {}
+    codex_hooks_text = ""
+    if detect_runtime() == "codex":
+        try:
+            codex_hooks_text = (Path.cwd() / ".codex" / "hooks.json").read_text(encoding="utf-8")
+        except OSError:
+            codex_hooks_text = ""
     for name, feat in V5_FEATURES.items():
         env_val = os.environ.get(feat["env_var"])
         config_val = _read_config_flag(feat["config_key"], None)
@@ -15298,6 +15530,23 @@ def _get_v5_feature_status():
             "env_var": feat["env_var"],
             "config_key": feat["config_key"],
         }
+        if detect_runtime() == "codex":
+            if name in {"quality_nudges", "loop_detection"}:
+                hook_enabled = "UserPromptSubmit" in codex_hooks_text and "codex_hook_bridge.py" in codex_hooks_text
+                status[name]["enabled"] = hook_enabled
+                status[name]["source"] = "codex hook" if hook_enabled else "codex opt-in"
+                status[name]["how"] = "Requires the optional Codex UserPromptSubmit hook. Off by default because Codex Desktop shows visible hook rows."
+            elif name == "bash_compress":
+                hook_enabled = "PreToolUse" in codex_hooks_text and "bash_hook.py" in codex_hooks_text
+                status[name]["enabled"] = hook_enabled
+                status[name]["source"] = "codex hook" if hook_enabled else "codex opt-in"
+                status[name]["how"] = "Requires the optional Codex PreToolUse(Bash) hook. Off by default because Codex Desktop shows a visible row for every Bash call."
+            elif name in {"delta_mode", "structure_map_beta"}:
+                status[name]["enabled"] = False
+                status[name]["recommended"] = False
+                status[name]["source"] = "codex api gap"
+                status[name]["value"] = "Not yet active in Codex. Token Optimizer measures the gap, but safe substitution needs richer Codex hook payloads."
+                status[name]["how"] = "Claude can intercept read flows for this feature. Current Codex hooks do not expose enough read/delta payload to enable it safely."
     return status
 
 

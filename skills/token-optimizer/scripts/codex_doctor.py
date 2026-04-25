@@ -206,7 +206,7 @@ def _project_hook_check(project: Path) -> dict[str, str]:
         return _check("FAIL", "Project hooks", f"{hooks_path} has no hooks object")
     if "token-optimizer/scripts" in json.dumps(data, sort_keys=True):
         return _check("OK", "Project hooks", str(hooks_path))
-    return _check("FAIL", "Project hooks", f"Token Optimizer not installed in {hooks_path}; run measure.py codex-install --project {project}")
+    return _check("WARN", "Project hooks", f"no Token Optimizer hooks installed in {hooks_path}; manual refresh mode avoids visible Codex hook rows")
 
 
 def _project_feature_checks(project: Path) -> list[dict[str, str]]:
@@ -220,11 +220,13 @@ def _project_feature_checks(project: Path) -> list[dict[str, str]]:
     if _has_project_hook(hooks, "PreToolUse", "Bash", "bash_hook.py"):
         checks.append(_check("OK", "Feature: Bash compression", "enabled for PreToolUse(Bash)"))
     else:
-        checks.append(_check("WARN", "Feature: Bash compression", "missing; rerun codex-install, or pass --disable-bash-compression to leave it off"))
+        checks.append(_check("OK", "Feature: Bash compression", "off by default to avoid visible Codex PreToolUse hook spam"))
 
     required_features = (
-        ("Prompt quality nudges", "UserPromptSubmit", None, "codex_hook_bridge.py"),
         ("Session continuity and dashboard refresh", "Stop", None, "session-end-flush"),
+    )
+    optional_noisy_features = (
+        ("Prompt quality nudges", "UserPromptSubmit", None, "codex_hook_bridge.py"),
         ("Tool output archive", "PostToolUse", "Bash", "archive_result.py"),
         ("Context intelligence", "PostToolUse", "Bash", "context_intel.py"),
     )
@@ -232,7 +234,12 @@ def _project_feature_checks(project: Path) -> list[dict[str, str]]:
         if _has_project_hook(hooks, event, matcher, needle):
             checks.append(_check("OK", f"Feature: {feature}", "available in current Codex adapter"))
         else:
-            checks.append(_check("FAIL", f"Feature: {feature}", f"missing valid {event} hook for {needle}; rerun measure.py codex-install --project {project}"))
+            checks.append(_check("WARN", f"Feature: {feature}", f"manual refresh mode; install low-noise Stop hook with measure.py codex-install --project {project}"))
+    for feature, event, matcher, needle in optional_noisy_features:
+        if _has_project_hook(hooks, event, matcher, needle):
+            checks.append(_check("OK", f"Optional feature: {feature}", "enabled; Codex Desktop will show visible hook rows"))
+        else:
+            checks.append(_check("OK", f"Optional feature: {feature}", "off by default to avoid visible Codex hook rows"))
 
     parser_path = _repo_root() / "skills/token-optimizer/scripts/codex_session.py"
     if parser_path.exists():
