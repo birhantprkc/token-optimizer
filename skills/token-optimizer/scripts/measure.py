@@ -1069,14 +1069,14 @@ def measure_components():
 
     # Hooks — analyze both structure and content for per-turn cost patterns
     hooks_configured = False
-    hook_names = []
+    hook_names_set = set()
     hook_warnings = []
     hook_est_per_turn_tokens = 0
     if _cached_settings:
         hooks = _cached_settings.get("hooks", {})
         if hooks:
             hooks_configured = True
-            hook_names = list(hooks.keys())
+            hook_names_set.update(hooks.keys())
             for event_name, hook_list in hooks.items():
                 if not isinstance(hook_list, list):
                     continue
@@ -1097,9 +1097,23 @@ def measure_components():
                             hook_warnings.append(
                                 f"{event_name} hook calls external API ({cmd[:60]})"
                             )
+    # Also detect plugin-installed hooks (hooks/hooks.json in plugin cache)
+    if _is_plugin_installed():
+        hooks_configured = True
+        plugin_cache = CLAUDE_DIR / "plugins" / "cache"
+        if plugin_cache.exists():
+            import glob as _glob_mod
+            for hf in _glob_mod.glob(str(plugin_cache / "*" / "token-optimizer" / "*" / "hooks" / "hooks.json")):
+                try:
+                    with open(hf, "r", encoding="utf-8") as f:
+                        ph = json.load(f)
+                    for event_name in ph.get("hooks", {}):
+                        hook_names_set.add(event_name)
+                except (json.JSONDecodeError, PermissionError, OSError):
+                    continue
     components["hooks"] = {
         "configured": hooks_configured,
-        "names": hook_names,
+        "names": sorted(hook_names_set),
         "warnings": hook_warnings,
         "est_per_turn_tokens": hook_est_per_turn_tokens,
     }
@@ -6301,15 +6315,25 @@ def _query_trends_db(conn, days):
     installed_skills = set(components.get("skills", {}).get("names", []))
     name_to_dir = components.get("skills", {}).get("name_to_dir", {})
     used_skills_raw = set(skill_sessions.keys())
-    # Map used skill names to directory names where possible
+    # Map used skill names to directory names where possible.
+    # Handles: exact match, SKILL.md name mapping, and namespaced sub-skills
+    # (e.g., "compound-engineering:ce-brainstorm" counts "compound-engineering" as used).
     used_skills = set()
     for s in used_skills_raw:
         if s in installed_skills:
             used_skills.add(s)
         elif s in name_to_dir:
             used_skills.add(name_to_dir[s])
+        elif ":" in s:
+            parent = s.split(":")[0]
+            if parent in installed_skills:
+                used_skills.add(parent)
+            elif parent in name_to_dir:
+                used_skills.add(name_to_dir[parent])
+            else:
+                used_skills.add(s)
         else:
-            used_skills.add(s)  # keep as-is for unresolved
+            used_skills.add(s)
     never_used = installed_skills - used_skills
     never_used_overhead = len(never_used) * TOKENS_PER_SKILL_APPROX
 
@@ -6569,6 +6593,14 @@ def _collect_trends_from_jsonl(days=30):
             used_skills.add(s)
         elif s in name_to_dir:
             used_skills.add(name_to_dir[s])
+        elif ":" in s:
+            parent = s.split(":")[0]
+            if parent in installed_skills:
+                used_skills.add(parent)
+            elif parent in name_to_dir:
+                used_skills.add(name_to_dir[parent])
+            else:
+                used_skills.add(s)
         else:
             used_skills.add(s)
     never_used = installed_skills - used_skills
