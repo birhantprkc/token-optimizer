@@ -58,8 +58,10 @@ def _managed_hooks(
                             "--trigger",
                             "stop",
                             "--quiet",
+                            "--defer",
+                            redirect_quiet=True,
                         ),
-                        "timeout": 180,
+                        "timeout": 8,
                     }
                 ]
             }

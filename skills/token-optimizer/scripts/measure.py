@@ -4515,6 +4515,51 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
     return str(DASHBOARD_PATH)
 
 
+def _run_session_end_flush_worker(args):
+    """Run heavyweight Stop-hook work outside Codex's visible hook budget."""
+    try:
+        collect_sessions(days=90, quiet=True, rebuild=False)
+    except Exception:
+        pass
+    try:
+        generate_standalone_dashboard(days=30, quiet=True)
+    except Exception:
+        pass
+    try:
+        flush_trigger = "end"
+        for i, a in enumerate(args):
+            if a == "--trigger" and i + 1 < len(args):
+                flush_trigger = args[i + 1]
+        compact_capture(trigger=flush_trigger)
+    except Exception:
+        pass
+
+
+def _defer_session_end_flush(args):
+    """Detach the expensive dashboard/session refresh so Stop returns quickly."""
+    try:
+        cmd = [
+            sys.executable or "python3",
+            str(Path(__file__).resolve()),
+            "session-end-flush-worker",
+            *args[1:],
+        ]
+        env = os.environ.copy()
+        env["TOKEN_OPTIMIZER_RUNTIME"] = detect_runtime()
+        subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            cwd=str(Path.cwd()),
+            env=env,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except Exception:
+        pass
+
+
 def _generate_codex_auto_recommendations(components, trends=None, days=30):
     """Generate Codex-native recommendations.
 
@@ -17716,22 +17761,13 @@ if __name__ == "__main__":
         # three phases can't race on trends.db (SQLite serialises within
         # a process but locks out other processes, so three async hook
         # entries would have corrupted the DB). Keeps exit 0 regardless.
-        try:
-            collect_sessions(days=90, quiet=True, rebuild=False)
-        except Exception:
-            pass
-        try:
-            generate_standalone_dashboard(days=30, quiet=True)
-        except Exception:
-            pass
-        try:
-            flush_trigger = "end"
-            for i, a in enumerate(args):
-                if a == "--trigger" and i + 1 < len(args):
-                    flush_trigger = args[i + 1]
-            compact_capture(trigger=flush_trigger)
-        except Exception:
-            pass
+        if "--defer" in args:
+            _defer_session_end_flush(args)
+        else:
+            _run_session_end_flush_worker(args)
+        sys.exit(0)
+    elif args[0] == "session-end-flush-worker":
+        _run_session_end_flush_worker(args)
         sys.exit(0)
     elif args[0] == "daemon-status":
         # Cross-platform identity probe of 127.0.0.1:24842. A bare TCP
