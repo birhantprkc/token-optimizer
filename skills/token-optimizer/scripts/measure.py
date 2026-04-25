@@ -1386,6 +1386,17 @@ def score_to_grade(score):
     return "F"
 
 
+def score_to_band(score):
+    """Convert a 0-100 quality score to a band label."""
+    if score >= 80:
+        return "Good"
+    if score >= 60:
+        return "Fair"
+    if score >= 40:
+        return "Needs Work"
+    return "Poor"
+
+
 def _estimate_messages_until_compact(ctx_window, overhead, avg_msg_tokens=5000):
     """Estimate how many messages fit before auto-compact fires (~80% fill)."""
     compact_threshold = int(ctx_window * 0.80)
@@ -5371,16 +5382,7 @@ def score_session_quality(session_data):
 
     final = int(round(min(100, max(0, score))))
 
-    if final >= 80:
-        band = "Good"
-    elif final >= 60:
-        band = "Fair"
-    elif final >= 40:
-        band = "Needs Work"
-    else:
-        band = "Poor"
-
-    return {"score": final, "band": band, "grade": score_to_grade(final)}
+    return {"score": final, "band": score_to_band(final), "grade": score_to_grade(final)}
 
 
 def _normalize_model_name(model_id):
@@ -5454,7 +5456,9 @@ CREATE TABLE IF NOT EXISTS session_log (
     version TEXT,
     slug TEXT,
     topic TEXT,
-    collected_at TEXT
+    collected_at TEXT,
+    quality_score REAL,
+    quality_grade TEXT
 );
 
 CREATE TABLE IF NOT EXISTS daily_stats (
@@ -5463,7 +5467,9 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     total_input INTEGER,
     total_output INTEGER,
     total_duration REAL,
-    avg_cache_hit REAL
+    avg_cache_hit REAL,
+    avg_quality_score REAL,
+    worst_grade TEXT
 );
 
 CREATE TABLE IF NOT EXISTS skill_daily (
@@ -5540,6 +5546,20 @@ def _init_trends_db():
             conn.execute("ALTER TABLE session_log ADD COLUMN max_call_gap_seconds REAL")
         if "p95_call_gap_seconds" not in cols:
             conn.execute("ALTER TABLE session_log ADD COLUMN p95_call_gap_seconds REAL")
+        if "quality_score" not in cols:
+            conn.execute("ALTER TABLE session_log ADD COLUMN quality_score REAL")
+        if "quality_grade" not in cols:
+            conn.execute("ALTER TABLE session_log ADD COLUMN quality_grade TEXT")
+        conn.commit()
+    except sqlite3.Error:
+        pass
+    # Migrate: add quality columns to daily_stats for existing DBs
+    try:
+        ds_cols = {r[1] for r in conn.execute("PRAGMA table_info(daily_stats)").fetchall()}
+        if "avg_quality_score" not in ds_cols:
+            conn.execute("ALTER TABLE daily_stats ADD COLUMN avg_quality_score REAL")
+        if "worst_grade" not in ds_cols:
+            conn.execute("ALTER TABLE daily_stats ADD COLUMN worst_grade TEXT")
         conn.commit()
     except sqlite3.Error:
         pass
@@ -5618,6 +5638,7 @@ def _backfill_session_metrics(conn, days=30, limit=5000):
                     OR avg_call_gap_seconds IS NULL
                     OR max_call_gap_seconds IS NULL
                     OR p95_call_gap_seconds IS NULL
+                    OR quality_score IS NULL
                  )
                ORDER BY date DESC, collected_at DESC
                LIMIT ?""",
@@ -5634,6 +5655,8 @@ def _backfill_session_metrics(conn, days=30, limit=5000):
         avg_gap = None
         max_gap = None
         p95_gap = None
+        q_score = None
+        q_grade = None
         parsed = _parse_session_jsonl(jsonl_path) if jsonl_path and os.path.exists(jsonl_path) else None
         if parsed:
             ttl_1h = int(parsed.get("total_cache_create_1h", 0) or 0)
@@ -5641,6 +5664,9 @@ def _backfill_session_metrics(conn, days=30, limit=5000):
             avg_gap = parsed.get("avg_call_gap_seconds")
             max_gap = parsed.get("max_call_gap_seconds")
             p95_gap = parsed.get("p95_call_gap_seconds")
+            sq = score_session_quality(parsed)
+            q_score = sq["score"]
+            q_grade = sq["grade"]
         conn.execute(
             """UPDATE session_log
                SET cache_create_1h_tokens = ?,
@@ -5648,9 +5674,11 @@ def _backfill_session_metrics(conn, days=30, limit=5000):
                    cache_ttl_scanned = 1,
                    avg_call_gap_seconds = ?,
                    max_call_gap_seconds = ?,
-                   p95_call_gap_seconds = ?
+                   p95_call_gap_seconds = ?,
+                   quality_score = COALESCE(quality_score, ?),
+                   quality_grade = COALESCE(quality_grade, ?)
                WHERE jsonl_path = ?""",
-            (ttl_1h, ttl_5m, avg_gap, max_gap, p95_gap, str(jsonl_path)),
+            (ttl_1h, ttl_5m, avg_gap, max_gap, p95_gap, q_score, q_grade, str(jsonl_path)),
         )
         updated += 1
     if updated:
@@ -6013,6 +6041,9 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         skills_used = parsed["skills_used"]
         subagents_used = parsed["subagents_used"]
 
+        # Compute quality score at collection time for persistence
+        sq = score_session_quality(parsed)
+
         # Insert session_log
         conn.execute(
             """INSERT OR IGNORE INTO session_log
@@ -6021,8 +6052,9 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                 cache_create_1h_tokens, cache_create_5m_tokens, cache_ttl_scanned,
                 avg_call_gap_seconds, max_call_gap_seconds, p95_call_gap_seconds,
                 skills_json, subagents_json, tool_calls_json, model_usage_json,
-                version, slug, topic, collected_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                version, slug, topic, collected_at,
+                quality_score, quality_grade)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 str(filepath), date, project_name,
                 parsed["duration_minutes"],
@@ -6045,21 +6077,34 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                 parsed.get("slug"),
                 parsed.get("topic"),
                 datetime.now().isoformat(),
+                sq["score"],
+                sq["grade"],
             ),
         )
 
         # Upsert daily_stats
         conn.execute(
-            """INSERT INTO daily_stats (date, session_count, total_input, total_output, total_duration, avg_cache_hit)
-               VALUES (?, 1, ?, ?, ?, ?)
+            """INSERT INTO daily_stats (date, session_count, total_input, total_output, total_duration, avg_cache_hit,
+                 avg_quality_score, worst_grade)
+               VALUES (?, 1, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(date) DO UPDATE SET
                  session_count = session_count + 1,
                  total_input = total_input + excluded.total_input,
                  total_output = total_output + excluded.total_output,
                  total_duration = total_duration + excluded.total_duration,
-                 avg_cache_hit = (avg_cache_hit * session_count + excluded.avg_cache_hit) / (session_count + 1)""",
+                 avg_cache_hit = (avg_cache_hit * session_count + excluded.avg_cache_hit) / (session_count + 1),
+                 avg_quality_score = CASE
+                   WHEN avg_quality_score IS NULL THEN excluded.avg_quality_score
+                   ELSE (avg_quality_score * session_count + excluded.avg_quality_score) / (session_count + 1)
+                 END,
+                 worst_grade = CASE
+                   WHEN worst_grade IS NULL THEN excluded.worst_grade
+                   WHEN INSTR('FDCBAS', excluded.worst_grade) < INSTR('FDCBAS', worst_grade) THEN excluded.worst_grade
+                   ELSE worst_grade
+                 END""",
             (date, parsed["total_input_tokens"], parsed["total_output_tokens"],
-             parsed["duration_minutes"], parsed["cache_hit_rate"]),
+             parsed["duration_minutes"], parsed["cache_hit_rate"],
+             sq["score"], sq["grade"]),
         )
 
         # Upsert skill_daily (session-level: count each skill once per session)
@@ -6280,7 +6325,8 @@ def _query_trends_db(conn, days):
                   message_count, api_calls, cache_hit_rate,
                   cache_create_1h_tokens, cache_create_5m_tokens,
                   avg_call_gap_seconds, max_call_gap_seconds, p95_call_gap_seconds, skills_json,
-                  subagents_json, model_usage_json, slug, topic, project
+                  subagents_json, model_usage_json, slug, topic, project,
+                  quality_score, quality_grade
            FROM session_log WHERE date >= ? ORDER BY date DESC""",
         (cutoff,),
     ).fetchall()
@@ -6355,14 +6401,42 @@ def _query_trends_db(conn, days):
             "cost_usd": round(session_cost, 4),
             "model": _normalize_model_name(dom_model) or dom_model,
         }
-        # Add quality score per session
-        sq = score_session_quality(sd)
-        sd["quality_score"] = sq["score"]
-        sd["quality_grade"] = sq["grade"]
-        sd["quality_band"] = sq["band"]
+        # Prefer stored quality score (persisted during collect), fall back to recomputation
+        if sr["quality_score"] is not None:
+            sd["quality_score"] = sr["quality_score"]
+            sd["quality_grade"] = sr["quality_grade"] or score_to_grade(round(sr["quality_score"]))
+            sd["quality_band"] = score_to_band(sr["quality_score"])
+        else:
+            sq = score_session_quality(sd)
+            sd["quality_score"] = sq["score"]
+            sd["quality_grade"] = sq["grade"]
+            sd["quality_band"] = sq["band"]
         d["session_details"].append(sd)
 
     daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
+
+    # Rolling quality trend from session_log
+    quality_trend_rows = conn.execute(
+        """SELECT date,
+                  AVG(quality_score) as avg_q,
+                  MIN(quality_score) as min_q,
+                  MAX(quality_score) as max_q,
+                  COUNT(*) as n
+           FROM session_log
+           WHERE date >= ? AND quality_score IS NOT NULL
+           GROUP BY date ORDER BY date""",
+        (cutoff,),
+    ).fetchall()
+    quality_trend = [
+        {
+            "date": r["date"],
+            "avg_quality": round(r["avg_q"], 1),
+            "min_quality": round(r["min_q"], 1),
+            "max_quality": round(r["max_q"], 1),
+            "sessions": r["n"],
+        }
+        for r in quality_trend_rows
+    ]
 
     # conn.close() removed — caller (_collect_trends_from_db) owns the connection
     # and closes it in its finally block (Lang Reviewer H3: double-close fix).
@@ -6398,6 +6472,7 @@ def _query_trends_db(conn, days):
             "current_total": current_total,
         },
         "daily": daily_sorted,
+        "quality_trend": quality_trend,
         "pricing_tier": pricing_tier,
         "pricing_tier_label": tier_label,
         "source": "sqlite",
@@ -6564,6 +6639,19 @@ def _collect_trends_from_jsonl(days=30):
     # Sort daily by date descending
     daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
 
+    # Build quality trend from computed session scores
+    quality_trend = []
+    for d_entry in sorted(daily.values(), key=lambda x: x["date"]):
+        scores = [sd["quality_score"] for sd in d_entry["session_details"] if sd.get("quality_score") is not None]
+        if scores:
+            quality_trend.append({
+                "date": d_entry["date"],
+                "avg_quality": round(sum(scores) / len(scores), 1),
+                "min_quality": round(min(scores), 1),
+                "max_quality": round(max(scores), 1),
+                "sessions": len(scores),
+            })
+
     # Pricing tier info for dashboard
     pricing_tier = _load_pricing_tier()
     tier_label = PRICING_TIERS.get(pricing_tier, {}).get("label", "Anthropic API")
@@ -6588,6 +6676,7 @@ def _collect_trends_from_jsonl(days=30):
             "current_total": current_total,
         },
         "daily": daily_sorted,
+        "quality_trend": quality_trend,
         "pricing_tier": pricing_tier,
         "pricing_tier_label": tier_label,
     }
@@ -7834,7 +7923,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.5.1"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.6.2"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
