@@ -1892,22 +1892,27 @@ function getComponentDetails(data) {
         return lines + ' lines from ' + found.join(', ');
       })(),
       what: isCodex
-        ? 'Your AGENTS.md files guide Codex in this project. They contain repo-specific instructions, workflows, and constraints that shape each session.'
+        ? 'Codex reads AGENTS.md before work starts. Global guidance loads first, project files layer from repo root to cwd, and closer files override earlier guidance.'
         : 'Your CLAUDE.md files are loaded at the start of every session. They contain personality rules, key paths, workflow instructions, and quality gates that shape every Claude response.',
       top: [], issues: [],
-      related: [
-        { title: 'Condense Multi-Agent Coordination', section: 'quick' },
-        { title: 'Split CLAUDE.md into modular imports', section: 'deep' }
-      ]
+      related: isCodex
+        ? [
+          { title: 'Slim Codex AGENTS.md chain', section: 'quick' },
+          { title: 'Use nested AGENTS.override.md files', section: 'medium' }
+        ]
+        : [
+          { title: 'Condense Multi-Agent Coordination', section: 'quick' },
+          { title: 'Split CLAUDE.md into modular imports', section: 'deep' }
+        ]
     },
     {
       key: 'memory_md', name: 'MEMORY.md',
       tokens: c.memory_md ? c.memory_md.tokens : 0,
       sub: (c.memory_md && c.memory_md.exists !== false)
-        ? c.memory_md.lines + ' lines loaded every session'
-        : (isCodex ? 'Claude auto-memory is not part of Codex startup measurement.' : 'Not configured. Auto-memory is off or no project match.'),
+        ? (isCodex ? c.memory_md.lines + ' lines across Codex memory files' : c.memory_md.lines + ' lines loaded every session')
+        : (isCodex ? 'No Codex local memory files detected' : 'Not configured. Auto-memory is off or no project match.'),
       what: isCodex
-        ? 'Codex continuity is measured from local session JSONL and Token Optimizer checkpoints, not Claude MEMORY.md.'
+        ? 'Codex local memories live under the Codex home and can be injected as developer guidance when memory support is active. They are separate from Claude MEMORY.md.'
         : 'Auto-memory file loaded into every conversation context. Contains accumulated patterns, decisions, and system notes. Lines after 200 are truncated but still counted.',
       top: [], issues: [],
       related: [
@@ -1923,11 +1928,11 @@ function getComponentDetails(data) {
         var userCount = c.skills ? c.skills.count : 0;
         var pluginCount = c.plugin_skills ? c.plugin_skills.count : 0;
         if (pluginCount > 0) return userCount + ' user + ' + pluginCount + ' plugin skills';
-        if (isCodex) return 'Codex plugin skill startup overhead is not measured as Claude skills';
+        if (isCodex) return userCount + ' Codex user skills';
         return userCount + ' user skills loaded at startup';
       })(),
       what: isCodex
-        ? 'Codex plugin capabilities are managed through the Codex plugin/skill surface. Claude skill archiving is intentionally hidden in Codex mode.'
+        ? 'Codex skill bodies load on demand, but names/descriptions still shape skill discovery and can be present before the first prompt. Keep descriptions short and disable stale skills/plugins.'
         : "Every skill's SKILL.md frontmatter (name + description) is loaded into the tool menu at session start. The description length directly controls token cost.",
       top: [], issues: [],
       related: [
@@ -1960,7 +1965,7 @@ function getComponentDetails(data) {
       tokens: c.mcp_tools ? c.mcp_tools.tokens : 0,
       sub: (c.mcp_tools ? c.mcp_tools.server_count : '?') + ' servers, ~' + (c.mcp_tools ? c.mcp_tools.tool_count_estimate : '?') + ' tools',
       what: isCodex
-        ? 'Codex MCP/tool overhead depends on the active Codex tool surface and is not estimated from Claude settings.'
+        ? 'Codex MCP servers can expand the active tool surface with names, descriptions, and schemas. The dashboard counts configured servers and uses conservative metadata estimates when exact schemas are not exposed.'
         : "MCP server tool definitions are loaded when servers connect. Each tool's name, description, and parameter schema contribute to token cost.",
       top: [], issues: [],
       related: [
@@ -2453,7 +2458,9 @@ var DB = (function() {
     }).join('');
     document.getElementById('chart-bars').innerHTML = barsHtml;
     document.getElementById('sat-desc').textContent =
-      'Bars show % of context window each component uses. Core System is fixed by Claude Code. Everything else is yours to trim.';
+      isCodexOverview
+        ? 'Bars show % of the logged Codex context window each component uses. Core System is fixed by Codex. AGENTS.md, memories, skills/plugins, MCP, and hooks are yours to tune.'
+        : 'Bars show % of context window each component uses. Core System is fixed by Claude Code. Everything else is yours to trim.';
     var caveatEl = document.getElementById('sat-caveat');
     if (!caveatEl) {
       caveatEl = document.createElement('div');
@@ -2532,14 +2539,15 @@ var DB = (function() {
     gridEl.className = 'component-cards';
     gridEl.innerHTML = cardsHtml;
 
-    // Health cards: CLAUDE.md + MEMORY.md
+    // Health cards: runtime instruction files + memory files
     var healthCardsHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s-3);margin-top:var(--s-3);">';
 
-    // CLAUDE.md Health card
+    // Instruction-file health card
     var cmh = data.claude_md_health;
     if (cmh) {
+      var instructionLabel = isCodexOverview ? 'AGENTS.md Health' : 'CLAUDE.md Health';
       var cmColor = cmh.status === 'good' ? 'var(--c-accent-cyan)' : cmh.status === 'warning' ? '#ff9f43' : '#7d8ca3';
-      healthCardsHtml += '<div class="card"><div class="card-header"><span>CLAUDE.md Health</span></div>' +
+      healthCardsHtml += '<div class="card"><div class="card-header"><span>' + instructionLabel + '</span></div>' +
         '<div style="text-align:center;padding:var(--s-3) 0;">' +
         '<div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:' + cmColor + ';">' + fn(cmh.tokens) + '</div>' +
         '<div style="font-size:13px;color:var(--c-text-dim);">tokens (' + cmh.pct + '% of context)</div>' +
@@ -2549,17 +2557,20 @@ var DB = (function() {
         '</div></div>';
     }
 
-    // MEMORY.md Health card
+    // Memory health card
     var mr = data.memory_review;
     if (mr && !mr.error) {
+      var memoryLabel = isCodexOverview ? 'Codex Memory Health' : 'MEMORY.md Health';
+      var memoryLimitText = isCodexOverview ? 'local memory lines' : 'lines (200-line visible limit)';
+      var memoryCountText = isCodexOverview ? String(mr.total_lines || 0) : ((mr.total_lines || 0) + ' / 200');
       var mrOver = mr.truncated_lines || 0;
       var mrColor = mr.severity_counts && mr.severity_counts.medium > 0 ? '#ff9f43' : mr.truncated ? '#7d8ca3' : 'var(--c-accent-cyan)';
       var mrStatus = mr.severity_counts && mr.severity_counts.medium > 0 ? (mr.severity_counts.medium + ' warning(s)') : mr.truncated ? (mrOver + ' lines over limit') : 'Healthy';
       var orphanCount = (mr.topic_files_count || 0) - (mr.linked_files_count || 0);
-      healthCardsHtml += '<div class="card"><div class="card-header"><span>MEMORY.md Health</span></div>' +
+      healthCardsHtml += '<div class="card"><div class="card-header"><span>' + memoryLabel + '</span></div>' +
         '<div style="text-align:center;padding:var(--s-3) 0;">' +
-        '<div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:' + mrColor + ';">' + (mr.total_lines || 0) + ' / 200</div>' +
-        '<div style="font-size:13px;color:var(--c-text-dim);">lines (200-line visible limit)</div>' +
+        '<div style="font-size:28px;font-weight:700;font-family:var(--font-mono);color:' + mrColor + ';">' + memoryCountText + '</div>' +
+        '<div style="font-size:13px;color:var(--c-text-dim);">' + memoryLimitText + '</div>' +
         '</div>' +
         '<div style="padding:0 var(--s-3) var(--s-3);font-size:13px;">' +
         '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);"><span>Entries</span><span>' + (mr.entry_count || 0) + '</span></div>' +
@@ -2568,10 +2579,12 @@ var DB = (function() {
         '<div style="display:flex;justify-content:space-between;color:' + mrColor + ';margin-top:4px;font-weight:500;"><span>Status</span><span>' + esc(mrStatus) + '</span></div>' +
         (mr.savings && mr.savings.total_tokens > 0 ? '<div style="display:flex;justify-content:space-between;color:var(--c-text-dim);margin-top:2px;"><span>Recoverable</span><span>~' + fn(mr.savings.total_tokens) + ' tokens</span></div>' : '') +
         '</div>' +
-        '<div style="text-align:center;padding:0 0 var(--s-3);font-size:12px;color:var(--c-text-dim);">Run <code style="color:var(--c-accent-cyan)">memory-review</code> for details</div>' +
+        '<div style="text-align:center;padding:0 0 var(--s-3);font-size:12px;color:var(--c-text-dim);">' +
+        (isCodexOverview ? 'Codex memory cleanup is config/local-file based' : 'Run <code style="color:var(--c-accent-cyan)">memory-review</code> for details') +
+        '</div>' +
         '</div>';
     } else if (mr && mr.error) {
-      healthCardsHtml += '<div class="card"><div class="card-header"><span>MEMORY.md Health</span></div>' +
+      healthCardsHtml += '<div class="card"><div class="card-header"><span>' + (isCodexOverview ? 'Codex Memory Health' : 'MEMORY.md Health') + '</span></div>' +
         '<div class="empty-state">Not configured</div></div>';
     }
 
@@ -2626,7 +2639,7 @@ var DB = (function() {
         if (!data.plan && !data.auto_plan) {
           html += '<div class="empty-state" style="text-align:center;padding:2rem 1rem;">' +
             '<div style="font-size:1.5rem;margin-bottom:0.5rem;">No optimization plan yet</div>' +
-            '<div style="color:var(--text-secondary);margin-bottom:1rem;">Run <span class="update-cmd" style="cursor:pointer">/token-optimizer</span> in Claude Code to generate personalized recommendations with toggle items here.</div>' +
+            '<div style="color:var(--text-secondary);margin-bottom:1rem;">Run <span class="update-cmd" style="cursor:pointer">/token-optimizer</span> in ' + esc(data.runtime_label || 'Claude Code') + ' to generate personalized recommendations with toggle items here.</div>' +
             '</div>';
         } else {
           html += '<div class="empty-state">No items in this category.</div>';

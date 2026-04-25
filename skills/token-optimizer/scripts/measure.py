@@ -1334,21 +1334,65 @@ def _measure_codex_components():
     components = {}
     seen_real_paths = set()
     cwd = Path.cwd()
+    cfg = _read_codex_config()
+
+    project_doc_max_bytes = cfg.get("project_doc_max_bytes", 32 * 1024)
+    try:
+        project_doc_max_bytes = int(project_doc_max_bytes)
+    except (TypeError, ValueError):
+        project_doc_max_bytes = 32 * 1024
+    if project_doc_max_bytes <= 0:
+        project_doc_max_bytes = 32 * 1024
+    project_doc_bytes = 0
+
+    fallback_names = cfg.get("project_doc_fallback_filenames", [])
+    if not isinstance(fallback_names, list):
+        fallback_names = []
+    fallback_names = [name for name in fallback_names if isinstance(name, str) and name.strip()]
+
+    def _add_agents_file(key: str, path: Path, *, project_scoped: bool) -> None:
+        nonlocal project_doc_bytes
+        real = resolve_real_path(path)
+        if real in seen_real_paths:
+            return
+        seen_real_paths.add(real)
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        included_bytes = size
+        truncated = False
+        if project_scoped:
+            remaining = max(0, project_doc_max_bytes - project_doc_bytes)
+            included_bytes = min(size, remaining)
+            truncated = size > remaining
+            project_doc_bytes += included_bytes
+        components[key] = {
+            "path": str(path),
+            "exists": True,
+            "tokens": int(included_bytes / CHARS_PER_TOKEN),
+            "raw_tokens": estimate_tokens_from_file(path),
+            "lines": count_lines(path),
+            "bytes": size,
+            "included_bytes": included_bytes,
+            "truncated": truncated,
+            "project_doc_max_bytes": project_doc_max_bytes if project_scoped else None,
+        }
+
+    for global_name in ("AGENTS.override.md", "AGENTS.md"):
+        agents_md = runtime_home() / global_name
+        if agents_md.exists() and agents_md.read_text(encoding="utf-8", errors="replace").strip():
+            _add_agents_file(f"agents_md_global_{global_name.replace('.', '_')}", agents_md, project_scoped=False)
+            break
 
     for parent in [cwd] + list(cwd.parents)[:3]:
-        agents_md = parent / "AGENTS.md"
-        if not agents_md.exists():
-            continue
-        real = resolve_real_path(agents_md)
-        if real in seen_real_paths:
-            continue
-        seen_real_paths.add(real)
-        components[f"agents_md_project_{parent.name}"] = {
-            "path": str(agents_md),
-            "exists": True,
-            "tokens": estimate_tokens_from_file(agents_md),
-            "lines": count_lines(agents_md),
-        }
+        for candidate_name in ("AGENTS.override.md", "AGENTS.md", *fallback_names):
+            agents_md = parent / candidate_name
+            if agents_md.exists() and agents_md.read_text(encoding="utf-8", errors="replace").strip():
+                safe_parent = parent.name or "root"
+                safe_name = candidate_name.replace(".", "_").replace("-", "_")
+                _add_agents_file(f"agents_md_project_{safe_parent}_{safe_name}", agents_md, project_scoped=True)
+                break
 
     codex_config_tokens = 0
     codex_config_files = []
@@ -1373,22 +1417,82 @@ def _measure_codex_components():
 
     components["claude_md_global"] = {"path": str(CLAUDE_DIR / "CLAUDE.md"), "exists": False, "tokens": 0, "lines": 0}
     components["claude_md_home"] = {"path": str(HOME / "CLAUDE.md"), "exists": False, "tokens": 0, "lines": 0}
-    components["memory_md"] = {"path": "", "exists": False, "tokens": 0, "lines": 0}
-    components["skills"] = {"count": 0, "tokens": 0, "names": [], "name_to_dir": {}, "dir_to_name": {}}
-    components["skills_detail"] = {}
+    memory_root = runtime_home() / "memories"
+    memory_files = []
+    memory_tokens = 0
+    memory_lines = 0
+    if memory_root.exists():
+        for path in sorted(memory_root.rglob("*.md")):
+            if not path.is_file():
+                continue
+            tokens = estimate_tokens_from_file(path)
+            memory_tokens += tokens
+            memory_lines += count_lines(path)
+            memory_files.append({"path": str(path), "tokens": tokens})
+    components["memory_md"] = {
+        "path": str(memory_root),
+        "exists": bool(memory_files),
+        "tokens": memory_tokens,
+        "lines": memory_lines,
+        "files": memory_files,
+        "note": "Codex local memories are injected as developer guidance only when the memory feature is active.",
+    }
+
+    skill_inventory = _collect_codex_skill_inventory(cfg, project=cwd.resolve(strict=False))
+    user_skills = [item for item in skill_inventory["active"] if item.get("source") != "plugin"]
+    plugin_skills = [item for item in skill_inventory["active"] if item.get("source") == "plugin"]
+    verbose_skills = [
+        {
+            "name": item["name"],
+            "description_chars": len(item.get("description", "")),
+            "tokens": item.get("tokens", 0),
+            "path": item.get("path", ""),
+        }
+        for item in skill_inventory["active"]
+        if len(item.get("description", "")) > 120
+    ]
+    components["skills"] = {
+        "count": len(user_skills),
+        "tokens": sum(int(item.get("tokens", 0)) for item in user_skills),
+        "names": [item["name"] for item in user_skills],
+        "name_to_dir": {item["name"]: str(Path(item["path"]).parent) for item in user_skills},
+        "dir_to_name": {str(Path(item["path"]).parent): item["name"] for item in user_skills},
+    }
+    components["skills_detail"] = {
+        item["name"]: {
+            "name": item["name"],
+            "skill_name": item["name"],
+            "description": item.get("description", ""),
+            "frontmatter_tokens": item.get("tokens", 0),
+            "description_chars": len(item.get("description", "")),
+            "source": item.get("source", ""),
+            "path": item.get("path", ""),
+        }
+        for item in skill_inventory["active"]
+    }
     components["commands"] = {"count": 0, "tokens": 0, "names": []}
     components["plugin_skills"] = {
-        "count": 0,
-        "tokens": 0,
-        "names": [],
-        "plugins": [],
-        "disabled_plugins": [],
+        "count": len(plugin_skills),
+        "tokens": sum(int(item.get("tokens", 0)) for item in plugin_skills),
+        "names": [item["name"] for item in plugin_skills],
+        "plugins": _collect_codex_plugin_inventory(cfg),
+        "disabled_plugins": [p["name"] for p in _collect_codex_plugin_inventory(cfg) if not p.get("enabled", True)],
         "duplicate_skills": {},
         "suspicious_paths": [],
     }
     components["plugin_commands"] = {"count": 0, "tokens": 0, "names": []}
-    components["mcp_tools"] = {"server_count": 0, "server_names": [], "tool_count_estimate": 0, "tokens": 0, "note": "Codex MCP overhead not measured yet"}
-    components["file_exclusion"] = {"global_deny_rules": [], "project_deny_rules": [], "has_rules": False}
+    codex_mcp = _collect_codex_mcp_inventory(cfg)
+    components["mcp_tools"] = {
+        "server_count": len(codex_mcp),
+        "server_names": [item["name"] for item in codex_mcp],
+        "tool_count_estimate": len(codex_mcp),
+        "tokens": sum(int(item.get("tokens", 0)) for item in codex_mcp),
+        "note": "Codex MCP servers expand into tools at runtime; exact tool schemas are not exposed in config.toml.",
+    }
+    deny_read = (((cfg.get("permissions") or {}).get("filesystem") or {}).get("deny_read") or [])
+    if not isinstance(deny_read, list):
+        deny_read = []
+    components["file_exclusion"] = {"global_deny_rules": deny_read, "project_deny_rules": [], "has_rules": bool(deny_read)}
     components["hooks"] = {
         "configured": hooks_configured,
         "names": hook_names,
@@ -1412,7 +1516,7 @@ def _measure_codex_components():
         "tokens": codex_config_tokens,
         "files": codex_config_files,
     }
-    components["skill_frontmatter_quality"] = {"verbose_count": 0, "verbose_skills": []}
+    components["skill_frontmatter_quality"] = {"verbose_count": len(verbose_skills), "verbose_skills": verbose_skills}
     components["core_system"] = {
         "tokens": 12900,
         "note": "Codex base instructions and built-in tools. Fixed overhead, not user-configurable.",
@@ -1743,14 +1847,18 @@ def quick_scan(as_json=False):
     skills = components.get("skills", {})
     if skills.get("count", 0) > 0:
         offenders.append(("skills", skills.get("count", 0), skills.get("tokens", 0),
-                         f"{skills.get('count', 0)} skills loaded"))
+                         f"{skills.get('count', 0)} skill metadata entries"))
     mcp = components.get("mcp_servers", {})
-    if mcp.get("count", 0) > 0:
+    mcp_count = mcp.get("count", 0)
+    if detect_runtime() == "codex":
+        mcp = components.get("mcp_tools", {})
+        mcp_count = mcp.get("server_count", 0)
+    if mcp_count > 0:
         eager = mcp.get("eager_tool_count", 0)
-        detail = f"{mcp.get('count', 0)} MCP servers"
+        detail = f"{mcp_count} MCP servers"
         if eager > 0:
             detail += f" ({eager} with eager-loaded tools)"
-        offenders.append(("mcp", mcp.get("count", 0), mcp.get("tokens", 0), detail))
+        offenders.append(("mcp", mcp_count, mcp.get("tokens", 0), detail))
     claude_md_tokens = sum(
         components[k].get("tokens", 0)
         for k in components if k.startswith("claude_md") and components[k].get("exists")
@@ -1762,6 +1870,18 @@ def quick_scan(as_json=False):
     if claude_md_tokens > 0:
         offenders.append(("claude_md", claude_md_lines, claude_md_tokens,
                          f"CLAUDE.md ({claude_md_lines} lines)"))
+    if detect_runtime() == "codex":
+        agents_md_tokens = sum(
+            components[k].get("tokens", 0)
+            for k in components if k.startswith("agents_md") and components[k].get("exists")
+        )
+        agents_md_lines = sum(
+            components[k].get("lines", 0)
+            for k in components if k.startswith("agents_md") and components[k].get("exists")
+        )
+        if agents_md_tokens > 0:
+            offenders.append(("agents_md", agents_md_lines, agents_md_tokens,
+                             f"AGENTS.md chain ({agents_md_lines} lines)"))
     mem = components.get("memory_md", {})
     if mem.get("tokens", 0) > 0:
         offenders.append(("memory_md", mem.get("lines", 0), mem.get("tokens", 0),
@@ -1775,7 +1895,7 @@ def quick_scan(as_json=False):
     quick_win = None
     try:
         trends = _collect_trends_data(days=30)
-        if trends:
+        if trends and detect_runtime() != "codex":
             never_used = trends.get("skills", {}).get("never_used", [])
             if len(never_used) >= 3:
                 avg_per_skill = skills.get("tokens", 0) // max(skills.get("count", 1), 1)
@@ -1789,7 +1909,24 @@ def quick_scan(as_json=False):
     except Exception:
         pass
 
-    # If no trends-based win, suggest CLAUDE.md trimming
+    # If no trends-based win, suggest instruction-file trimming
+    if not quick_win and detect_runtime() == "codex":
+        agents_md_tokens = sum(
+            components[k].get("tokens", 0)
+            for k in components if k.startswith("agents_md") and components[k].get("exists")
+        )
+        agents_md_lines = sum(
+            components[k].get("lines", 0)
+            for k in components if k.startswith("agents_md") and components[k].get("exists")
+        )
+        if agents_md_tokens > 3500:
+            savings = agents_md_tokens - 3000
+            quick_win = {
+                "action": f"Slim AGENTS.md chain from {agents_md_lines} lines",
+                "savings": savings,
+                "detail": f"save ~{savings:,} tokens/session",
+                "extend": f"Improves stable prompt-cache prefix and extends peak quality by ~{savings:,} tokens",
+            }
     if not quick_win and claude_md_tokens > 5000:
         savings = claude_md_tokens - 4500
         quick_win = {
@@ -1801,7 +1938,12 @@ def quick_scan(as_json=False):
 
     # Coaching insight
     coaching = None
-    if ctx_window >= 500_000:
+    if detect_runtime() == "codex":
+        coaching = (
+            "Codex-native optimization starts with AGENTS.md, active plugins/skills, MCP servers,\n"
+            "  status-line/context telemetry, and logged cached_input_tokens. Trust the logged context window."
+        )
+    elif ctx_window >= 500_000:
         coaching = (
             "At 1M, Sonnet 4.6 has held the lead on multi-hop reasoning vs earlier Opus\n"
             "  (GraphWalks: 73.8 vs 38.7 on 4.6). Opus 4.7 narrows this — benchmark your own workload."
@@ -3356,6 +3498,10 @@ def _collect_codex_hook_status_for_dashboard():
 
     project_arg = shlex.quote(str(project))
     base = f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} codex-install --project {project_arg}"
+    try:
+        hooks_text = (project / ".codex" / "hooks.json").read_text(encoding="utf-8")
+    except OSError:
+        hooks_text = ""
     return {
         "codex_project": {
             "installed": _ok("Project hooks"),
@@ -3373,11 +3519,26 @@ def _collect_codex_hook_status_for_dashboard():
             "uninstall_cmd": "Edit ~/.codex/config.toml and remove compact_prompt / experimental_compact_prompt_file",
         },
         "codex_bash_compression": {
-            "installed": _ok("Feature: Bash compression"),
-            "label": "Bash Compression",
-            "description": "Opt-in PreToolUse(Bash) compression. Useful, but Codex Desktop currently shows a visible hook row for every Bash call.",
+            "installed": "PreToolUse" in hooks_text and "bash_hook.py" in hooks_text,
+            "partial": False,
+            "label": "Experimental Bash Compression",
+            "description": "Codex PreToolUse currently cannot rewrite command input, so true invisible Bash compression is not available yet. This hook is experimental and visible.",
             "install_cmd": base + " --enable-bash-compression",
             "uninstall_cmd": base + " --disable-bash-compression",
+        },
+        "codex_balanced_profile": {
+            "installed": "UserPromptSubmit" in hooks_text and "codex_hook_bridge.py" in hooks_text,
+            "label": "Balanced Quality Profile",
+            "description": "Enables prompt/session hooks for live quality cache and loop nudges with far less noise than per-tool hooks.",
+            "install_cmd": base + " --profile balanced",
+            "uninstall_cmd": base + " --uninstall",
+        },
+        "codex_telemetry_profile": {
+            "installed": "PostToolUse" in hooks_text and ("archive_result.py" in hooks_text or "context_intel.py" in hooks_text),
+            "label": "PostToolUse Telemetry Profile",
+            "description": "Enables exact tool-output archiving/context-intel, but Codex Desktop shows visible rows after tool calls.",
+            "install_cmd": base + " --profile telemetry",
+            "uninstall_cmd": base + " --uninstall",
         },
         "codex_status_line": {
             "installed": _ok("Codex CLI status line"),
@@ -3416,7 +3577,13 @@ def _parse_skill_frontmatter(path: Path) -> dict:
                     meta[key] = value
     if "name" not in meta:
         meta["name"] = path.parent.name
-    meta["tokens"] = _estimate_tokens(text[:4000])
+    # Codex discovers skills from metadata; the SKILL.md body is loaded when
+    # the skill is selected. Count the discovery surface here, not the full
+    # on-demand skill body, otherwise startup/context recommendations are wildly
+    # inflated for large skills.
+    discovery_text = f"name: {meta.get('name', '')}\ndescription: {meta.get('description', '')}\n"
+    meta["tokens"] = _estimate_tokens(discovery_text)
+    meta["body_tokens"] = _estimate_tokens(text)
     return meta
 
 
@@ -3522,6 +3689,9 @@ def _collect_management_data(components=None, trends=None):
             "codex": {
                 "project": str(project),
                 "install_cmd": base,
+                "install_balanced_profile_cmd": base + " --profile balanced",
+                "install_telemetry_profile_cmd": base + " --profile telemetry",
+                "install_aggressive_profile_cmd": base + " --profile aggressive",
                 "install_with_bash_compression_cmd": base + " --enable-bash-compression",
                 "install_with_hot_path_hooks_cmd": base + " --enable-hot-path-hooks --enable-prompt-hooks",
                 "install_with_status_line_cmd": base + " --enable-status-line",
@@ -4024,7 +4194,20 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
     mr_data = None
     try:
         mem = components.get("memory_md", {})
-        if mem.get("exists") and mem.get("path"):
+        if detect_runtime() == "codex" and mem.get("exists"):
+            mr_data = {
+                "target": mem.get("path", ""),
+                "total_lines": mem.get("lines", 0),
+                "entry_count": len(mem.get("files", [])),
+                "topic_files_count": len(mem.get("files", [])),
+                "linked_files_count": len(mem.get("files", [])),
+                "findings": [],
+                "severity_counts": {"high": 0, "medium": 0, "low": 0},
+                "savings": {"total_tokens": 0, "by_category": {}},
+                "truncated": False,
+                "truncated_lines": 0,
+            }
+        elif mem.get("exists") and mem.get("path"):
             mem_path = Path(mem["path"])
             memory_dir = mem_path.parent
             parsed = _mr_parse_memory_index(str(mem_path))
@@ -4053,22 +4236,25 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
     # CLAUDE.md health summary for dashboard card (from already-computed components)
     claude_md_health = None
     try:
-        claude_tokens = 0
+        instruction_tokens = 0
         context_window = components.get("context_window") or detect_context_window()[0]
         for key in components:
-            if key.startswith("claude_md") and components[key].get("exists"):
-                claude_tokens += components[key].get("tokens", 0)
-        claude_pct = claude_tokens / context_window * 100 if context_window else 0
-        claude_status = "good"
+            if (
+                (detect_runtime() == "codex" and key.startswith("agents_md"))
+                or (detect_runtime() != "codex" and key.startswith("claude_md"))
+            ) and components[key].get("exists"):
+                instruction_tokens += components[key].get("tokens", 0)
+        instruction_pct = instruction_tokens / context_window * 100 if context_window else 0
+        instruction_status = "good"
         if coach:
             for p in coach.get("patterns_bad", []):
-                if "CLAUDE.md" in p.get("name", ""):
-                    claude_status = "warning" if p.get("severity") == "medium" else "notice"
+                if "CLAUDE.md" in p.get("name", "") or "AGENTS.md" in p.get("name", ""):
+                    instruction_status = "warning" if p.get("severity") == "medium" else "notice"
                     break
         claude_md_health = {
-            "tokens": claude_tokens,
-            "pct": round(claude_pct, 1),
-            "status": claude_status,
+            "tokens": instruction_tokens,
+            "pct": round(instruction_pct, 1),
+            "status": instruction_status,
         }
     except Exception:
         pass
@@ -4141,6 +4327,148 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
     return str(DASHBOARD_PATH)
 
 
+def _generate_codex_auto_recommendations(components, trends=None, days=30):
+    """Generate Codex-native recommendations.
+
+    Keep this separate from the Claude rules so the dashboard never tells a
+    Codex user to edit CLAUDE.md, Claude settings, or Anthropic-specific knobs.
+    """
+    quick = []
+    medium = []
+    deep = []
+    habits = []
+
+    agents_tokens = 0
+    agents_lines = 0
+    truncated = []
+    for key, info in components.items():
+        if key.startswith("agents_md") and info.get("exists"):
+            agents_tokens += int(info.get("tokens", 0))
+            agents_lines += int(info.get("lines", 0))
+            if info.get("truncated"):
+                truncated.append(Path(info.get("path", "")).name)
+
+    if truncated:
+        quick.append(
+            f"**Fix truncated Codex instructions ({', '.join(truncated)})**: "
+            "Codex stops adding project instruction files after `project_doc_max_bytes` "
+            "(32 KiB by default). Content past that cap is not reliable context. "
+            "Move reference material into docs or skills and keep AGENTS.md focused on durable rules, "
+            "commands, and repo-specific constraints."
+        )
+    if agents_tokens > 4500:
+        quick.append(
+            f"**Slim Codex AGENTS.md chain ({agents_tokens:,} tokens, {agents_lines} lines)**: "
+            "Codex reads AGENTS.md before work starts, then the same instruction chain influences the session. "
+            "Keep only rules that should affect every task. Move long workflows into Codex skills, "
+            "repo docs, or nested AGENTS.override.md files close to the code they govern. "
+            f"Target ~2,500-3,500 tokens for the always-loaded chain; ~{max(0, agents_tokens - 3500):,} tokens recoverable."
+        )
+    elif agents_tokens > 2500:
+        medium.append(
+            f"**Review Codex AGENTS.md density ({agents_tokens:,} tokens)**: "
+            "The file is still healthy, but this is the best place to keep high-priority rules at the top and bottom "
+            "of the instruction chain. Move rare procedures into linked docs or skills."
+        )
+
+    memory = components.get("memory_md", {})
+    if memory.get("tokens", 0) > 3000:
+        medium.append(
+            f"**Review Codex memories ({memory.get('tokens', 0):,} tokens across {len(memory.get('files', []))} files)**: "
+            "Codex memory guidance can enter developer instructions when memories are enabled. "
+            "Delete stale rollout summaries, consolidate duplicate memories, and keep only reusable preferences or project facts. "
+            "Use Codex's memory reset only when you intentionally want to clear all persisted local memory."
+        )
+
+    skills = components.get("skills", {})
+    plugin_skills = components.get("plugin_skills", {})
+    skill_count = int(skills.get("count", 0)) + int(plugin_skills.get("count", 0))
+    skill_tokens = int(skills.get("tokens", 0)) + int(plugin_skills.get("tokens", 0))
+    if skill_count > 80:
+        medium.append(
+            f"**Prune Codex skill/plugin surface ({skill_count} skills, ~{skill_tokens:,} metadata tokens)**: "
+            "Codex skill bodies are loaded on demand, but names/descriptions still shape tool discovery before the first prompt. "
+            "Disable plugins you rarely use in `~/.codex/config.toml`, and disable individual noisy skills with `[[skills.config]] enabled = false`. "
+            "Start with plugin bundles outside your daily work; they are reversible."
+        )
+    verbose = components.get("skill_frontmatter_quality", {}).get("verbose_skills", [])
+    very_verbose = [s for s in verbose if s.get("description_chars", 0) > 200]
+    if very_verbose:
+        names = ", ".join(s["name"] for s in very_verbose[:8])
+        quick.append(
+            f"**Tighten {len(very_verbose)} Codex skill descriptions (>200 chars)**: "
+            f"{names}{'...' if len(very_verbose) > 8 else ''}. "
+            "Descriptions should be trigger text, not documentation. Put instructions in the SKILL.md body so Codex reads them only when the skill is selected."
+        )
+
+    mcp = components.get("mcp_tools", {})
+    mcp_servers = int(mcp.get("server_count", 0))
+    if mcp_servers > 8:
+        medium.append(
+            f"**Audit Codex MCP servers ({mcp_servers} configured)**: "
+            "Each MCP server can expand the active tool surface with names, descriptions, and schemas. "
+            "Keep high-use servers connected, but disable duplicate or rarely used servers in `~/.codex/config.toml`. "
+            "For servers with side effects, avoid enabling broad parallel tool calls unless the server is race-safe."
+        )
+
+    hooks = components.get("hooks", {})
+    hook_names = set(hooks.get("names", []))
+    if "Stop" not in hook_names:
+        quick.append(
+            "**Install the low-noise Codex Stop hook**: "
+            "This refreshes the dashboard and captures continuity at turn/session end without per-tool hook spam. "
+            "Run `TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --project .`."
+        )
+    if "UserPromptSubmit" not in hook_names:
+        medium.append(
+            "**Consider the balanced Codex hook profile for live quality tracking**: "
+            "`codex-install --project . --profile balanced` enables SessionStart/UserPromptSubmit plus Stop. "
+            "That gives quality cache and loop/nudge timing with one visible row per prompt/session, not one row per tool. "
+            "This is the current best compromise until Codex adds hidden/background hook runs."
+        )
+    if "PostToolUse" not in hook_names:
+        deep.append(
+            "**Use PostToolUse only when you accept Codex Desktop hook rows**: "
+            "`codex-install --project . --profile telemetry` enables tool-output archiving and context-intel measurement. "
+            "It is valuable for exact output bloat tracking, but Codex Desktop currently shows every hook lifecycle row. "
+            "Prefer it for QA, CLI/headless runs, or users who explicitly choose maximum telemetry."
+        )
+    deep.append(
+        "**Do not promise invisible Bash compression in Codex yet**: "
+        "Codex PreToolUse can block commands, but current Codex docs/source say `updatedInput` is parsed and not supported. "
+        "So true invisible command rewriting is not available today. Track Bash output bloat from JSONL/PostToolUse and keep compression as an experimental opt-in until Codex supports input rewriting."
+    )
+
+    habits.append(
+        "**Use Codex status line/context remaining as the first compaction signal**: "
+        "Codex logs real `model_context_window` and token counts. Compact around 50-70% for long tasks, earlier when switching topics. "
+        "Do not assume a 1M API window; trust the logged Codex window for the active session."
+    )
+    habits.append(
+        "**Preserve prompt-cache stability**: "
+        "OpenAI prompt caching rewards stable prefixes. Keep AGENTS.md, enabled plugins, MCP servers, and memory settings stable during a session so repeated turns can hit cached input. "
+        "Batch related asks rather than drip-feeding many tiny prompts."
+    )
+    habits.append(
+        "**Start fresh between unrelated Codex tasks**: "
+        "Session continuity is valuable inside a task, but stale tool outputs and old plans hurt quality. Use a new thread or compact/checkpoint when the objective changes."
+    )
+
+    sections = []
+    if quick:
+        sections.append("## Quick Wins\n\n" + "\n\n".join(f"- [ ] {item}" for item in quick))
+    if medium:
+        sections.append("## Medium Effort\n\n" + "\n\n".join(f"- [ ] {item}" for item in medium))
+    if deep:
+        sections.append("## Deep Optimization\n\n" + "\n\n".join(f"- [ ] {item}" for item in deep))
+    if habits:
+        sections.append("## Behavioral Habits\n\n" + "\n\n".join(f"- [ ] {item}" for item in habits))
+
+    plan_md = "\n\n".join(sections) if sections else ""
+    total_count = len(quick) + len(medium) + len(deep) + len(habits)
+    return plan_md, total_count
+
+
 def generate_auto_recommendations(components, trends=None, days=30):
     """Generate rule-based optimization recommendations without any LLM.
 
@@ -4153,6 +4481,9 @@ def generate_auto_recommendations(components, trends=None, days=30):
 
     Returns (plan_markdown_string, recommendation_count).
     """
+    if detect_runtime() == "codex":
+        return _generate_codex_auto_recommendations(components, trends=trends, days=days)
+
     quick = []
     medium = []
     deep = []
@@ -15538,9 +15869,11 @@ def _get_v5_feature_status():
                 status[name]["how"] = "Requires the optional Codex UserPromptSubmit hook. Off by default because Codex Desktop shows visible hook rows."
             elif name == "bash_compress":
                 hook_enabled = "PreToolUse" in codex_hooks_text and "bash_hook.py" in codex_hooks_text
-                status[name]["enabled"] = hook_enabled
-                status[name]["source"] = "codex hook" if hook_enabled else "codex opt-in"
-                status[name]["how"] = "Requires the optional Codex PreToolUse(Bash) hook. Off by default because Codex Desktop shows a visible row for every Bash call."
+                status[name]["enabled"] = False
+                status[name]["recommended"] = False
+                status[name]["source"] = "codex experimental hook" if hook_enabled else "codex api gap"
+                status[name]["value"] = "Codex currently reports Bash usage, but true invisible Bash command rewriting is not supported yet."
+                status[name]["how"] = "Codex PreToolUse can block commands, but current Codex support does not apply updatedInput, so invisible Bash compression stays experimental and opt-in."
             elif name in {"delta_mode", "structure_map_beta"}:
                 status[name]["enabled"] = False
                 status[name]["recommended"] = False
@@ -15578,6 +15911,7 @@ def _get_v5_savings_recommendation():
                 "value": info["value"],
                 "risk_level": info["risk_level"],
                 "recommended": info["recommended"],
+                "source": info.get("source", ""),
             })
             # Only count recommended features for the headline savings estimate
             if info["recommended"]:
@@ -15586,11 +15920,15 @@ def _get_v5_savings_recommendation():
     # Also include non-recommended but safe features for a secondary estimate
     additional_impact = sum(
         f["impact_pct"] for f in disabled
-        if not f["recommended"] and f["risk_level"] in ("none", "low")
+        if not f["recommended"]
+        and f["risk_level"] in ("none", "low")
+        and f.get("source") not in {"codex api gap", "codex experimental hook"}
     )
     aggressive_impact = total_impact + additional_impact + sum(
         f["impact_pct"] for f in disabled
-        if not f["recommended"] and f["risk_level"] == "moderate"
+        if not f["recommended"]
+        and f["risk_level"] == "moderate"
+        and f.get("source") not in {"codex api gap", "codex experimental hook"}
     )
 
     has_savings = total_impact > 0 or aggressive_impact > 0

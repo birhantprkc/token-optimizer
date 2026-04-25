@@ -315,9 +315,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", default=".", help="Project directory to configure")
     parser.add_argument("--dry-run", action="store_true", help="Validate and print intended action without writing")
     parser.add_argument("--uninstall", action="store_true", help="Remove Token Optimizer hooks from the project")
+    parser.add_argument(
+        "--profile",
+        choices=("quiet", "balanced", "telemetry", "aggressive"),
+        default="quiet",
+        help=(
+            "Hook profile: quiet=Stop only; balanced=Stop+prompt hooks; "
+            "telemetry=Stop+PostToolUse; aggressive=all currently available hooks"
+        ),
+    )
     parser.add_argument("--skip-compact-prompt", action="store_true", help="Do not install Codex compact prompt")
     parser.add_argument("--force-compact-prompt", action="store_true", help="Replace existing compact-prompt settings")
-    parser.add_argument("--enable-bash-compression", action="store_true", help="Opt into visible PreToolUse(Bash) compression hook")
+    parser.add_argument(
+        "--enable-bash-compression",
+        action="store_true",
+        help="Experimental visible PreToolUse(Bash) hook; Codex does not yet support command rewriting",
+    )
     parser.add_argument("--disable-bash-compression", action="store_true", help="Deprecated no-op; Bash compression is off by default")
     parser.add_argument("--enable-hot-path-hooks", action="store_true", help="Opt into visible PostToolUse tool-output hooks")
     parser.add_argument("--enable-prompt-hooks", action="store_true", help="Opt into visible SessionStart/UserPromptSubmit guidance hooks")
@@ -334,15 +347,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.uninstall:
             path, action, details = uninstall(project, dry_run=args.dry_run)
         else:
-            enable_bash_compression = args.enable_bash_compression
+            enable_prompt_hooks = args.enable_prompt_hooks or args.profile in {"balanced", "aggressive"}
+            enable_hot_path_hooks = args.enable_hot_path_hooks or args.profile in {"telemetry", "aggressive"}
+            enable_bash_compression = args.enable_bash_compression or args.profile == "aggressive"
             path, action, details = install(
                 project,
                 dry_run=args.dry_run,
                 skip_compact_prompt=args.skip_compact_prompt,
                 force_compact_prompt=args.force_compact_prompt,
                 enable_bash_compression=enable_bash_compression,
-                enable_hot_path_hooks=args.enable_hot_path_hooks,
-                enable_prompt_hooks=args.enable_prompt_hooks,
+                enable_hot_path_hooks=enable_hot_path_hooks,
+                enable_prompt_hooks=enable_prompt_hooks,
                 enable_status_line=args.enable_status_line,
                 force_status_line=args.force_status_line,
             )
