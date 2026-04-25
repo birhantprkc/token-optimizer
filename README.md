@@ -92,7 +92,7 @@ Works on Claude Code and [OpenClaw](#openclaw-plugin). Each platform has its own
 
 Most tools tell you your context is full. Token Optimizer shows you exactly where every token went, how much each turn cost, which skills and MCP servers actually fired, and which ones are just sitting there eating your budget.
 
-https://github.com/alexgreensh/token-optimizer/releases/download/v5.6.2/dashboard-demo.mp4
+![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-demo.gif)
 
 One single-file HTML dashboard. Auto-regenerates after every session via the SessionEnd hook. Bookmark `http://localhost:24842/token-optimizer` and it's always current. Zero tokens from your context, zero network calls, zero setup after install.
 
