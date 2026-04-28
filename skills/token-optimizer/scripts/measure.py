@@ -7955,7 +7955,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.6.2"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.6.3"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -7996,15 +7996,22 @@ def _get_or_create_daemon_token():
     try:
         SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
         token = secrets.token_urlsafe(32)  # 43 chars, cryptographically random
-        # Write with 0600 perms via os.open before write
+        # O_EXCL: atomic create — concurrent installers race on mkdir, not
+        # on truncating each other's token (torture M1 fix).
         fd = os.open(
             str(DAEMON_TOKEN_PATH),
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
             0o600,
         )
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(token + "\n")
         return token
+    except FileExistsError:
+        # Lost the race — another installer created it first. Read theirs.
+        try:
+            return DAEMON_TOKEN_PATH.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
     except OSError:
         return ""
 
@@ -8163,16 +8170,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         origin = self.headers.get("Origin", "")
-        allowed = origin if _is_localhost_origin(origin) else ""
-        self.send_header("Access-Control-Allow-Origin", allowed or "http://localhost:{DAEMON_PORT}")
-        self.send_header("Access-Control-Allow-Credentials", "true")
+        if NETWORK_MODE:
+            allowed = origin or "*"
+        else:
+            allowed = origin if _is_localhost_origin(origin) else "http://localhost:{DAEMON_PORT}"
+        self.send_header("Access-Control-Allow-Origin", allowed)
+        if allowed != "*":
+            self.send_header("Access-Control-Allow-Credentials", "true")
         self.end_headers()
         self.wfile.write(body)
 
     def _require_localhost(self):
-        """Reject anything that isn't coming from a localhost Host header.
+        """Reject non-localhost Host headers unless NETWORK_MODE is active.
         H-1 DNS rebinding defense — fires before we look at Origin/token.
+        In network mode, any Host is accepted (remote clients send their own).
         """
+        if NETWORK_MODE:
+            return True
         if not _is_localhost_host(self.headers.get("Host", "")):
             self.send_error(421, "Misdirected Request")
             return False
@@ -8187,12 +8201,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._json_response(200, {{"ok": True, "server": "token-optimizer-daemon"}})
             return
         if clean == "api/token":
-            # Only expose to localhost Origin+Host so foreign origins cannot exfiltrate it.
-            origin = self.headers.get("Origin", "")
-            origin_ok = (not origin) or _is_localhost_origin(origin)
-            if not origin_ok or not _is_localhost_host(self.headers.get("Host", "")):
-                self.send_error(403, "Forbidden")
-                return
+            # In default mode, restrict to localhost Origin+Host (anti-exfiltration).
+            # In network mode, serve to any origin so remote dashboard users can
+            # fetch the token for toggle buttons (the token itself gates POSTs).
+            if not NETWORK_MODE:
+                origin = self.headers.get("Origin", "")
+                origin_ok = (not origin) or _is_localhost_origin(origin)
+                if not origin_ok or not _is_localhost_host(self.headers.get("Host", "")):
+                    self.send_error(403, "Forbidden")
+                    return
             self._json_response(200, {{"token": _read_token()}})
             return
         if not self._require_localhost():
@@ -8206,20 +8223,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         origin = self.headers.get("Origin", "")
-        allowed = origin if _is_localhost_origin(origin) else ""
-        self.send_header("Access-Control-Allow-Origin", allowed or "http://localhost:{DAEMON_PORT}")
+        if NETWORK_MODE:
+            allowed = origin or "*"
+        else:
+            allowed = origin if _is_localhost_origin(origin) else "http://localhost:{DAEMON_PORT}"
+        self.send_header("Access-Control-Allow-Origin", allowed)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-TO-Token")
-        self.send_header("Access-Control-Allow-Credentials", "true")
+        if allowed != "*":
+            self.send_header("Access-Control-Allow-Credentials", "true")
         self.end_headers()
 
     def do_POST(self):
-        # Layered defense: Host allowlist first, then Origin, then token.
-        if not _is_localhost_host(self.headers.get("Host", "")):
+        # Layered defense: Host allowlist (skipped in network mode), then Origin, then token.
+        if not NETWORK_MODE and not _is_localhost_host(self.headers.get("Host", "")):
             self.send_error(421, "Misdirected Request")
             return
         origin = self.headers.get("Origin", "")
-        if not origin or not _is_localhost_origin(origin):
+        if not NETWORK_MODE and (not origin or not _is_localhost_origin(origin)):
             self.send_error(403, "Forbidden: invalid origin")
             return
         expected_tok = _read_token()
@@ -8343,10 +8364,17 @@ if not _thrash_check_and_update():
     # Exit 0 so launchd's "KeepAlive on unsuccessful exit" stops respawning us.
     sys.exit(0)
 
-# Restrict to localhost only. TOKEN_OPTIMIZER_HOST is accepted for IPv4/IPv6 localhost
-# variants but never 0.0.0.0 or other interfaces (security: exposes toggle API to LAN).
-_host_raw = os.environ.get("TOKEN_OPTIMIZER_HOST", "127.0.0.1")
-HOST = _host_raw if _host_raw in ("127.0.0.1", "::1", "localhost") else "127.0.0.1"
+# Bind address. Default: localhost only. TOKEN_OPTIMIZER_DASHBOARD_HOST=0.0.0.0 enables
+# network access (Tailscale Funnel, LAN). When network-bound, Host header checks are
+# relaxed since remote clients send non-localhost Host headers. Token auth still applies.
+_LOCALHOST_ADDRS = ("127.0.0.1", "::1", "localhost")
+_host_raw = os.environ.get("TOKEN_OPTIMIZER_DASHBOARD_HOST",
+                           os.environ.get("TOKEN_OPTIMIZER_HOST", "127.0.0.1"))
+HOST = _host_raw if _host_raw in _LOCALHOST_ADDRS + ("0.0.0.0",) else "127.0.0.1"
+NETWORK_MODE = HOST == "0.0.0.0"
+if NETWORK_MODE:
+    print(f"[Token Optimizer] Network mode: binding {{HOST}}:{{PORT}}", file=sys.stderr)
+    print("  Dashboard and toggle API accessible from LAN. Token auth required for mutations.", file=sys.stderr)
 try:
     with socketserver.TCPServer((HOST, PORT), Handler) as httpd:
         httpd.serve_forever()
@@ -8829,7 +8857,7 @@ def _ensure_dashboard_file():
     return True
 
 
-def _verify_daemon_port(timeout_seconds=1, retries=8):
+def _verify_daemon_port(timeout_seconds=1, retries=None):
     """Probe 127.0.0.1:DAEMON_PORT to confirm OUR daemon is up (not a foreign listener).
 
     v5.4.19 (adv-007 fix): a TCP connect() alone can't tell us whether the
@@ -8839,11 +8867,16 @@ def _verify_daemon_port(timeout_seconds=1, retries=8):
     the connect with a GET /__to_ping and verify the body equals our magic
     string. Only then do we claim the daemon is up.
 
-    Extended retry budget (torture-room M3, 2026-04-14): slow cold
-    starts on first-login Mac, LaunchAgent re-spawn, or Windows Task
-    Scheduler trigger delay can exceed 8s before the daemon binds.
-    Budget now ~16s (8 retries * 1s timeout + 1s gap).
+    Retry budget configurable via TOKEN_OPTIMIZER_DASHBOARD_TIMEOUT (total
+    seconds, default 30). Large trends DBs (~500+ sessions) can push Python
+    cold-start past 20s on first launch.
     """
+    if retries is None:
+        try:
+            total = max(0, int(os.environ.get("TOKEN_OPTIMIZER_DASHBOARD_TIMEOUT", "30")))
+        except (ValueError, TypeError):
+            total = 30
+        retries = max(total // 2, 4)
     import socket as _socket
     import urllib.request
     import urllib.error
@@ -9457,6 +9490,8 @@ def _install_task_scheduler_daemon(dry_run=False):
         print("  pythonw), then re-run setup. Reclaim: taskkill /PID <pid> /F")
         sys.exit(1)
 
+    _get_or_create_daemon_token()
+
     with _daemon_install_lock():
         SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
         DAEMON_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -9734,6 +9769,8 @@ def _install_systemd_user_daemon(dry_run=False):
 
     if not _ensure_dashboard_file():
         sys.exit(1)
+
+    _get_or_create_daemon_token()
 
     with _daemon_install_lock():
         # Ordering (torture HIGH-4): stop + reclaim FIRST, BEFORE touching
