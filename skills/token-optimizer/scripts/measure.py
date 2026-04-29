@@ -7955,7 +7955,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.6.3"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.6.4"  # Keep in sync with plugin.json + marketplace.json
 DAEMON_LABEL = "com.token-optimizer.dashboard"
 DAEMON_PORT = 24842  # Memorable: 2-4-8-4-2 (powers of 2 palindrome), avoids common ports
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
@@ -10052,6 +10052,8 @@ def _parse_jsonl_for_quality(filepath):
     reads = []       # (index, path, timestamp)
     writes = []      # (index, path, timestamp)
     tool_results = []  # (index, tool_name, result_size_chars, referenced_later)
+    tool_result_meta = []  # richer metadata for live detectors
+    tool_name_by_id = {}
     system_reminders = []  # (index, content_hash, size_chars)
     messages = []    # (index, role, text_length, is_substantive)
     compactions = 0
@@ -10091,6 +10093,8 @@ def _parse_jsonl_for_quality(filepath):
                     reads = []
                     writes = []
                     tool_results = []
+                    tool_result_meta = []
+                    tool_name_by_id = {}
                     system_reminders = []
                     messages = []
                     agent_dispatches = []
@@ -10136,6 +10140,9 @@ def _parse_jsonl_for_quality(filepath):
                             elif block.get("type") == "tool_use":
                                 is_substantive = True  # tool invocations ARE decisions
                                 tool_name = block.get("name", "")
+                                tool_id = block.get("id", "")
+                                if tool_id:
+                                    tool_name_by_id[tool_id] = tool_name
                                 inp = block.get("input", {})
 
                                 if tool_name == "Read":
@@ -10166,6 +10173,13 @@ def _parse_jsonl_for_quality(filepath):
                                     result_text = _extract_tool_result_text(block)
                                     tool_id = block.get("tool_use_id", "")
                                     tool_results.append((idx, tool_id, len(result_text), False))
+                                    tool_result_meta.append({
+                                        "index": idx,
+                                        "tool_id": tool_id,
+                                        "tool_name": tool_name_by_id.get(tool_id, ""),
+                                        "size": len(result_text),
+                                        "is_failure": _tool_result_looks_failed(block, result_text),
+                                    })
 
                                     # Update agent dispatch result sizes
                                     if agent_dispatches and agent_dispatches[-1][2] == 0:
@@ -10184,6 +10198,7 @@ def _parse_jsonl_for_quality(filepath):
         "reads": reads,
         "writes": writes,
         "tool_results": tool_results,
+        "tool_result_meta": tool_result_meta,
         "system_reminders": system_reminders,
         "messages": messages,
         "compactions": compactions,
@@ -10744,6 +10759,55 @@ def _extract_tool_result_text(block):
             for b in rc
         )
     return str(rc)
+
+
+_TOOL_FAILURE_RE = re.compile(
+    r"("
+    r"\btraceback\b|"
+    r"\bexception\b|"
+    r"\bfailed\b|"
+    r"\bfailure\b|"
+    r"\bfatal:|"
+    r"\berror:|"
+    r"\bpermission denied\b|"
+    r"\bno such file or directory\b|"
+    r"\bcommand not found\b|"
+    r"\bexit (?:code|status) [2-9]\d*\b|"
+    r"\bexited with code [2-9]\d*\b|"
+    r"\breturned non-zero\b|"
+    r"\breturncode [2-9]\d*\b|"
+    r"\btimed out\b|"
+    r"\bsyntaxerror\b|"
+    r"\btypeerror\b|"
+    r"\bvalueerror\b|"
+    r"\bassertionerror\b|"
+    r"\bnpm err!|"
+    r"\btests? failed\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+_TOOL_SUCCESS_COUNT_RE = re.compile(
+    r"\b(?:0 failed|0 failures|0 errors|no failures|no errors)\b",
+    re.IGNORECASE,
+)
+_TOOL_NONZERO_FAILURE_COUNT_RE = re.compile(
+    r"\b[1-9]\d*\s+(?:failed|failures|errors)\b",
+    re.IGNORECASE,
+)
+
+
+def _tool_result_looks_failed(block, result_text):
+    """Return True only for result blocks that carry a concrete failure signal."""
+    if block.get("is_error") is True:
+        return True
+    text = (result_text or "").strip()
+    if not text:
+        return False
+    if _TOOL_SUCCESS_COUNT_RE.search(text) and not _TOOL_NONZERO_FAILURE_COUNT_RE.search(text):
+        return False
+    return bool(_TOOL_FAILURE_RE.search(text[:2000]))
 
 
 def _resolve_jsonl_path(arg=None):
@@ -14418,20 +14482,28 @@ def _check_realtime_loops(quality_data):
                     })
 
         # --- Retry churn detection ---
-        tool_results = quality_data.get("tool_results", [])
-        if len(tool_results) >= 3:
-            recent_tools = tool_results[-5:]
-            # tool_results entries are: (index, tool_id, result_size_chars, referenced_later)
-            # Check for repeated small results (errors tend to be short)
-            small_results = [t for t in recent_tools if t[2] < 200]  # short results = likely errors
-            if len(small_results) >= 3:
-                # If 3+ of the last 5 tool results are very short, might be error loop
-                sizes = [t[2] for t in small_results]
-                if all(abs(s - sizes[0]) < 50 for s in sizes):
+        # Short tool results are common for successful operations ("done",
+        # empty search results, concise shell output). Only warn when recent
+        # short results also carry concrete failure signals and come from
+        # the same tool family.
+        tool_result_meta = quality_data.get("tool_result_meta", [])
+        if len(tool_result_meta) >= 3:
+            recent_tools = tool_result_meta[-5:]
+            short_failures = [
+                t for t in recent_tools
+                if t.get("is_failure") and t.get("size", 0) < 400
+            ]
+            if len(short_failures) >= 3:
+                by_tool = {}
+                for item in short_failures:
+                    tool_name = item.get("tool_name") or "unknown"
+                    by_tool[tool_name] = by_tool.get(tool_name, 0) + 1
+                most_repeated = max(by_tool.values()) if by_tool else 0
+                if most_repeated >= 3:
                     warnings.append({
                         "type": "retry_churn",
-                        "confidence": 0.6,
-                        "count": len(small_results),
+                        "confidence": 0.75,
+                        "count": most_repeated,
                     })
 
     except Exception:
