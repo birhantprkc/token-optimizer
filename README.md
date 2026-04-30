@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.6.2-green" alt="Version 5.6.2"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.6.4-green" alt="Version 5.6.4"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.4.0-brightgreen" alt="OpenClaw v2.4.0"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.4.1-brightgreen" alt="OpenClaw v2.4.1"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg" alt="License: PolyForm Noncommercial"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/token-optimizer" alt="GitHub Stars"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/commits/main"><img src="https://img.shields.io/github/last-commit/alexgreensh/token-optimizer" alt="Last Commit"></a>
@@ -92,7 +92,7 @@ Works on Claude Code and [OpenClaw](#openclaw-plugin). Each platform has its own
 
 Most tools tell you your context is full. Token Optimizer shows you exactly where every token went, how much each turn cost, which skills and MCP servers actually fired, and which ones are just sitting there eating your budget.
 
-![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-overview.png)
+![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-demo.gif)
 
 One single-file HTML dashboard. Auto-regenerates after every session via the SessionEnd hook. Bookmark `http://localhost:24842/token-optimizer` and it's always current. Zero tokens from your context, zero network calls, zero setup after install.
 

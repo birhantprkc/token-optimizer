@@ -3428,6 +3428,40 @@ var DB = (function() {
       html += '</div></div>';
     }
 
+    // Rolling quality trend (from trends DB)
+    var qt = (data.trends && data.trends.quality_trend) || [];
+    if (qt.length >= 2) {
+      var last7 = qt.slice(-7);
+      var maxQ = 100, minQ = 0;
+      var chartW = 600, chartH = 120, pad = 30;
+      var stepX = (chartW - pad * 2) / Math.max(1, last7.length - 1);
+      var scaleY = function(v) { return chartH - pad - ((v - minQ) / (maxQ - minQ)) * (chartH - pad * 2); };
+
+      var avgPath = last7.map(function(p, i) { return (i === 0 ? 'M' : 'L') + (pad + i * stepX) + ',' + scaleY(p.avg_quality); }).join(' ');
+      var minPath = last7.map(function(p, i) { return (i === 0 ? 'M' : 'L') + (pad + i * stepX) + ',' + scaleY(p.min_quality); }).join(' ');
+
+      var latestAvg = last7[last7.length - 1].avg_quality;
+      var trendColor = latestAvg >= 80 ? 'var(--c-accent-cyan)' : latestAvg >= 60 ? '#4ecdc4' : latestAvg >= 50 ? '#ff9f43' : '#ff6b6b';
+
+      html += '<div class="card wide"><div class="card-header"><span>Quality Trend</span><span class="label">' + last7.length + '-day</span></div>' +
+        '<div style="padding:var(--s-2) var(--s-3);font-size:12px;color:var(--c-text-dim);">Rolling daily average quality score across sessions. Dashed line shows daily minimum.</div>' +
+        '<div style="padding:0 var(--s-3) var(--s-3);overflow-x:auto;">' +
+        '<svg viewBox="0 0 ' + chartW + ' ' + chartH + '" style="width:100%;max-width:' + chartW + 'px;height:auto;">' +
+        '<line x1="' + pad + '" y1="' + scaleY(80) + '" x2="' + (chartW - pad) + '" y2="' + scaleY(80) + '" stroke="var(--c-border)" stroke-dasharray="4,4" stroke-width="1" />' +
+        '<text x="' + (chartW - pad + 4) + '" y="' + (scaleY(80) + 4) + '" fill="var(--c-text-dim)" font-size="10" font-family="var(--font-mono)">80</text>' +
+        '<line x1="' + pad + '" y1="' + scaleY(60) + '" x2="' + (chartW - pad) + '" y2="' + scaleY(60) + '" stroke="var(--c-border)" stroke-dasharray="4,4" stroke-width="1" />' +
+        '<text x="' + (chartW - pad + 4) + '" y="' + (scaleY(60) + 4) + '" fill="var(--c-text-dim)" font-size="10" font-family="var(--font-mono)">60</text>' +
+        '<path d="' + minPath + '" fill="none" stroke="#ff6b6b" stroke-width="1.5" stroke-dasharray="3,3" opacity="0.5" />' +
+        '<path d="' + avgPath + '" fill="none" stroke="' + trendColor + '" stroke-width="2.5" />';
+      last7.forEach(function(p, i) {
+        var cx = pad + i * stepX, cy = scaleY(p.avg_quality);
+        html += '<circle cx="' + cx + '" cy="' + cy + '" r="4" fill="' + trendColor + '" stroke="var(--c-bg)" stroke-width="2">' +
+          '<title>' + esc(p.date) + ': avg ' + p.avg_quality + ', min ' + p.min_quality + ', max ' + p.max_quality + ' (' + p.sessions + ' sessions)</title></circle>';
+        html += '<text x="' + cx + '" y="' + (chartH - 6) + '" fill="var(--c-text-dim)" font-size="9" font-family="var(--font-mono)" text-anchor="middle">' + p.date.slice(5) + '</text>';
+      });
+      html += '</svg></div></div>';
+    }
+
     // Recommendations
     var recs = h.recommendations || [];
     if (recs.length > 0) {

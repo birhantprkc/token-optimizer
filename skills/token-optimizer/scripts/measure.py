@@ -1185,14 +1185,14 @@ def measure_components():
 
     # Hooks — analyze both structure and content for per-turn cost patterns
     hooks_configured = False
-    hook_names = []
+    hook_names_set = set()
     hook_warnings = []
     hook_est_per_turn_tokens = 0
     if _cached_settings:
         hooks = _cached_settings.get("hooks", {})
         if hooks:
             hooks_configured = True
-            hook_names = list(hooks.keys())
+            hook_names_set.update(hooks.keys())
             for event_name, hook_list in hooks.items():
                 if not isinstance(hook_list, list):
                     continue
@@ -1213,9 +1213,23 @@ def measure_components():
                             hook_warnings.append(
                                 f"{event_name} hook calls external API ({cmd[:60]})"
                             )
+    # Also detect plugin-installed hooks (hooks/hooks.json in plugin cache)
+    if _is_plugin_installed():
+        hooks_configured = True
+        plugin_cache = CLAUDE_DIR / "plugins" / "cache"
+        if plugin_cache.exists():
+            import glob as _glob_mod
+            for hf in _glob_mod.glob(str(plugin_cache / "*" / "token-optimizer" / "*" / "hooks" / "hooks.json")):
+                try:
+                    with open(hf, "r", encoding="utf-8") as f:
+                        ph = json.load(f)
+                    for event_name in ph.get("hooks", {}):
+                        hook_names_set.add(event_name)
+                except (json.JSONDecodeError, PermissionError, OSError):
+                    continue
     components["hooks"] = {
         "configured": hooks_configured,
-        "names": hook_names,
+        "names": sorted(hook_names_set),
         "warnings": hook_warnings,
         "est_per_turn_tokens": hook_est_per_turn_tokens,
     }
@@ -1778,6 +1792,17 @@ def score_to_grade(score):
     if score >= 40:
         return "D"
     return "F"
+
+
+def score_to_band(score):
+    """Convert a 0-100 quality score to a band label."""
+    if score >= 80:
+        return "Good"
+    if score >= 60:
+        return "Fair"
+    if score >= 40:
+        return "Needs Work"
+    return "Poor"
 
 
 def _estimate_messages_until_compact(ctx_window, overhead, avg_msg_tokens=5000):
@@ -6474,16 +6499,7 @@ def score_session_quality(session_data):
 
     final = int(round(min(100, max(0, score))))
 
-    if final >= 80:
-        band = "Good"
-    elif final >= 60:
-        band = "Fair"
-    elif final >= 40:
-        band = "Needs Work"
-    else:
-        band = "Poor"
-
-    return {"score": final, "band": band, "grade": score_to_grade(final)}
+    return {"score": final, "band": score_to_band(final), "grade": score_to_grade(final)}
 
 
 def _normalize_model_name(model_id):
@@ -6558,7 +6574,9 @@ CREATE TABLE IF NOT EXISTS session_log (
     version TEXT,
     slug TEXT,
     topic TEXT,
-    collected_at TEXT
+    collected_at TEXT,
+    quality_score REAL,
+    quality_grade TEXT
 );
 
 CREATE TABLE IF NOT EXISTS daily_stats (
@@ -6567,7 +6585,9 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     total_input INTEGER,
     total_output INTEGER,
     total_duration REAL,
-    avg_cache_hit REAL
+    avg_cache_hit REAL,
+    avg_quality_score REAL,
+    worst_grade TEXT
 );
 
 CREATE TABLE IF NOT EXISTS skill_daily (
@@ -6646,6 +6666,20 @@ def _init_trends_db():
             conn.execute("ALTER TABLE session_log ADD COLUMN p95_call_gap_seconds REAL")
         if "model_usage_breakdown_json" not in cols:
             conn.execute("ALTER TABLE session_log ADD COLUMN model_usage_breakdown_json TEXT")
+        if "quality_score" not in cols:
+            conn.execute("ALTER TABLE session_log ADD COLUMN quality_score REAL")
+        if "quality_grade" not in cols:
+            conn.execute("ALTER TABLE session_log ADD COLUMN quality_grade TEXT")
+        conn.commit()
+    except sqlite3.Error:
+        pass
+    # Migrate: add quality columns to daily_stats for existing DBs
+    try:
+        ds_cols = {r[1] for r in conn.execute("PRAGMA table_info(daily_stats)").fetchall()}
+        if "avg_quality_score" not in ds_cols:
+            conn.execute("ALTER TABLE daily_stats ADD COLUMN avg_quality_score REAL")
+        if "worst_grade" not in ds_cols:
+            conn.execute("ALTER TABLE daily_stats ADD COLUMN worst_grade TEXT")
         conn.commit()
     except sqlite3.Error:
         pass
@@ -6724,6 +6758,7 @@ def _backfill_session_metrics(conn, days=30, limit=5000):
                     OR avg_call_gap_seconds IS NULL
                     OR max_call_gap_seconds IS NULL
                     OR p95_call_gap_seconds IS NULL
+                    OR quality_score IS NULL
                  )
                ORDER BY date DESC, collected_at DESC
                LIMIT ?""",
@@ -6740,6 +6775,8 @@ def _backfill_session_metrics(conn, days=30, limit=5000):
         avg_gap = None
         max_gap = None
         p95_gap = None
+        q_score = None
+        q_grade = None
         parsed = _parse_session_jsonl(jsonl_path) if jsonl_path and os.path.exists(jsonl_path) else None
         if parsed:
             ttl_1h = int(parsed.get("total_cache_create_1h", 0) or 0)
@@ -6747,6 +6784,9 @@ def _backfill_session_metrics(conn, days=30, limit=5000):
             avg_gap = parsed.get("avg_call_gap_seconds")
             max_gap = parsed.get("max_call_gap_seconds")
             p95_gap = parsed.get("p95_call_gap_seconds")
+            sq = score_session_quality(parsed)
+            q_score = sq["score"]
+            q_grade = sq["grade"]
         conn.execute(
             """UPDATE session_log
                SET cache_create_1h_tokens = ?,
@@ -6754,9 +6794,11 @@ def _backfill_session_metrics(conn, days=30, limit=5000):
                    cache_ttl_scanned = 1,
                    avg_call_gap_seconds = ?,
                    max_call_gap_seconds = ?,
-                   p95_call_gap_seconds = ?
+                   p95_call_gap_seconds = ?,
+                   quality_score = COALESCE(quality_score, ?),
+                   quality_grade = COALESCE(quality_grade, ?)
                WHERE jsonl_path = ?""",
-            (ttl_1h, ttl_5m, avg_gap, max_gap, p95_gap, str(jsonl_path)),
+            (ttl_1h, ttl_5m, avg_gap, max_gap, p95_gap, q_score, q_grade, str(jsonl_path)),
         )
         updated += 1
     if updated:
@@ -7119,6 +7161,9 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         skills_used = parsed["skills_used"]
         subagents_used = parsed["subagents_used"]
 
+        # Compute quality score at collection time for persistence
+        sq = score_session_quality(parsed)
+
         # Insert session_log
         conn.execute(
             """INSERT OR IGNORE INTO session_log
@@ -7127,8 +7172,9 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                 cache_create_1h_tokens, cache_create_5m_tokens, cache_ttl_scanned,
                 avg_call_gap_seconds, max_call_gap_seconds, p95_call_gap_seconds,
                 skills_json, subagents_json, tool_calls_json, model_usage_json,
-                model_usage_breakdown_json, version, slug, topic, collected_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                model_usage_breakdown_json, version, slug, topic, collected_at,
+                quality_score, quality_grade)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 str(filepath), date, project_name,
                 parsed["duration_minutes"],
@@ -7152,21 +7198,34 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                 parsed.get("slug"),
                 parsed.get("topic"),
                 datetime.now().isoformat(),
+                sq["score"],
+                sq["grade"],
             ),
         )
 
         # Upsert daily_stats
         conn.execute(
-            """INSERT INTO daily_stats (date, session_count, total_input, total_output, total_duration, avg_cache_hit)
-               VALUES (?, 1, ?, ?, ?, ?)
+            """INSERT INTO daily_stats (date, session_count, total_input, total_output, total_duration, avg_cache_hit,
+                 avg_quality_score, worst_grade)
+               VALUES (?, 1, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(date) DO UPDATE SET
                  session_count = session_count + 1,
                  total_input = total_input + excluded.total_input,
                  total_output = total_output + excluded.total_output,
                  total_duration = total_duration + excluded.total_duration,
-                 avg_cache_hit = (avg_cache_hit * session_count + excluded.avg_cache_hit) / (session_count + 1)""",
+                 avg_cache_hit = (avg_cache_hit * session_count + excluded.avg_cache_hit) / (session_count + 1),
+                 avg_quality_score = CASE
+                   WHEN avg_quality_score IS NULL THEN excluded.avg_quality_score
+                   ELSE (avg_quality_score * session_count + excluded.avg_quality_score) / (session_count + 1)
+                 END,
+                 worst_grade = CASE
+                   WHEN worst_grade IS NULL THEN excluded.worst_grade
+                   WHEN INSTR('FDCBAS', excluded.worst_grade) < INSTR('FDCBAS', worst_grade) THEN excluded.worst_grade
+                   ELSE worst_grade
+                 END""",
             (date, parsed["total_input_tokens"], parsed["total_output_tokens"],
-             parsed["duration_minutes"], parsed["cache_hit_rate"]),
+             parsed["duration_minutes"], parsed["cache_hit_rate"],
+             sq["score"], sq["grade"]),
         )
 
         # Upsert skill_daily (session-level: count each skill once per session)
@@ -7363,15 +7422,25 @@ def _query_trends_db(conn, days):
     installed_skills = set(components.get("skills", {}).get("names", []))
     name_to_dir = components.get("skills", {}).get("name_to_dir", {})
     used_skills_raw = set(skill_sessions.keys())
-    # Map used skill names to directory names where possible
+    # Map used skill names to directory names where possible.
+    # Handles: exact match, SKILL.md name mapping, and namespaced sub-skills
+    # (e.g., "compound-engineering:ce-brainstorm" counts "compound-engineering" as used).
     used_skills = set()
     for s in used_skills_raw:
         if s in installed_skills:
             used_skills.add(s)
         elif s in name_to_dir:
             used_skills.add(name_to_dir[s])
+        elif ":" in s:
+            parent = s.split(":")[0]
+            if parent in installed_skills:
+                used_skills.add(parent)
+            elif parent in name_to_dir:
+                used_skills.add(name_to_dir[parent])
+            else:
+                used_skills.add(s)
         else:
-            used_skills.add(s)  # keep as-is for unresolved
+            used_skills.add(s)
     never_used = installed_skills - used_skills
     never_used_overhead = len(never_used) * TOKENS_PER_SKILL_APPROX
 
@@ -7388,7 +7457,9 @@ def _query_trends_db(conn, days):
                   message_count, api_calls, cache_hit_rate,
                   cache_create_1h_tokens, cache_create_5m_tokens,
                   avg_call_gap_seconds, max_call_gap_seconds, p95_call_gap_seconds, skills_json,
-                  subagents_json, model_usage_json, model_usage_breakdown_json, slug, topic, project
+                  subagents_json, model_usage_json, slug, topic, project,
+                  model_usage_breakdown_json,
+                  quality_score, quality_grade
            FROM session_log WHERE date >= ? ORDER BY date DESC""",
         (cutoff,),
     ).fetchall()
@@ -7470,14 +7541,42 @@ def _query_trends_db(conn, days):
             "cost_usd": round(session_cost, 4),
             "model": _normalize_model_name(dom_model) or dom_model,
         }
-        # Add quality score per session
-        sq = score_session_quality(sd)
-        sd["quality_score"] = sq["score"]
-        sd["quality_grade"] = sq["grade"]
-        sd["quality_band"] = sq["band"]
+        # Prefer stored quality score (persisted during collect), fall back to recomputation
+        if sr["quality_score"] is not None:
+            sd["quality_score"] = sr["quality_score"]
+            sd["quality_grade"] = sr["quality_grade"] or score_to_grade(round(sr["quality_score"]))
+            sd["quality_band"] = score_to_band(sr["quality_score"])
+        else:
+            sq = score_session_quality(sd)
+            sd["quality_score"] = sq["score"]
+            sd["quality_grade"] = sq["grade"]
+            sd["quality_band"] = sq["band"]
         d["session_details"].append(sd)
 
     daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
+
+    # Rolling quality trend from session_log
+    quality_trend_rows = conn.execute(
+        """SELECT date,
+                  AVG(quality_score) as avg_q,
+                  MIN(quality_score) as min_q,
+                  MAX(quality_score) as max_q,
+                  COUNT(*) as n
+           FROM session_log
+           WHERE date >= ? AND quality_score IS NOT NULL
+           GROUP BY date ORDER BY date""",
+        (cutoff,),
+    ).fetchall()
+    quality_trend = [
+        {
+            "date": r["date"],
+            "avg_quality": round(r["avg_q"], 1),
+            "min_quality": round(r["min_q"], 1),
+            "max_quality": round(r["max_q"], 1),
+            "sessions": r["n"],
+        }
+        for r in quality_trend_rows
+    ]
 
     # conn.close() removed — caller (_collect_trends_from_db) owns the connection
     # and closes it in its finally block (Lang Reviewer H3: double-close fix).
@@ -7514,6 +7613,7 @@ def _query_trends_db(conn, days):
         },
         "daily": daily_sorted,
         "total_cost_usd": round(total_cost_usd, 4),
+        "quality_trend": quality_trend,
         "pricing_tier": pricing_tier,
         "pricing_tier_label": tier_label,
         "source": "sqlite",
@@ -7610,6 +7710,14 @@ def _collect_trends_from_jsonl(days=30):
             used_skills.add(s)
         elif s in name_to_dir:
             used_skills.add(name_to_dir[s])
+        elif ":" in s:
+            parent = s.split(":")[0]
+            if parent in installed_skills:
+                used_skills.add(parent)
+            elif parent in name_to_dir:
+                used_skills.add(name_to_dir[parent])
+            else:
+                used_skills.add(s)
         else:
             used_skills.add(s)
     never_used = installed_skills - used_skills
@@ -7680,6 +7788,19 @@ def _collect_trends_from_jsonl(days=30):
     # Sort daily by date descending
     daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
 
+    # Build quality trend from computed session scores
+    quality_trend = []
+    for d_entry in sorted(daily.values(), key=lambda x: x["date"]):
+        scores = [sd["quality_score"] for sd in d_entry["session_details"] if sd.get("quality_score") is not None]
+        if scores:
+            quality_trend.append({
+                "date": d_entry["date"],
+                "avg_quality": round(sum(scores) / len(scores), 1),
+                "min_quality": round(min(scores), 1),
+                "max_quality": round(max(scores), 1),
+                "sessions": len(scores),
+            })
+
     # Pricing tier info for dashboard
     pricing_tier = _load_pricing_tier()
     tier_label = _pricing_tier_label(pricing_tier)
@@ -7704,6 +7825,7 @@ def _collect_trends_from_jsonl(days=30):
             "current_total": current_total,
         },
         "daily": daily_sorted,
+        "quality_trend": quality_trend,
         "pricing_tier": pricing_tier,
         "pricing_tier_label": tier_label,
     }
@@ -8954,7 +9076,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.6.1"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.6.4"  # Keep in sync with plugin.json + marketplace.json
 _DAEMON_RUNTIME = detect_runtime()
 _DAEMON_RUNTIME_SUFFIX = "codex" if _DAEMON_RUNTIME == "codex" else "claude"
 DAEMON_LABEL = "com.token-optimizer.codex-dashboard" if _DAEMON_RUNTIME == "codex" else "com.token-optimizer.dashboard"
@@ -8997,15 +9119,22 @@ def _get_or_create_daemon_token():
     try:
         SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
         token = secrets.token_urlsafe(32)  # 43 chars, cryptographically random
-        # Write with 0600 perms via os.open before write
+        # O_EXCL: atomic create — concurrent installers race on mkdir, not
+        # on truncating each other's token (torture M1 fix).
         fd = os.open(
             str(DAEMON_TOKEN_PATH),
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
             0o600,
         )
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(token + "\n")
         return token
+    except FileExistsError:
+        # Lost the race — another installer created it first. Read theirs.
+        try:
+            return DAEMON_TOKEN_PATH.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
     except OSError:
         return ""
 
@@ -9164,16 +9293,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         origin = self.headers.get("Origin", "")
-        allowed = origin if _is_localhost_origin(origin) else ""
-        self.send_header("Access-Control-Allow-Origin", allowed or "http://localhost:{DAEMON_PORT}")
-        self.send_header("Access-Control-Allow-Credentials", "true")
+        if NETWORK_MODE:
+            allowed = origin or "*"
+        else:
+            allowed = origin if _is_localhost_origin(origin) else "http://localhost:{DAEMON_PORT}"
+        self.send_header("Access-Control-Allow-Origin", allowed)
+        if allowed != "*":
+            self.send_header("Access-Control-Allow-Credentials", "true")
         self.end_headers()
         self.wfile.write(body)
 
     def _require_localhost(self):
-        """Reject anything that isn't coming from a localhost Host header.
+        """Reject non-localhost Host headers unless NETWORK_MODE is active.
         H-1 DNS rebinding defense — fires before we look at Origin/token.
+        In network mode, any Host is accepted (remote clients send their own).
         """
+        if NETWORK_MODE:
+            return True
         if not _is_localhost_host(self.headers.get("Host", "")):
             self.send_error(421, "Misdirected Request")
             return False
@@ -9188,12 +9324,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._json_response(200, {{"ok": True, "server": "token-optimizer-daemon"}})
             return
         if clean == "api/token":
-            # Only expose to localhost Origin+Host so foreign origins cannot exfiltrate it.
-            origin = self.headers.get("Origin", "")
-            origin_ok = (not origin) or _is_localhost_origin(origin)
-            if not origin_ok or not _is_localhost_host(self.headers.get("Host", "")):
-                self.send_error(403, "Forbidden")
-                return
+            # In default mode, restrict to localhost Origin+Host (anti-exfiltration).
+            # In network mode, serve to any origin so remote dashboard users can
+            # fetch the token for toggle buttons (the token itself gates POSTs).
+            if not NETWORK_MODE:
+                origin = self.headers.get("Origin", "")
+                origin_ok = (not origin) or _is_localhost_origin(origin)
+                if not origin_ok or not _is_localhost_host(self.headers.get("Host", "")):
+                    self.send_error(403, "Forbidden")
+                    return
             self._json_response(200, {{"token": _read_token()}})
             return
         if not self._require_localhost():
@@ -9207,20 +9346,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         origin = self.headers.get("Origin", "")
-        allowed = origin if _is_localhost_origin(origin) else ""
-        self.send_header("Access-Control-Allow-Origin", allowed or "http://localhost:{DAEMON_PORT}")
+        if NETWORK_MODE:
+            allowed = origin or "*"
+        else:
+            allowed = origin if _is_localhost_origin(origin) else "http://localhost:{DAEMON_PORT}"
+        self.send_header("Access-Control-Allow-Origin", allowed)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-TO-Token")
-        self.send_header("Access-Control-Allow-Credentials", "true")
+        if allowed != "*":
+            self.send_header("Access-Control-Allow-Credentials", "true")
         self.end_headers()
 
     def do_POST(self):
-        # Layered defense: Host allowlist first, then Origin, then token.
-        if not _is_localhost_host(self.headers.get("Host", "")):
+        # Layered defense: Host allowlist (skipped in network mode), then Origin, then token.
+        if not NETWORK_MODE and not _is_localhost_host(self.headers.get("Host", "")):
             self.send_error(421, "Misdirected Request")
             return
         origin = self.headers.get("Origin", "")
-        if not origin or not _is_localhost_origin(origin):
+        if not NETWORK_MODE and (not origin or not _is_localhost_origin(origin)):
             self.send_error(403, "Forbidden: invalid origin")
             return
         expected_tok = _read_token()
@@ -9344,10 +9487,17 @@ if not _thrash_check_and_update():
     # Exit 0 so launchd's "KeepAlive on unsuccessful exit" stops respawning us.
     sys.exit(0)
 
-# Restrict to localhost only. TOKEN_OPTIMIZER_HOST is accepted for IPv4/IPv6 localhost
-# variants but never 0.0.0.0 or other interfaces (security: exposes toggle API to LAN).
-_host_raw = os.environ.get("TOKEN_OPTIMIZER_HOST", "127.0.0.1")
-HOST = _host_raw if _host_raw in ("127.0.0.1", "::1", "localhost") else "127.0.0.1"
+# Bind address. Default: localhost only. TOKEN_OPTIMIZER_DASHBOARD_HOST=0.0.0.0 enables
+# network access (Tailscale Funnel, LAN). When network-bound, Host header checks are
+# relaxed since remote clients send non-localhost Host headers. Token auth still applies.
+_LOCALHOST_ADDRS = ("127.0.0.1", "::1", "localhost")
+_host_raw = os.environ.get("TOKEN_OPTIMIZER_DASHBOARD_HOST",
+                           os.environ.get("TOKEN_OPTIMIZER_HOST", "127.0.0.1"))
+HOST = _host_raw if _host_raw in _LOCALHOST_ADDRS + ("0.0.0.0",) else "127.0.0.1"
+NETWORK_MODE = HOST == "0.0.0.0"
+if NETWORK_MODE:
+    print(f"[Token Optimizer] Network mode: binding {{HOST}}:{{PORT}}", file=sys.stderr)
+    print("  Dashboard and toggle API accessible from LAN. Token auth required for mutations.", file=sys.stderr)
 try:
     with socketserver.TCPServer((HOST, PORT), Handler) as httpd:
         httpd.serve_forever()
@@ -9830,7 +9980,7 @@ def _ensure_dashboard_file():
     return True
 
 
-def _verify_daemon_port(timeout_seconds=1, retries=8):
+def _verify_daemon_port(timeout_seconds=1, retries=None):
     """Probe 127.0.0.1:DAEMON_PORT to confirm OUR daemon is up (not a foreign listener).
 
     v5.4.19 (adv-007 fix): a TCP connect() alone can't tell us whether the
@@ -9840,11 +9990,16 @@ def _verify_daemon_port(timeout_seconds=1, retries=8):
     the connect with a GET /__to_ping and verify the body equals our magic
     string. Only then do we claim the daemon is up.
 
-    Extended retry budget (torture-room M3, 2026-04-14): slow cold
-    starts on first-login Mac, LaunchAgent re-spawn, or Windows Task
-    Scheduler trigger delay can exceed 8s before the daemon binds.
-    Budget now ~16s (8 retries * 1s timeout + 1s gap).
+    Retry budget configurable via TOKEN_OPTIMIZER_DASHBOARD_TIMEOUT (total
+    seconds, default 30). Large trends DBs (~500+ sessions) can push Python
+    cold-start past 20s on first launch.
     """
+    if retries is None:
+        try:
+            total = max(0, int(os.environ.get("TOKEN_OPTIMIZER_DASHBOARD_TIMEOUT", "30")))
+        except (ValueError, TypeError):
+            total = 30
+        retries = max(total // 2, 4)
     import socket as _socket
     import urllib.request
     import urllib.error
@@ -10458,6 +10613,8 @@ def _install_task_scheduler_daemon(dry_run=False):
         print("  pythonw), then re-run setup. Reclaim: taskkill /PID <pid> /F")
         sys.exit(1)
 
+    _get_or_create_daemon_token()
+
     with _daemon_install_lock():
         SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
         DAEMON_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -10735,6 +10892,8 @@ def _install_systemd_user_daemon(dry_run=False):
 
     if not _ensure_dashboard_file():
         sys.exit(1)
+
+    _get_or_create_daemon_token()
 
     with _daemon_install_lock():
         # Ordering (torture HIGH-4): stop + reclaim FIRST, BEFORE touching
@@ -11019,6 +11178,8 @@ def _parse_jsonl_for_quality(filepath):
     reads = []       # (index, path, timestamp)
     writes = []      # (index, path, timestamp)
     tool_results = []  # (index, tool_name, result_size_chars, referenced_later)
+    tool_result_meta = []  # richer metadata for live detectors
+    tool_name_by_id = {}
     system_reminders = []  # (index, content_hash, size_chars)
     messages = []    # (index, role, text_length, is_substantive)
     compactions = 0
@@ -11058,6 +11219,8 @@ def _parse_jsonl_for_quality(filepath):
                     reads = []
                     writes = []
                     tool_results = []
+                    tool_result_meta = []
+                    tool_name_by_id = {}
                     system_reminders = []
                     messages = []
                     agent_dispatches = []
@@ -11103,6 +11266,9 @@ def _parse_jsonl_for_quality(filepath):
                             elif block.get("type") == "tool_use":
                                 is_substantive = True  # tool invocations ARE decisions
                                 tool_name = block.get("name", "")
+                                tool_id = block.get("id", "")
+                                if tool_id:
+                                    tool_name_by_id[tool_id] = tool_name
                                 inp = block.get("input", {})
 
                                 if tool_name == "Read":
@@ -11133,6 +11299,13 @@ def _parse_jsonl_for_quality(filepath):
                                     result_text = _extract_tool_result_text(block)
                                     tool_id = block.get("tool_use_id", "")
                                     tool_results.append((idx, tool_id, len(result_text), False))
+                                    tool_result_meta.append({
+                                        "index": idx,
+                                        "tool_id": tool_id,
+                                        "tool_name": tool_name_by_id.get(tool_id, ""),
+                                        "size": len(result_text),
+                                        "is_failure": _tool_result_looks_failed(block, result_text),
+                                    })
 
                                     # Update agent dispatch result sizes
                                     if agent_dispatches and agent_dispatches[-1][2] == 0:
@@ -11151,6 +11324,7 @@ def _parse_jsonl_for_quality(filepath):
         "reads": reads,
         "writes": writes,
         "tool_results": tool_results,
+        "tool_result_meta": tool_result_meta,
         "system_reminders": system_reminders,
         "messages": messages,
         "compactions": compactions,
@@ -11733,6 +11907,55 @@ def _extract_tool_result_text(block):
             for b in rc
         )
     return str(rc)
+
+
+_TOOL_FAILURE_RE = re.compile(
+    r"("
+    r"\btraceback\b|"
+    r"\bexception\b|"
+    r"\bfailed\b|"
+    r"\bfailure\b|"
+    r"\bfatal:|"
+    r"\berror:|"
+    r"\bpermission denied\b|"
+    r"\bno such file or directory\b|"
+    r"\bcommand not found\b|"
+    r"\bexit (?:code|status) [2-9]\d*\b|"
+    r"\bexited with code [2-9]\d*\b|"
+    r"\breturned non-zero\b|"
+    r"\breturncode [2-9]\d*\b|"
+    r"\btimed out\b|"
+    r"\bsyntaxerror\b|"
+    r"\btypeerror\b|"
+    r"\bvalueerror\b|"
+    r"\bassertionerror\b|"
+    r"\bnpm err!|"
+    r"\btests? failed\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+_TOOL_SUCCESS_COUNT_RE = re.compile(
+    r"\b(?:0 failed|0 failures|0 errors|no failures|no errors)\b",
+    re.IGNORECASE,
+)
+_TOOL_NONZERO_FAILURE_COUNT_RE = re.compile(
+    r"\b[1-9]\d*\s+(?:failed|failures|errors)\b",
+    re.IGNORECASE,
+)
+
+
+def _tool_result_looks_failed(block, result_text):
+    """Return True only for result blocks that carry a concrete failure signal."""
+    if block.get("is_error") is True:
+        return True
+    text = (result_text or "").strip()
+    if not text:
+        return False
+    if _TOOL_SUCCESS_COUNT_RE.search(text) and not _TOOL_NONZERO_FAILURE_COUNT_RE.search(text):
+        return False
+    return bool(_TOOL_FAILURE_RE.search(text[:2000]))
 
 
 def _resolve_jsonl_path(arg=None):
@@ -15410,20 +15633,28 @@ def _check_realtime_loops(quality_data):
                     })
 
         # --- Retry churn detection ---
-        tool_results = quality_data.get("tool_results", [])
-        if len(tool_results) >= 3:
-            recent_tools = tool_results[-5:]
-            # tool_results entries are: (index, tool_id, result_size_chars, referenced_later)
-            # Check for repeated small results (errors tend to be short)
-            small_results = [t for t in recent_tools if t[2] < 200]  # short results = likely errors
-            if len(small_results) >= 3:
-                # If 3+ of the last 5 tool results are very short, might be error loop
-                sizes = [t[2] for t in small_results]
-                if all(abs(s - sizes[0]) < 50 for s in sizes):
+        # Short tool results are common for successful operations ("done",
+        # empty search results, concise shell output). Only warn when recent
+        # short results also carry concrete failure signals and come from
+        # the same tool family.
+        tool_result_meta = quality_data.get("tool_result_meta", [])
+        if len(tool_result_meta) >= 3:
+            recent_tools = tool_result_meta[-5:]
+            short_failures = [
+                t for t in recent_tools
+                if t.get("is_failure") and t.get("size", 0) < 400
+            ]
+            if len(short_failures) >= 3:
+                by_tool = {}
+                for item in short_failures:
+                    tool_name = item.get("tool_name") or "unknown"
+                    by_tool[tool_name] = by_tool.get(tool_name, 0) + 1
+                most_repeated = max(by_tool.values()) if by_tool else 0
+                if most_repeated >= 3:
                     warnings.append({
                         "type": "retry_churn",
-                        "confidence": 0.6,
-                        "count": len(small_results),
+                        "confidence": 0.75,
+                        "count": most_repeated,
                     })
 
     except Exception:
