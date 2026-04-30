@@ -24,7 +24,6 @@ SUPPORTED_HOOK_EVENTS = {
 BASH_ONLY_EVENTS = {"PreToolUse", "PermissionRequest", "PostToolUse"}
 REQUIRED_FILES = (
     ".codex-plugin/plugin.json",
-    ".codex/hooks.json",
     "hooks/python-launcher.sh",
     "hooks/run.py",
     "skills/token-optimizer/scripts/codex_hook_bridge.py",

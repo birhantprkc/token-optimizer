@@ -2600,27 +2600,31 @@ def print_snapshot_summary(snapshot):
     """Print a human-readable summary of a snapshot."""
     c = snapshot["components"]
     t = snapshot["totals"]
+    is_codex = any(key.startswith("agents_md") for key in c)
 
     print(f"\n{'=' * 55}")
     print(f"  Snapshot: {snapshot['label']} ({snapshot['timestamp'][:16]})")
     print(f"{'=' * 55}")
 
-    # CLAUDE.md files
-    claude_total = 0
+    # Primary instruction files
+    instruction_prefix = "agents_md" if is_codex else "claude_md"
+    instruction_label = "AGENTS.md" if is_codex else "CLAUDE.md"
+    instruction_total = 0
     for key in c:
-        if key.startswith("claude_md"):
+        if key.startswith(instruction_prefix):
             tokens = c[key].get("tokens", 0)
             if tokens > 0:
-                claude_total += tokens
+                instruction_total += tokens
                 lines = c[key].get("lines", 0)
                 print(f"  {key:<35s} {tokens:>6,} tokens  [{lines} lines]")
-    if claude_total == 0:
-        print(f"  {'CLAUDE.md':<35s}     0 tokens  [not found]")
+    if instruction_total == 0:
+        print(f"  {instruction_label:<35s}     0 tokens  [not found]")
 
-    # MEMORY.md
+    # Memory
     if "memory_md" in c:
         mem = c["memory_md"]
-        print(f"  {'MEMORY.md':<35s} {mem.get('tokens', 0):>6,} tokens  [{mem.get('lines', 0)} lines]")
+        memory_label = "Codex memories" if is_codex else "MEMORY.md"
+        print(f"  {memory_label:<35s} {mem.get('tokens', 0):>6,} tokens  [{mem.get('lines', 0)} lines]")
 
     # Skills
     s = c.get("skills", {})
@@ -2629,7 +2633,16 @@ def print_snapshot_summary(snapshot):
     if ps.get("count", 0) > 0:
         disabled = ps.get("disabled_plugins", [])
         suffix = f", {len(disabled)} disabled" if disabled else ""
-        print(f"    {'+ Plugin skills':<33s} {ps.get('tokens', 0):>6,} tokens  [{ps.get('count', 0)} from {', '.join(ps.get('plugins', []))}{suffix}]")
+        plugins = []
+        for plugin in ps.get("plugins", []):
+            if isinstance(plugin, str):
+                plugins.append(plugin)
+            elif isinstance(plugin, dict):
+                name = plugin.get("name")
+                if name:
+                    plugins.append(str(name))
+        plugin_label = ", ".join(plugins) if plugins else "plugins"
+        print(f"    {'+ Plugin skills':<33s} {ps.get('tokens', 0):>6,} tokens  [{ps.get('count', 0)} from {plugin_label}{suffix}]")
         dupes = ps.get("duplicate_skills", {})
         if dupes:
             dupe_count = sum(len(v) - 1 for v in dupes.values())
@@ -4529,24 +4542,80 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
     return str(DASHBOARD_PATH)
 
 
+def _acquire_session_end_flush_lock(max_age_seconds=120):
+    """Return a lock directory path, or None if another worker is active."""
+    lock_dir = SNAPSHOT_DIR / ".session-end-flush.lock"
+    try:
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        lock_dir.mkdir(mode=0o700)
+        return lock_dir
+    except FileExistsError:
+        try:
+            age = time.time() - lock_dir.stat().st_mtime
+            if age > max_age_seconds:
+                lock_dir.rmdir()
+                lock_dir.mkdir(mode=0o700)
+                return lock_dir
+        except OSError:
+            pass
+        return None
+    except OSError:
+        return None
+
+
+def _release_session_end_flush_lock(lock_dir):
+    if not lock_dir:
+        return
+    try:
+        lock_dir.rmdir()
+    except OSError:
+        pass
+
+
+def _session_refresh_due(min_interval_seconds=120):
+    """Throttle expensive Stop-hook dashboard rebuilds."""
+    marker = SNAPSHOT_DIR / ".last-session-end-refresh"
+    try:
+        if marker.exists() and time.time() - marker.stat().st_mtime < min_interval_seconds:
+            return False
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        return True
+    except OSError:
+        # If the marker cannot be read/written, prefer correctness over
+        # staleness; the wall-clock budget still caps the worker.
+        return True
+
+
 def _run_session_end_flush_worker(args):
     """Run heavyweight Stop-hook work outside Codex's visible hook budget."""
+    lock_dir = _acquire_session_end_flush_lock()
+    if lock_dir is None:
+        return
+    old_budget = _install_hook_budget(20)
     try:
-        collect_sessions(days=90, quiet=True, rebuild=False)
-    except Exception:
+        if _session_refresh_due():
+            try:
+                collect_sessions(days=90, quiet=True, rebuild=False)
+            except Exception:
+                pass
+            try:
+                generate_standalone_dashboard(days=30, quiet=True)
+            except Exception:
+                pass
+            try:
+                flush_trigger = "end"
+                for i, a in enumerate(args):
+                    if a == "--trigger" and i + 1 < len(args):
+                        flush_trigger = args[i + 1]
+                compact_capture(trigger=flush_trigger)
+            except Exception:
+                pass
+    except _HookTimeout:
         pass
-    try:
-        generate_standalone_dashboard(days=30, quiet=True)
-    except Exception:
-        pass
-    try:
-        flush_trigger = "end"
-        for i, a in enumerate(args):
-            if a == "--trigger" and i + 1 < len(args):
-                flush_trigger = args[i + 1]
-        compact_capture(trigger=flush_trigger)
-    except Exception:
-        pass
+    finally:
+        _clear_hook_budget(old_budget)
+        _release_session_end_flush_lock(lock_dir)
 
 
 def _defer_session_end_flush(args):
@@ -15844,13 +15913,16 @@ def _maybe_loop_warning(result, cache_path, quality_data, quiet=False):
     # Sum the text_length of the looping turns as measured content, then
     # estimate tokens at chars/4. This is measured from the session, not
     # a made-up constant.
-    loop_count_n = best.get("count", 2)
+    try:
+        loop_count_n = max(1, int(best.get("count", 2)))
+    except (TypeError, ValueError):
+        loop_count_n = 2
     messages = quality_data.get("messages", [])
     loop_turn_chars = 0
     if messages:
         recent = messages[-loop_count_n * 2:]  # user+assistant pairs
-        loop_turn_chars = sum(m[2] for m in recent)
-    measured_loop_tokens = max(loop_turn_chars // CHARS_PER_TOKEN, 500)
+        loop_turn_chars = sum(int(m[2] or 0) for m in recent)
+    measured_loop_tokens = int(max(loop_turn_chars / CHARS_PER_TOKEN, 500))
 
     session_id = Path(cache_path).stem.replace("quality-cache-", "", 1) if cache_path else None
     _log_compression_event(
