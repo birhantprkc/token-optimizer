@@ -7,8 +7,10 @@
     {
       "name": "token-optimizer",
       "source": {
-        "source": "local",
-        "path": "./plugins/token-optimizer"
+        "source": "git-subdir",
+        "url": "https://github.com/alexgreensh/token-optimizer.git",
+        "path": ".",
+        "ref": "main"
       },
       "policy": {
         "installation": "AVAILABLE",
