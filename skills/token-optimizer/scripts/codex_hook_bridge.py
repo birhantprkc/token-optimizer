@@ -13,12 +13,15 @@ import io
 import json
 import sys
 from contextlib import redirect_stdout
+from pathlib import Path
+from typing import Any, Callable
 
+import codex_session
 import measure
 from hook_io import read_stdin_hook_input
 
 
-def _capture_stdout(func, *args, **kwargs) -> str:
+def _capture_stdout(func: Callable[..., Any], *args: Any, **kwargs: Any) -> str:
     buffer = io.StringIO()
     try:
         with redirect_stdout(buffer):
@@ -62,10 +65,26 @@ def _collect_system_messages(raw_output: str) -> str:
     return "\n\n".join(messages)
 
 
+def _extract_prompt_text(hook_input: dict[str, Any]) -> str:
+    for key in ("prompt", "user_prompt", "message", "input"):
+        value = hook_input.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    messages = hook_input.get("messages")
+    if isinstance(messages, list):
+        for item in reversed(messages):
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content") or item.get("message")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+    return ""
+
+
 def _has_matching_checkpoint(session_id: str | None) -> bool:
     if not session_id:
         return False
-    safe_session_id = measure._sanitize_session_id(session_id)
+    safe_session_id = measure.sanitize_session_id(session_id)
     for checkpoint in measure.list_checkpoints(max_age_minutes=60 * 24):
         if safe_session_id in checkpoint.get("filename", ""):
             return True
@@ -78,7 +97,7 @@ def handle_session_start() -> None:
     source = str(hook_input.get("source", "")).strip().lower()
 
     # Keep existing self-healing behavior even when no context is injected.
-    _capture_stdout(measure._run_ensure_health)
+    _capture_stdout(measure.run_ensure_health)
 
     if source == "resume" and _has_matching_checkpoint(session_id):
         context = _capture_stdout(
@@ -101,12 +120,33 @@ def handle_session_start() -> None:
 def handle_user_prompt_submit() -> None:
     hook_input = read_stdin_hook_input()
     transcript_path = hook_input.get("transcript_path")
+    if transcript_path and not codex_session.is_codex_session_path(transcript_path):
+        transcript_path = None
+    session_id = hook_input.get("session_id")
     raw_output = _capture_stdout(
         measure.quality_cache,
         quiet=True,
         session_jsonl=transcript_path,
     )
     additional_context = _collect_system_messages(raw_output)
+    prompt_text = _extract_prompt_text(hook_input)
+    cwd = hook_input.get("cwd")
+    if not cwd and transcript_path:
+        try:
+            cwd = str(Path(transcript_path).parent)
+        except TypeError:
+            cwd = None
+    try:
+        hint_context = measure.codex_prompt_hints(
+            prompt_text=prompt_text,
+            session_id=session_id,
+            cwd=cwd,
+        )
+    except Exception as exc:
+        print(f"[Token Optimizer] Codex hint helper failed: {exc}", file=sys.stderr)
+        hint_context = ""
+    if hint_context:
+        additional_context = "\n\n".join(part for part in (additional_context, hint_context.strip()) if part)
     _emit_additional_context("UserPromptSubmit", additional_context)
 
 

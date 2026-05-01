@@ -8,9 +8,11 @@ trends, and dashboard pipeline can stay shared.
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
-from datetime import datetime
+from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,8 @@ from runtime_env import codex_home
 CHARS_PER_TOKEN = 4
 MAX_PARSE_FILE_BYTES = 96 * 1024 * 1024
 MAX_JSONL_LINE_CHARS = 8 * 1024 * 1024
+_UNKNOWN_MODEL = "unknown"
+_DEFAULT_MODEL = "codex"
 TOOL_ALIASES = {
     "exec_command": "Bash",
     "apply_patch": "Edit",
@@ -31,6 +35,7 @@ TOOL_ALIASES = {
 
 READ_CMD_RE = re.compile(r"\b(?:cat|sed|nl|head|tail|less|rg|grep)\b")
 PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
+_ERROR_RE = re.compile(r"\b(error|failed|traceback|exception|permission denied|not found)\b", re.IGNORECASE)
 
 
 def _payload(record: dict[str, Any]) -> dict[str, Any]:
@@ -43,7 +48,7 @@ def _parse_ts(value: Any) -> datetime | None:
         return None
     try:
         if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value)
+            return datetime.fromtimestamp(value, tz=timezone.utc)
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (OSError, ValueError, TypeError):
         return None
@@ -101,8 +106,9 @@ def _extract_model(payload: dict[str, Any]) -> str | None:
 
 
 def _estimate_tokens(text: str | int) -> int:
-    chars = text if isinstance(text, int) else len(text)
-    return max(0, int(chars / CHARS_PER_TOKEN))
+    if isinstance(text, int):
+        return max(0, text // CHARS_PER_TOKEN)
+    return max(0, len(text.encode("utf-8", errors="replace")) // CHARS_PER_TOKEN)
 
 
 def _safe_int(value: Any) -> int:
@@ -160,8 +166,29 @@ def _token_usage(payload: dict[str, Any], *, cumulative: bool = True) -> dict[st
     }
 
 
+_TOPIC_PREFIXES = (
+    "implement the following plan:",
+    "please implement",
+    "can you help me",
+    "i need help with",
+    "help me",
+    "i want to",
+    "i'd like to",
+)
+
+
 def _extract_topic(text: str) -> str | None:
     text = " ".join(text.split())
+    if not text:
+        return None
+    lower = text.lower()
+    for prefix in _TOPIC_PREFIXES:
+        if lower.startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+    if text.startswith("# "):
+        first_line = text.split("\n", 1)[0]
+        text = first_line.lstrip("# ").strip()
     if not text:
         return None
     return text[:117] + "..." if len(text) > 120 else text
@@ -170,7 +197,12 @@ def _extract_topic(text: str) -> str | None:
 def _safe_session_id(value: str | None) -> str:
     if not value:
         return ""
-    return re.sub(r"[^a-zA-Z0-9_-]", "", value)
+    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "", value)
+    return sanitized if len(sanitized) >= 6 else ""
+
+
+def _looks_like_error_text(text: str) -> bool:
+    return bool(_ERROR_RE.search(text))
 
 
 def session_roots() -> tuple[Path, ...]:
@@ -187,13 +219,13 @@ def is_codex_session_path(path: str | Path) -> bool:
         return False
 
 
-def find_all_jsonl_files(days: int = 30) -> list[tuple[Path, float, str]]:
-    cutoff = datetime.now().timestamp() - (days * 86400)
+def find_all_jsonl_files(days: int = 30, max_files: int = 500) -> list[tuple[Path, float, str]]:
+    cutoff = datetime.now(timezone.utc).timestamp() - (days * 86400)
     results: list[tuple[Path, float, str]] = []
     for root in session_roots():
         if not root.exists():
             continue
-        for jf in root.rglob("*.jsonl"):
+        for jf in itertools.islice(root.rglob("*.jsonl"), max_files):
             try:
                 mtime = jf.stat().st_mtime
             except OSError:
@@ -207,7 +239,7 @@ def find_all_jsonl_files(days: int = 30) -> list[tuple[Path, float, str]]:
 
 
 def find_current_session_jsonl() -> Path | None:
-    files = find_all_jsonl_files(days=3650)
+    files = find_all_jsonl_files(days=90, max_files=10)
     return files[0][0] if files else None
 
 
@@ -219,7 +251,7 @@ def find_session_jsonl_by_id(session_id: str) -> Path | None:
     for root in session_roots():
         if not root.exists():
             continue
-        for jf in root.rglob(f"*{safe_id}*.jsonl"):
+        for jf in itertools.islice(root.rglob(f"*{safe_id}*.jsonl"), 50):
             meta_id = _session_meta_id(jf)
             if jf.stem == safe_id or safe_id in jf.stem or meta_id == safe_id or (meta_id and meta_id.startswith(safe_id)):
                 exact_matches.append(jf)
@@ -266,7 +298,7 @@ def parse_session_jsonl(filepath: str | Path) -> dict[str, Any] | None:
     output_text_chars = 0
     tool_output_chars = 0
     last_usage: dict[str, int] | None = None
-    current_model = "unknown"
+    current_model = _UNKNOWN_MODEL
     per_model_usage: dict[str, dict[str, int]] = {}
 
     for record in _iter_json_records(filepath):
@@ -292,7 +324,7 @@ def parse_session_jsonl(filepath: str | Path) -> dict[str, Any] | None:
                 last_usage = usage
             turn_usage = _token_usage(payload, cumulative=False)
             if turn_usage:
-                model_key = current_model if current_model != "unknown" else "codex"
+                model_key = current_model if current_model != _UNKNOWN_MODEL else _DEFAULT_MODEL
                 bucket = per_model_usage.setdefault(
                     model_key,
                     {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "output": 0},
@@ -353,7 +385,7 @@ def parse_session_jsonl(filepath: str | Path) -> dict[str, Any] | None:
         for model, parts in model_usage_breakdown.items():
             model_usage[model] = parts["fresh_input"] + parts["cache_create"] + parts["output"]
     else:
-        model = current_model if current_model != "unknown" else "codex"
+        model = current_model if current_model != _UNKNOWN_MODEL else _DEFAULT_MODEL
         billable_estimate = fresh_input + estimated_output
         model_usage[model] = billable_estimate
         model_usage_breakdown[model] = {
@@ -397,7 +429,7 @@ def parse_session_turns(filepath: str | Path) -> list[dict[str, Any]]:
     turns: list[dict[str, Any]] = []
     pending_tools: list[str] = []
     pending_usage: dict[str, int] | None = None
-    current_model = "unknown"
+    current_model = _UNKNOWN_MODEL
     turn_index = 0
     for record in _iter_json_records(filepath):
         payload = _payload(record)
@@ -429,7 +461,7 @@ def parse_session_turns(filepath: str | Path) -> list[dict[str, Any]]:
                 "cache_creation": 0,
                 "cache_creation_1h": 0,
                 "cache_creation_5m": 0,
-                "model": current_model if current_model != "unknown" else "codex",
+                "model": current_model if current_model != _UNKNOWN_MODEL else _DEFAULT_MODEL,
                 "timestamp": record.get("timestamp"),
                 "gap_since_prev_seconds": None,
                 "tools_used": pending_tools,
@@ -458,12 +490,18 @@ def parse_jsonl_for_quality(filepath: str | Path) -> dict[str, Any] | None:
     agent_dispatches: list[tuple[int, int, int]] = []
     decisions: list[tuple[int, str]] = []
     last_usage: dict[str, int] | None = None
+    current_model = _UNKNOWN_MODEL
+    topic = None
     idx = 0
 
     for record in _iter_json_records(filepath):
         payload = _payload(record)
         payload_type = payload.get("type")
         ts = str(record.get("timestamp") or "")
+
+        model = _extract_model(payload)
+        if model:
+            current_model = model
 
         if record.get("type") == "compacted" or payload_type == "context_compacted":
             compactions += 1
@@ -485,6 +523,8 @@ def parse_jsonl_for_quality(filepath: str | Path) -> dict[str, Any] | None:
         elif payload_type in {"user_message", "message", "agent_message"}:
             text = _extract_text(payload)
             role = "assistant" if payload_type == "agent_message" else str(payload.get("role") or "user")
+            if role == "user":
+                topic = topic or _extract_topic(text)
             substantive = len(text.split()) > (20 if role == "assistant" else 10)
             messages.append((idx, role, len(text), substantive))
             if re.search(r"\b(chose|decided|because|switched|going with)\b", text, re.IGNORECASE):
@@ -537,7 +577,80 @@ def parse_jsonl_for_quality(filepath: str | Path) -> dict[str, Any] | None:
         "estimated": True,
         "context_tokens": last_usage["total_tokens"] if last_usage else None,
         "model_context_window": last_usage["model_context_window"] if last_usage else None,
+        "model": current_model if current_model != _UNKNOWN_MODEL else _DEFAULT_MODEL,
+        "topic": topic,
     }
+
+
+def iter_tool_outputs(
+    filepath: str | Path,
+    *,
+    min_chars: int = 4096,
+    max_outputs: int = 20,
+) -> list[dict[str, Any]]:
+    """Return large/high-signal Codex tool outputs from a session JSONL.
+
+    Balanced Codex hooks do not receive every PostToolUse payload. This
+    bounded transcript pass lets the Stop worker backfill the same durable
+    pointers Claude gets from PostToolUse archive hooks, without keeping tool
+    hooks enabled in the noisy default profile.
+    """
+    call_meta: dict[str, dict[str, str]] = {}
+    outputs: deque[dict[str, Any]] = deque(maxlen=max_outputs)
+    synthetic_index = 0
+
+    for record in _iter_json_records(filepath):
+        payload = _payload(record)
+        payload_type = payload.get("type")
+
+        if payload_type in {"function_call", "custom_tool_call"}:
+            call_id = str(payload.get("call_id") or payload.get("id") or synthetic_index)
+            raw_name = str(payload.get("name") or "unknown")
+            args = _parse_arguments(payload)
+            command_or_path = ""
+            if raw_name == "exec_command":
+                command_or_path = str(args.get("cmd") or args.get("command") or "")
+            elif raw_name == "apply_patch":
+                command_or_path = "apply_patch"
+            call_meta[call_id] = {
+                "tool_name": _tool_name(raw_name),
+                "raw_name": raw_name,
+                "command_or_path": command_or_path,
+            }
+
+        elif payload_type in {"function_call_output", "custom_tool_call_output"}:
+            call_id = str(payload.get("call_id") or synthetic_index)
+            text = str(payload.get("output") or "")
+            meta = call_meta.get(call_id, {})
+            if len(text) >= min_chars or _looks_like_error_text(text):
+                outputs.append({
+                    "tool_use_id": call_id,
+                    "tool_name": meta.get("tool_name", "Tool"),
+                    "tool_type": meta.get("raw_name", "function_call"),
+                    "command_or_path": meta.get("command_or_path", ""),
+                    "output": text,
+                    "timestamp": record.get("timestamp") or payload.get("timestamp"),
+                })
+
+        elif payload_type in {"exec_command_end", "patch_apply_end"}:
+            call_id = str(payload.get("call_id") or f"event-{synthetic_index}")
+            text = _event_output_text(payload)
+            exit_code = payload.get("exit_code")
+            status = str(payload.get("status") or "").lower()
+            high_signal = exit_code not in (None, 0) or "error" in status or _looks_like_error_text(text)
+            if text and (len(text) >= min_chars or high_signal):
+                outputs.append({
+                    "tool_use_id": call_id,
+                    "tool_name": "Bash" if payload_type == "exec_command_end" else "Edit",
+                    "tool_type": payload_type,
+                    "command_or_path": str(payload.get("cmd") or payload.get("command") or ""),
+                    "output": text,
+                    "timestamp": record.get("timestamp") or payload.get("timestamp"),
+                })
+
+        synthetic_index += 1
+
+    return list(outputs)
 
 
 def extract_session_state(filepath: str | Path, tail_lines: int = 500, max_files: int = 10) -> dict[str, Any] | None:
@@ -556,11 +669,9 @@ def extract_session_state(filepath: str | Path, tail_lines: int = 500, max_files
     seen_files: set[str] = set()
     recent_errors: list[str] = []
 
-    records: list[dict[str, Any]] = []
+    records: deque[dict[str, Any]] = deque(maxlen=tail_lines)
     for record in _iter_json_records(filepath):
         records.append(record)
-        if len(records) > tail_lines:
-            records.pop(0)
 
     if not records:
         return None
@@ -625,13 +736,13 @@ def extract_session_state(filepath: str | Path, tail_lines: int = 500, max_files
 
         elif payload_type in {"function_call_output", "custom_tool_call_output"}:
             text = str(payload.get("output") or "")
-            if _looks_like_error(text):
+            if _looks_like_error_text(text):
                 recent_errors.append(text[:300].strip())
         elif payload_type in {"exec_command_end", "patch_apply_end"}:
             text = _event_output_text(payload)
             exit_code = payload.get("exit_code")
             status = str(payload.get("status") or "").lower()
-            if exit_code not in (None, 0) or "error" in status or _looks_like_error(text):
+            if exit_code not in (None, 0) or "error" in status or _looks_like_error_text(text):
                 recent_errors.append(text[:300].strip())
 
     return {
@@ -706,10 +817,6 @@ def _extract_probable_write_paths(command: str) -> list[str]:
 
 def _is_plan_path(path: str) -> bool:
     return "/docs/plans/" in path and path.endswith(".md")
-
-
-def _looks_like_error(text: str) -> bool:
-    return bool(re.search(r"\b(error|failed|traceback|exception|permission denied|not found)\b", text, re.IGNORECASE))
 
 
 def _looks_like_fix(text: str) -> bool:

@@ -60,9 +60,11 @@ The source file at `skills/token-optimizer/assets/dashboard.html` is only a temp
 - Real local Codex session parsing from available JSONL logs.
 - API-equivalent token/cost calculations from logged usage.
 - Context window detection from logged model metadata, Codex config, then model defaults.
-- 7-signal context quality scoring where session data is available.
+- 7-signal context quality scoring where session data is available, with OpenAI/GPT-5.5 long-context calibration.
 - Balanced hook install by default.
-- Session continuity through `SessionStart`, throttled `Stop` checkpointing, and compact prompt guidance.
+- Session continuity through `SessionStart`, topic-relevant `UserPromptSubmit` hints, throttled `Stop` checkpointing, and compact prompt guidance.
+- Checkpoints include context-quality breakdowns, weakest signals, model/context-window metadata, and archived tool-result pointers.
+- Balanced Codex mode backfills large/high-signal tool outputs from JSONL at Stop into the same local archive and SQLite session store used by Claude PostToolUse hooks.
 - Codex skills, MCP, and plugin inventory with enable/disable commands.
 - Codex CLI status line support.
 - `codex-doctor` readiness checks.
@@ -75,8 +77,9 @@ The source file at `skills/token-optimizer/assets/dashboard.html` is only a temp
 | Status/setup answer in chat | `report`, `quick`, `coach`, quality score | `report`, `quick`, `coach`, `quality current`, `codex-doctor` | Works |
 | Guided setup repair | Installs Claude hooks, daemon, smart compaction, quality bar | Installs balanced Codex hooks, compact prompt, and optional status line | Works, different primitives |
 | `token-coach` | Conversational coaching with Claude setup and multi-agent patterns | Conversational coaching translated to Codex setup, reasoning effort, compact behavior, and plugin surface | Works |
-| Runtime quality nudges | `UserPromptSubmit` quality-cache warnings | `UserPromptSubmit` quality-cache warnings through Codex hook bridge | Works, depends on hook payload |
-| Session continuity | `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`, `StopFailure` | `SessionStart`, throttled `Stop`, compact prompt guidance | Partial parity |
+| Runtime quality nudges | `UserPromptSubmit` quality-cache warnings | `UserPromptSubmit` quality-cache warnings plus topic-relevant continuity hints through Codex hook bridge | Works, depends on hook payload |
+| Session continuity | `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`, `StopFailure` | `SessionStart`, topic hints, throttled `Stop`, compact prompt guidance, quality-aware checkpoints | Partial parity, stronger than earlier beta |
+| Important tool-result memory | PostToolUse archives large outputs into local files and SQLite session store | Balanced mode backfills large/high-signal outputs from Codex JSONL at Stop; telemetry profile can still use PostToolUse | Works, different timing |
 | Dashboard | Auto-refresh via hooks/daemon, Claude paths | Auto-refresh via balanced Stop hook, Codex paths | Works |
 | Fleet Auditor | Claude adapter plus other systems | Adds Codex adapter, still scans Claude/OpenClaw/etc. | Works, beta |
 | Quick/health commands | Claude slash commands | Docs are Codex-aware, but Codex command exposure depends on Codex plugin command support | Partial |
@@ -96,6 +99,7 @@ These are shown honestly in the dashboard and should not be marketed as complete
 - Claude-style `PreCompact`, `PostCompact`, and `StopFailure` hook parity is approximated with compact prompts and checkpointing.
 - Cache write TTL breakdowns are hidden because Codex logs do not expose Claude-style cache-write TTL fields.
 - Tool-level hooks are still less complete than Claude Code; keep `PreToolUse` and `PostToolUse` opt-in until Codex exposes richer, stable payloads across tools.
+- Codex does not expose Claude-style `PostCompact`; post-compact recovery is approximated with compact prompt guidance, same-session checkpoints, and topic hints at the next user prompt.
 
 ## Release Gate
 

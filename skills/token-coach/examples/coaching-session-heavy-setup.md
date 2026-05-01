@@ -21,7 +21,7 @@ When does it feel slow? Early in sessions, after a few messages, or during multi
 
 Two things would help most:
 
-First, your skills: 54 installed, but in the last 30 days you've only invoked 19 of them. Those 35 unused skills cost ~3,500 tokens per session for zero benefit. Move them to ~/.claude/skills/_archived/. You can always move them back.
+First, your skills: 54 installed, but in the last 30 days you've only invoked 19 of them. Those 35 unused skills cost ~3,500 tokens per session for zero benefit. Move them to ~/.claude/_backups/skills-archived/. You can always move them back.
 
 Second, your CLAUDE.md has a 400-line section about coding standards that should be a skill. As a skill, it'd cost ~100 tokens in the menu instead of ~2,000 tokens every message. That's a 95% reduction on that content alone.
 
@@ -33,13 +33,13 @@ Together: ~5,500 tokens recovered per session. That buys you roughly 3-4 more me
 
 The quick process:
 ```bash
-mkdir -p ~/.claude/skills/_archived
-mv ~/.claude/skills/[skill-name] ~/.claude/skills/_archived/
+mkdir -p ~/.claude/_backups/skills-archived
+mv ~/.claude/skills/[skill-name] ~/.claude/_backups/skills-archived/
 ```
 
 ## Action Plan
 
-1. **Archive 35 unused skills** (Quick Win): Move to ~/.claude/skills/_archived/. Recovers ~3,500 tokens/session.
+1. **Archive 35 unused skills** (Quick Win): Move to ~/.claude/_backups/skills-archived/. Recovers ~3,500 tokens/session.
 2. **Extract coding standards from CLAUDE.md to a skill** (Medium): Create a coding-standards skill. Recovers ~1,900 tokens/message.
 3. **Review 8 MCP servers** (Medium): Disable servers you don't use in CLI. Ask yourself which you actually use in conversation before disabling.
 4. **Use /compact at 50-70%** (Habit): Don't wait for auto-compact. Run /compact proactively around message 8-10 given your current setup.

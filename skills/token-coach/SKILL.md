@@ -112,12 +112,14 @@ This is a CONVERSATION. Not a wall of text.
 5. For agentic systems (option c): walk through their architecture step by step
 6. Use the coaching scripts for structure, but keep it natural
 
-For Codex specifically, translate the advice:
+For Codex specifically, translate all advice to native Codex concepts:
 - `AGENTS.md` instead of `CLAUDE.md`
 - Codex memories instead of `MEMORY.md`
-- balanced Codex hooks instead of Claude `SessionEnd`/smart-compaction hooks
-- reasoning effort and task boundaries instead of Haiku/Sonnet/Opus routing
-- compact prompt guidance instead of Claude `PreCompact`/`PostCompact` parity
+- balanced Codex hooks instead of Claude hooks
+- Intelligence levels (Low/Medium/High/Extra High) and model selection (GPT-5.5, GPT-5.4, GPT-5.4-Mini, GPT-5.3-Codex, GPT-5.2) instead of Opus/Sonnet/Haiku routing
+- Reasoning effort settings instead of model-per-agent routing
+- compact prompt guidance instead of PreCompact/PostCompact lifecycle hooks
+- Never reference Claude-specific concepts (Opus, Sonnet, Haiku, CLAUDE.md) when coaching a Codex user
 
 **Tone**: Knowledgeable friend, not corporate consultant. Be direct about what matters and why. Use real numbers from their data.
 

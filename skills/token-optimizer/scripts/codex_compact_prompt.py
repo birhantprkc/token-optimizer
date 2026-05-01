@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import os
+import json
 import re
 import sys
-import tempfile
 from pathlib import Path
 
+import codex_io
 from runtime_env import codex_home
 
 PROMPT_FILENAME = "codex-compact-prompt.md"
@@ -53,58 +53,6 @@ def _config_path() -> Path:
     return codex_home() / "config.toml"
 
 
-def _ensure_codex_home() -> Path:
-    home = codex_home()
-    if home.exists():
-        if home.is_symlink() or not home.is_dir():
-            raise ValueError(f"{home} must be a real directory")
-    else:
-        home.mkdir(mode=0o700)
-    return home.resolve(strict=True)
-
-
-def _safe_codex_child(*parts: str) -> Path:
-    home = _ensure_codex_home()
-    target = home.joinpath(*parts)
-    parent = target.parent
-    if parent.exists():
-        if parent.is_symlink() or not parent.is_dir():
-            raise ValueError(f"{parent} must be a real directory")
-        parent_resolved = parent.resolve(strict=True)
-        if not parent_resolved.is_relative_to(home):
-            raise ValueError(f"{parent} escapes Codex home")
-    else:
-        parent.mkdir(mode=0o700)
-    if target.exists() and target.is_symlink():
-        raise ValueError(f"{target} must not be a symlink")
-    target_resolved = target.resolve(strict=target.exists())
-    if not target_resolved.is_relative_to(home):
-        raise ValueError(f"{target} escapes Codex home")
-    return target
-
-
-def _validate_codex_target(path: Path) -> None:
-    home = codex_home()
-    if home.exists():
-        if home.is_symlink() or not home.is_dir():
-            raise ValueError(f"{home} must be a real directory")
-        home_resolved = home.resolve(strict=True)
-    else:
-        home_resolved = home.resolve(strict=False)
-
-    parent = path.parent
-    if parent.exists():
-        if parent.is_symlink() or not parent.is_dir():
-            raise ValueError(f"{parent} must be a real directory")
-        if not parent.resolve(strict=True).is_relative_to(home_resolved):
-            raise ValueError(f"{parent} escapes Codex home")
-    if path.exists():
-        if path.is_symlink():
-            raise ValueError(f"{path} must not be a symlink")
-        if not path.resolve(strict=True).is_relative_to(home_resolved):
-            raise ValueError(f"{path} escapes Codex home")
-
-
 def _managed_block(prompt_path: Path) -> str:
     return "\n".join(
         [
@@ -118,7 +66,6 @@ def _managed_block(prompt_path: Path) -> str:
 
 def json_string(value: str) -> str:
     """Return a TOML-compatible basic string for simple path values."""
-    import json
     return json.dumps(value)
 
 
@@ -151,8 +98,8 @@ def plan_install(force: bool = False) -> dict[str, str | bool]:
     """Validate a compact-prompt install without writing files."""
     prompt_path = _prompt_path()
     config_path = _config_path()
-    _validate_codex_target(prompt_path)
-    _validate_codex_target(config_path)
+    codex_io.validate_codex_path(prompt_path, codex_home())
+    codex_io.validate_codex_path(config_path, codex_home())
 
     try:
         config_text = config_path.read_text(encoding="utf-8")
@@ -172,26 +119,11 @@ def plan_install(force: bool = False) -> dict[str, str | bool]:
     }
 
 
-def _atomic_write(path: Path, content: str, mode: int = 0o600) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        os.chmod(tmp_name, mode)
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-
-
 def install(force: bool = False) -> str:
-    prompt_path = _safe_codex_child("token-optimizer", PROMPT_FILENAME)
-    config_path = _safe_codex_child("config.toml")
-    _atomic_write(prompt_path, COMPACT_PROMPT)
+    home = codex_home()
+    prompt_path = codex_io.ensure_codex_child(home, "token-optimizer", PROMPT_FILENAME)
+    config_path = codex_io.ensure_codex_child(home, "config.toml")
+    codex_io.atomic_write(prompt_path, COMPACT_PROMPT)
 
     try:
         config_text = config_path.read_text(encoding="utf-8")
@@ -202,7 +134,7 @@ def install(force: bool = False) -> str:
         raise ValueError("config.toml already has compact_prompt; rerun with --force after reviewing precedence")
 
     updated, action = _replace_or_append_config(config_text, prompt_path, force=force)
-    _atomic_write(config_path, updated)
+    codex_io.atomic_write(config_path, updated)
     return action
 
 

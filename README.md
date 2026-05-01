@@ -6,6 +6,7 @@
   <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.6.4-green" alt="Version 5.6.4"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.4.1-brightgreen" alt="OpenClaw v2.4.1"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/codex"><img src="https://img.shields.io/badge/Codex-v0.1.0--beta-orange" alt="Codex v0.1.0-beta"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg" alt="License: PolyForm Noncommercial"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/token-optimizer" alt="GitHub Stars"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/commits/main"><img src="https://img.shields.io/github/last-commit/alexgreensh/token-optimizer" alt="Last Commit"></a>
@@ -31,7 +32,7 @@ They compress command output, which covers 15-25% of your context on a good day.
 Token Optimizer covers all of it, keeps your work alive across compactions, measures whether the optimization actually helped, and gives you a <strong>live dashboard</strong> that shows every token, every dollar, and every turn, auto-updated after every session. Runs fully local. Zero context tokens used. Zero runtime dependencies.
 </p>
 <p align="center">
-Works on <strong>Claude Code</strong> and <strong>OpenClaw</strong> today. Windsurf, Cursor, and more on the way.
+Works on <strong>Claude Code</strong>, <strong>OpenClaw</strong>, and <strong>Codex</strong> (beta) today. Windsurf, Cursor, and more on the way.
 </p>
 
 <p align="center">
@@ -776,6 +777,40 @@ Inside OpenClaw, run `/token-optimizer` for a guided audit with coaching.
 **Active Compression features**: v5 feature registry, Delta Mode (smart re-reads with proper offset/limit scoping), Structure Map Beta local-only measurement, plus the dashboard, CLI, and first-run welcome flow. Bash Output Compression, Quality Nudges, and Loop Detection are on the OpenClaw track pending upstream hook support.
 
 See [`openclaw/README.md`](openclaw/README.md) for full docs.
+
+---
+
+## Codex Beta
+
+Python adapter for OpenAI Codex (CLI and Desktop). Same core engine, adapted for Codex's hook surface, AGENTS.md, GPT-5.x models, and intelligence levels.
+
+```bash
+codex plugin marketplace add alexgreensh/token-optimizer
+```
+
+Then in the Codex TUI: `/plugins` and install Token Optimizer. Auto-updates on startup.
+
+After install, set up hooks for your project:
+```bash
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --project "$PWD"
+```
+
+### Parity at a glance
+
+| Capability | Claude Code | Codex Beta |
+|---|---|---|
+| Context audit | CLAUDE.md, memory, skills, MCP, hooks, commands | AGENTS.md, Codex memories, skills/plugins, MCP, hooks, compact prompt |
+| Quality scoring | 7-signal, Opus/Sonnet calibration | 7-signal, GPT-5.5 calibration |
+| Session continuity | PreCompact + PostCompact + SessionStart + SessionEnd | SessionStart + Stop checkpoints + compact prompt guidance |
+| Active compression (Delta, Structure Map, Bash) | Full, automatic | Delta and Structure Map waiting on Codex PreToolUse parity. Bash experimental |
+| Dashboard | Auto-refresh, bookmarkable localhost URL | Auto-refresh via Stop hook, file-based |
+| Coach | Opus/Sonnet/Haiku routing advice | Intelligence level + GPT model selection advice |
+| Fleet Auditor | Claude + OpenClaw + others | Claude + Codex + OpenClaw + others |
+| Cost tracking | Anthropic, Vertex, Bedrock tiers | GPT-5.5/5.4/5.4-Mini/5.3-Codex/5.2 pricing |
+| Install | `/plugin marketplace add` | `codex plugin marketplace add` |
+| Auto-update | Marketplace auto-update | Git-backed marketplace auto-update |
+
+See [`codex/README.md`](codex/README.md) for full docs, install profiles, and the complete feature parity table.
 
 ---
 

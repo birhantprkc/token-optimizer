@@ -5,12 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
-import tempfile
 from pathlib import Path
 
+import codex_io
 from runtime_env import codex_home
 
 MANAGED_BEGIN = "# BEGIN token-optimizer status line"
@@ -38,39 +37,6 @@ SETTING_LINE_RE = re.compile(r"(?m)^([ \t]*)(status_line|terminal_title)([ \t]*=
 
 def _config_path() -> Path:
     return codex_home() / "config.toml"
-
-
-def _validate_config_path(config_path: Path) -> None:
-    home = codex_home()
-    if home.exists():
-        if home.is_symlink() or not home.is_dir():
-            raise ValueError(f"{home} must be a real directory")
-        home_resolved = home.resolve(strict=True)
-    else:
-        home_resolved = home.resolve(strict=False)
-
-    parent = config_path.parent
-    if parent.exists():
-        if parent.is_symlink() or not parent.is_dir():
-            raise ValueError(f"{parent} must be a real directory")
-        if not parent.resolve(strict=True).is_relative_to(home_resolved):
-            raise ValueError(f"{parent} escapes Codex home")
-    if config_path.exists():
-        if config_path.is_symlink():
-            raise ValueError(f"{config_path} must not be a symlink")
-        if not config_path.resolve(strict=True).is_relative_to(home_resolved):
-            raise ValueError(f"{config_path} escapes Codex home")
-
-
-def _ensure_config_path(config_path: Path) -> Path:
-    home = codex_home()
-    if home.exists():
-        if home.is_symlink() or not home.is_dir():
-            raise ValueError(f"{home} must be a real directory")
-    else:
-        home.mkdir(mode=0o700)
-    _validate_config_path(config_path)
-    return config_path
 
 
 def _managed_block() -> str:
@@ -127,7 +93,7 @@ def _replace_or_append_config(config_text: str, *, force: bool) -> tuple[str, st
 def plan_install(force: bool = False) -> dict[str, str | bool | list[str]]:
     """Validate a Codex CLI status-line install without writing files."""
     config_path = _config_path()
-    _validate_config_path(config_path)
+    codex_io.validate_codex_path(config_path, codex_home())
     try:
         config_text = config_path.read_text(encoding="utf-8")
     except OSError:
@@ -142,30 +108,15 @@ def plan_install(force: bool = False) -> dict[str, str | bool | list[str]]:
     }
 
 
-def _atomic_write(path: Path, content: str, mode: int = 0o600) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        os.chmod(tmp_name, mode)
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-
-
 def install(force: bool = False) -> str:
-    config_path = _ensure_config_path(_config_path())
+    home = codex_home()
+    config_path = codex_io.ensure_codex_child(home, "config.toml")
     try:
         config_text = config_path.read_text(encoding="utf-8")
     except OSError:
         config_text = ""
     updated, action = _replace_or_append_config(config_text, force=force)
-    _atomic_write(config_path, updated)
+    codex_io.atomic_write(config_path, updated)
     return action
 
 

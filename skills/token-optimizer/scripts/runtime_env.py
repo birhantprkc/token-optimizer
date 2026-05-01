@@ -12,7 +12,9 @@ adapter grows feature-by-feature on top of it.
 
 from __future__ import annotations
 
+import functools
 import os
+import sys
 from pathlib import Path
 
 _RUNTIME_OVERRIDE = "TOKEN_OPTIMIZER_RUNTIME"
@@ -46,15 +48,18 @@ def _is_safe_home_dir(path: Path) -> bool:
 
 def _safe_home_from_env(env_var: str, fallback: Path) -> Path:
     """Resolve a runtime-home env var without letting it escape user home."""
-    raw = os.environ.get(env_var, "").strip()
-    if not raw:
+    raw_val = os.environ.get(env_var, "").strip()
+    if not raw_val:
         return fallback
-    candidate = Path(raw).expanduser()
-    if _is_safe_home_dir(candidate):
-        return candidate.resolve(strict=False)
-    return fallback
+    candidate = Path(raw_val).expanduser()
+    result: Path | None = candidate.resolve(strict=False) if _is_safe_home_dir(candidate) else None
+    if result is None:
+        print(f"[Token Optimizer] Warning: {env_var}={raw_val!r} rejected (not a safe directory). Using default.", file=sys.stderr)
+        return fallback
+    return result  # type: ignore[return-value]
 
 
+@functools.lru_cache(maxsize=None)
 def detect_runtime() -> str:
     """Return the active runtime name.
 

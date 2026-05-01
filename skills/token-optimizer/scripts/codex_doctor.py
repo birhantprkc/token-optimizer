@@ -40,9 +40,28 @@ REQUIRED_FILES = (
     "skills/token-optimizer/scripts/runtime_env.py",
 )
 
+SKILL_INSTALL_FILES = (
+    "SKILL.md",
+    "scripts/codex_hook_bridge.py",
+    "scripts/codex_session.py",
+    "scripts/codex_compact_prompt.py",
+    "scripts/codex_statusline.py",
+    "scripts/codex_install.py",
+    "scripts/measure.py",
+    "scripts/runtime_env.py",
+)
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _skill_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _is_plugin_repo(root: Path) -> bool:
+    return (root / ".codex-plugin" / "plugin.json").exists()
 
 
 def _check(status: str, name: str, detail: str) -> dict[str, str]:
@@ -173,6 +192,17 @@ def _required_file_checks(root: Path) -> list[dict[str, str]]:
     return [_check("OK", "Required files", f"{len(REQUIRED_FILES)} present")]
 
 
+def _skill_install_checks() -> list[dict[str, str]]:
+    root = _skill_root()
+    missing = [rel for rel in SKILL_INSTALL_FILES if not (root / rel).exists()]
+    if missing:
+        return [_check("FAIL", "Installed skill files", ", ".join(missing))]
+    return [
+        _check("OK", "Install shape", f"standalone Codex skill at {root}"),
+        _check("OK", "Installed skill files", f"{len(SKILL_INSTALL_FILES)} present"),
+    ]
+
+
 def _compact_prompt_check() -> dict[str, str]:
     config_path = codex_home() / "config.toml"
     try:
@@ -240,7 +270,12 @@ def _project_feature_checks(project: Path) -> list[dict[str, str]]:
         else:
             checks.append(_check("OK", f"Optional feature: {feature}", "off by default to avoid visible Codex hook rows"))
 
-    parser_path = _repo_root() / "skills/token-optimizer/scripts/codex_session.py"
+    repo_root = _repo_root()
+    parser_path = (
+        repo_root / "skills/token-optimizer/scripts/codex_session.py"
+        if _is_plugin_repo(repo_root)
+        else _skill_root() / "scripts/codex_session.py"
+    )
     if parser_path.exists():
         checks.append(_check("OK", "Feature: Dashboard session parsing", "available in current Codex adapter"))
     else:
@@ -284,9 +319,12 @@ def run_checks(project: Path | None = None) -> list[dict[str, str]]:
         _check("OK", "Runtime home", str(runtime_home())),
     ]
     checks.extend(_codex_home_warnings())
-    checks.extend(_required_file_checks(root))
-    checks.extend(_manifest_checks(root))
-    checks.extend(_hook_config_checks(root))
+    if _is_plugin_repo(root):
+        checks.extend(_required_file_checks(root))
+        checks.extend(_manifest_checks(root))
+        checks.extend(_hook_config_checks(root))
+    else:
+        checks.extend(_skill_install_checks())
     checks.append(_compact_prompt_check())
     checks.append(_status_line_check())
     checks.append(_project_hook_check(project))

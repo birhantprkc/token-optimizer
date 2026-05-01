@@ -5,14 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shlex
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
 import codex_compact_prompt
+import codex_io
 import codex_statusline
 
 TOKEN_OPTIMIZER_MARKER = "token-optimizer/scripts"
@@ -240,27 +239,6 @@ def _remove_hooks(existing: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
-    if path.parent.exists():
-        if path.parent.is_symlink() or not path.parent.is_dir():
-            raise ValueError(f"{path.parent} must be a real directory")
-    else:
-        path.parent.mkdir(mode=0o700)
-    text = json.dumps(data, indent=2, sort_keys=False) + "\n"
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        os.chmod(tmp_name, 0o600)
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-
-
 def install(
     project: Path,
     *,
@@ -298,7 +276,7 @@ def install(
             details["compact_prompt"] = codex_compact_prompt.install(force=force_compact_prompt)
         if enable_status_line:
             details["status_line"] = codex_statusline.install(force=force_status_line)
-        _atomic_write_json(path, updated)
+        codex_io.atomic_write_json(path, updated)
     return path, "installed", details
 
 
@@ -308,7 +286,7 @@ def uninstall(project: Path, *, dry_run: bool = False) -> tuple[Path, str, dict[
     updated = _remove_hooks(existing)
     details = {"hook_events": sorted(updated.get("hooks", {}).keys())}
     if not dry_run:
-        _atomic_write_json(path, updated)
+        codex_io.atomic_write_json(path, updated)
     return path, "removed", details
 
 
