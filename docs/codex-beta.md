@@ -1,105 +1,146 @@
-# Token Optimizer for Codex Beta
+# Token Optimizer for Codex
 
-Token Optimizer for Codex audits local Codex context usage, tracks real session token/cost data when Codex logs expose it, and installs a balanced hook profile for quality tracking and session continuity.
+Version: `0.1.0-beta`
 
-The beta is intentionally chat-first: when a user invokes Token Optimizer in Codex, it should tell them their status, setup, safest fixes, and behavior coaching before pointing at the dashboard.
+**Your AI is getting dumber and you can't see it.**
+
+*Find the ghost tokens. Survive compaction. Track the quality decay.*
+
+Token Optimizer for Codex audits local Codex context usage, tracks real session token/cost data from Codex JSONL logs, and installs a balanced hook profile for quality tracking and session continuity. Pure Python stdlib, zero dependencies, zero telemetry.
+
+## Status
+
+This is a **beta release**. The core audit, coaching, dashboard, and fleet scanning work. Some advanced features are waiting on upstream Codex API surfaces. See the [Feature Parity](#feature-parity) table below.
 
 ## Install
 
-From the Token Optimizer checkout or installed plugin directory:
+**Recommended (marketplace, auto-updates on startup):**
+
+```bash
+codex plugin marketplace add alexgreensh/token-optimizer
+```
+
+Then in the Codex TUI: `/plugins` and install Token Optimizer.
+
+> Auto-update: Codex auto-upgrades Git-backed marketplaces on startup via `git ls-remote`. Manual upgrade: `codex plugin marketplace upgrade`.
+
+**After install, set up hooks for your project:**
 
 ```bash
 TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --project "$PWD"
 ```
 
-The default `codex-install` profile is `balanced`.
-
-Balanced installs:
+The default profile is `balanced`. It installs:
 
 - `SessionStart` for session recovery context.
 - `UserPromptSubmit` for prompt-quality and loop nudges.
 - `Stop` for throttled dashboard refresh and continuity checkpointing.
 - Codex compact prompt guidance in `~/.codex/config.toml`.
 
-Optional profiles:
+### Hook profiles
+
+| Profile | What it installs | Noise level |
+|---------|-----------------|-------------|
+| `balanced` (default) | SessionStart + UserPromptSubmit + Stop + compact prompt | Low, 3 hook events |
+| `quiet` | Stop only | Minimal, 1 hook event |
+| `telemetry` | Balanced + PostToolUse | Medium, visible rows in Desktop |
+| `aggressive` | All hooks including experimental Bash PreToolUse | High, full coverage |
 
 ```bash
-# Lowest visible hook noise, but weaker live quality tracking
 TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --project "$PWD" --profile quiet
+```
 
-# Adds PostToolUse telemetry; useful for QA, noisier in Codex Desktop
-TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --project "$PWD" --profile telemetry
+## Usage
 
-# Enables all currently available Codex hooks, including experimental Bash PreToolUse
-TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --project "$PWD" --profile aggressive
+Inside Codex, invoke Token Optimizer conversationally:
+
+- **"Run Token Optimizer"** -- status, setup, and safest next fix
+- **"Run Token Coach"** -- make this project more token-efficient
+- **"Run Fleet Auditor"** -- cross-system audit including Codex sessions
+- **"Show the dashboard"** -- analytics dashboard
+
+### CLI commands
+
+```bash
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py report
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py coach
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py quality current
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py dashboard
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-doctor --project "$PWD"
 ```
 
 ## Dashboard
-
-Generate the local dashboard:
 
 ```bash
 TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py dashboard
 ```
 
-Open:
+Dashboard file: `~/.codex/_backups/token-optimizer/dashboard.html`
 
-```text
-~/.codex/_backups/token-optimizer/dashboard.html
-```
+Auto-refreshes via the balanced Stop hook after each session.
 
-The source file at `skills/token-optimizer/assets/dashboard.html` is only a template. It intentionally has no local metrics injected.
+## Feature Parity
 
-## What Works In This Beta
+### What's the same
 
-- Codex-native `token-optimizer` chat workflow for status, setup, setup repair, and conservative next fixes.
-- Codex-aware `token-coach` skill with `AGENTS.md`, Codex memories, balanced hooks, compact prompt, and reasoning-effort guidance.
-- Codex-aware `token-dashboard` skill with the correct generated file under `~/.codex/_backups/token-optimizer/dashboard.html`.
-- Codex-aware `fleet-auditor` skill and fleet adapter for `~/.codex/sessions` and `~/.codex/archived_sessions`.
-- Codex-native dashboard title and copy.
-- Real local Codex session parsing from available JSONL logs.
-- API-equivalent token/cost calculations from logged usage.
-- Context window detection from logged model metadata, Codex config, then model defaults.
-- 7-signal context quality scoring where session data is available, with OpenAI/GPT-5.5 long-context calibration.
-- Balanced hook install by default.
-- Session continuity through `SessionStart`, topic-relevant `UserPromptSubmit` hints, throttled `Stop` checkpointing, and compact prompt guidance.
-- Checkpoints include context-quality breakdowns, weakest signals, model/context-window metadata, and archived tool-result pointers.
-- Balanced Codex mode backfills large/high-signal tool outputs from JSONL at Stop into the same local archive and SQLite session store used by Claude PostToolUse hooks.
-- Codex skills, MCP, and plugin inventory with enable/disable commands.
-- Codex CLI status line support.
-- `codex-doctor` readiness checks.
+These features work identically on Claude Code and Codex:
 
-## Claude vs Codex Parity
+| Feature | Details |
+|---------|---------|
+| 7-signal quality scoring | Context fill, stale reads, bloated results, compaction depth, duplicates, decision density, agent efficiency. GPT-5.5 long-context calibration for Codex. |
+| Quality grades | S/A/B/C/D/F grades in dashboard, coach, CLI, and status line |
+| Session continuity | Checkpoints preserve decisions, files, errors, and next step across compaction and session boundaries |
+| Dashboard | Single-file HTML with per-turn token breakdown, cache analysis, cost tracking, quality overlays. Codex-native paths and copy |
+| Fleet Auditor | Cross-system scanning across Claude Code, Codex, OpenClaw, and others. Codex adapter parses `~/.codex/sessions/` |
+| Token Coach | Conversational coaching adapted for AGENTS.md, Codex memories, intelligence levels, reasoning effort |
+| Waste detectors | 11 detectors: PDF ingestion, web search overhead, retry churn, tool cascade, looping, overpowered model, weak model, bad decomposition, wasteful thinking, output waste, cache instability |
+| Cost tracking | Per-turn costs with GPT-5.5/5.4/5.4-Mini/5.3-Codex/5.2 pricing |
+| Memory/config audit | AGENTS.md audit (vs CLAUDE.md), Codex memories audit, skills/plugin/MCP inventory |
+| Setup repair | `codex-doctor` with 20 readiness checks, guided hook install, compact prompt setup |
+| Zero dependencies | Pure Python stdlib. No pip install, no network calls, no telemetry |
 
-| Product Surface | Claude Code | Codex Beta | Status |
-|---|---|---|---|
-| Main `token-optimizer` chat audit | Full deep audit of `CLAUDE.md`, memory, skills, MCP, hooks, commands, settings | Codex-native audit of `AGENTS.md`, Codex memories, skills/plugins, MCP, hooks, compact prompt, status line | Works, beta |
-| Status/setup answer in chat | `report`, `quick`, `coach`, quality score | `report`, `quick`, `coach`, `quality current`, `codex-doctor` | Works |
-| Guided setup repair | Installs Claude hooks, daemon, smart compaction, quality bar | Installs balanced Codex hooks, compact prompt, and optional status line | Works, different primitives |
-| `token-coach` | Conversational coaching with Claude setup and multi-agent patterns | Conversational coaching translated to Codex setup, reasoning effort, compact behavior, and plugin surface | Works |
-| Runtime quality nudges | `UserPromptSubmit` quality-cache warnings | `UserPromptSubmit` quality-cache warnings plus topic-relevant continuity hints through Codex hook bridge | Works, depends on hook payload |
-| Session continuity | `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`, `StopFailure` | `SessionStart`, topic hints, throttled `Stop`, compact prompt guidance, quality-aware checkpoints | Partial parity, stronger than earlier beta |
-| Important tool-result memory | PostToolUse archives large outputs into local files and SQLite session store | Balanced mode backfills large/high-signal outputs from Codex JSONL at Stop; telemetry profile can still use PostToolUse | Works, different timing |
-| Dashboard | Auto-refresh via hooks/daemon, Claude paths | Auto-refresh via balanced Stop hook, Codex paths | Works |
-| Fleet Auditor | Claude adapter plus other systems | Adds Codex adapter, still scans Claude/OpenClaw/etc. | Works, beta |
-| Quick/health commands | Claude slash commands | Docs are Codex-aware, but Codex command exposure depends on Codex plugin command support | Partial |
-| Delta read substitution | `PreToolUse Read` can replace repeated reads | Not active | Missing upstream hook parity |
-| Structure-map substitution | Active with Claude tool interception | Not active | Missing upstream hook parity |
-| Bash compression/rewrite | Active in Claude hook path | Experimental opt-in only | Partial |
-| Cache TTL breakdowns | Claude cache read/write fields available | Codex exposes cached input but not Claude-style TTL write breakdowns | Partial |
-| Skill usage telemetry | Claude trends can infer usage better | Codex logs do not expose all skill invocation signals yet | Partial |
+### What's different
 
-## Known Codex API Gaps
+Codex and Claude Code have different hook surfaces, so some features work differently:
 
-These are shown honestly in the dashboard and should not be marketed as complete parity yet:
+| Feature | Claude Code | Codex | Why |
+|---------|------------|-------|-----|
+| Config file | `CLAUDE.md` | `AGENTS.md` | Different platforms |
+| Memory system | `MEMORY.md` + project memory dirs | `~/.codex/memories/**/*.md` | Different storage |
+| Model routing advice | Opus/Sonnet/Haiku per-agent routing | Intelligence levels (Low/Medium/High/Extra High) + model selection (GPT-5.5, 5.4, 5.4-Mini, 5.3-Codex, 5.2) | Different model families |
+| Hook install | Auto via plugin, 8 hook events | `codex-install` command, 4 profiles, 3-5 hook events | Codex hooks are newer, fewer events |
+| Compact lifecycle | PreCompact + PostCompact hooks capture/restore | Compact prompt guidance + Stop checkpoints | Codex lacks PreCompact/PostCompact |
+| Tool result archive | PostToolUse archives immediately per tool call | Stop-time backfill from JSONL (balanced), or PostToolUse (telemetry profile) | Different timing |
+| Dashboard refresh | SessionEnd hook + daemon (bookmarkable URL) | Stop hook (file-based) | Codex daemon support coming |
+| Plugin install | `/plugin marketplace add alexgreensh/token-optimizer` | `codex plugin marketplace add alexgreensh/token-optimizer` | Same concept, different CLI |
+| Auto-update | Claude Code marketplace auto-update | Codex marketplace `git ls-remote` on startup | Both work |
 
-- Delta Mode read substitution is not active in Codex.
-- Structure Map substitution is not active in Codex.
-- True invisible Bash compression is experimental because current Codex hooks do not apply rewritten tool input the way Claude Code hooks can.
-- Claude-style `PreCompact`, `PostCompact`, and `StopFailure` hook parity is approximated with compact prompts and checkpointing.
-- Cache write TTL breakdowns are hidden because Codex logs do not expose Claude-style cache-write TTL fields.
-- Tool-level hooks are still less complete than Claude Code; keep `PreToolUse` and `PostToolUse` opt-in until Codex exposes richer, stable payloads across tools.
-- Codex does not expose Claude-style `PostCompact`; post-compact recovery is approximated with compact prompt guidance, same-session checkpoints, and topic hints at the next user prompt.
+### What's waiting on upstream Codex
+
+These features need Codex API changes before they can work:
+
+| Feature | Claude Code | Codex | Blocker |
+|---------|------------|-------|---------|
+| Delta read substitution | PreToolUse Read returns diff instead of full file | Not active | Codex PreToolUse Read hook doesn't support `updatedInput` |
+| Structure-map substitution | PreToolUse Read returns AST skeleton for re-reads | Not active | Same blocker |
+| Invisible Bash compression | PreToolUse Bash rewrites commands transparently | Experimental opt-in only | Codex hooks can't rewrite tool input silently |
+| Cache-write TTL breakdowns | Full 1h/5m cache-write split visible | Cached input shown, no TTL split | Codex logs don't expose cache-write TTL fields |
+| StopFailure recovery | Dedicated hook fires on crash/timeout | Approximated with Stop + compact prompt | No StopFailure hook in Codex |
+| Skill usage telemetry | Per-skill invocation tracking from trends | Partial, limited log signals | Codex logs don't expose all skill invocation events |
+
+## Codex Models and Pricing
+
+Token Optimizer tracks costs for all Codex models:
+
+| Model | Input ($/1M) | Cached ($/1M) | Output ($/1M) |
+|-------|-------------|---------------|---------------|
+| GPT-5.5 | $5.00 | $0.50 | $30.00 |
+| GPT-5.4 | $2.50 | $0.25 | $15.00 |
+| GPT-5.4-Mini | $0.75 | $0.075 | $4.50 |
+| GPT-5.3-Codex | $1.75 | $0.175 | $14.00 |
+| GPT-5.2 | $1.75 | $0.175 | $14.00 |
+
+Prices sourced from OpenAI API pricing. Dashboard shows per-turn costs using the model detected from session logs.
 
 ## Release Gate
 
@@ -113,4 +154,19 @@ ruff check skills/token-optimizer/scripts/measure.py skills/token-optimizer/scri
 vulture skills/token-optimizer/scripts/measure.py skills/token-optimizer/scripts/codex_install.py skills/token-optimizer/scripts/codex_doctor.py --min-confidence 80
 ```
 
-Expected beta readiness is `codex-doctor` with `0 FAIL`. A single warning for Codex API limitations is acceptable and should remain visible until upstream Codex exposes the missing hook/cache surfaces.
+Expected beta readiness is `codex-doctor` with `0 FAIL`.
+
+## Requirements
+
+- Python 3.8+
+- Codex CLI or Codex Desktop
+- macOS, Linux, or Windows
+- Zero runtime dependencies (pure Python stdlib)
+
+## License
+
+Same as the parent project: [PolyForm Noncommercial 1.0.0](../LICENSE).
+
+---
+
+Created by [Alex Greenshpun](https://linkedin.com/in/alexgreensh).
