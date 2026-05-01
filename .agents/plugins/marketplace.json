@@ -8,7 +8,7 @@
       "name": "token-optimizer",
       "source": {
         "source": "local",
-        "path": "../.."
+        "path": "./plugins/token-optimizer"
       },
       "policy": {
         "installation": "AVAILABLE",
