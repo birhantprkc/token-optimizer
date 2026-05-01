@@ -214,6 +214,7 @@ OPENAI_LONG_CONTEXT_PRICING = {
 OPENAI_LONG_CONTEXT_INPUT_THRESHOLD = 272_000
 
 CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW = 258_400
+_context_window_cache = None
 
 CONFIG_DIR = _CONFIG_BASE if _CONFIG_BASE else RUNTIME_DIR / "token-optimizer"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -1660,27 +1661,46 @@ def detect_context_window():
       6. Claude config.json or settings.json model field -> check model family
       7. Claude fallback: 1M (Opus 4.6+/4.7 and Sonnet 4.6 are 1M GA since March 2026)
     """
+    global _context_window_cache
+    cache_key = (
+        detect_runtime(),
+        os.environ.get("CLAUDE_CODE_DISABLE_1M_CONTEXT", ""),
+        os.environ.get("TOKEN_OPTIMIZER_CONTEXT_SIZE", ""),
+        os.environ.get("CODEX_MODEL", ""),
+        os.environ.get("OPENAI_MODEL", ""),
+        os.environ.get("CLAUDE_MODEL", ""),
+        os.environ.get("ANTHROPIC_MODEL", ""),
+        _cli_context_size,
+    )
+    if _context_window_cache and _context_window_cache[0] == cache_key:
+        return _context_window_cache[1]
+
+    def remember(value):
+        global _context_window_cache
+        _context_window_cache = (cache_key, value)
+        return value
+
     if os.environ.get("CLAUDE_CODE_DISABLE_1M_CONTEXT") == "1":
-        return 200_000, "env: CLAUDE_CODE_DISABLE_1M_CONTEXT"
+        return remember((200_000, "env: CLAUDE_CODE_DISABLE_1M_CONTEXT"))
     raw = os.environ.get("TOKEN_OPTIMIZER_CONTEXT_SIZE", "").strip()
     if raw:
         try:
-            return int(raw), "env: TOKEN_OPTIMIZER_CONTEXT_SIZE"
+            return remember((int(raw), "env: TOKEN_OPTIMIZER_CONTEXT_SIZE"))
         except ValueError:
             pass
     # CLI override (set by --context-size flag)
     if _cli_context_size:
-        return _cli_context_size, "cli: --context-size"
+        return remember((_cli_context_size, "cli: --context-size"))
     if detect_runtime() == "codex":
         logged_window, session_name = _latest_codex_logged_context_window()
         if logged_window:
-            return logged_window, f"codex session log: {session_name}"
+            return remember((logged_window, f"codex session log: {session_name}"))
         configured_window = _codex_config_int("model_context_window")
         if configured_window:
-            return configured_window, "codex config: model_context_window"
+            return remember((configured_window, "codex config: model_context_window"))
         model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL") or _codex_config_model()
         model_note = f" for {model}" if model else ""
-        return CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW, f"Codex conservative effective window{model_note} (override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"
+        return remember((CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW, f"Codex conservative effective window{model_note} (override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"))
     # Detect from model string in environment
     model = os.environ.get("CLAUDE_MODEL", "").lower()
     if not model:
@@ -1692,9 +1712,9 @@ def detect_context_window():
             if "claude-3-haiku" in model or "3-haiku" in model:
                 reason += " [WARNING: retires April 19, 2026. Migrate to Haiku 4.5]"
                 print(f"[Token Optimizer] WARNING: {model} retires April 19, 2026. Migrate to claude-haiku-4-5.", file=sys.stderr)
-            return 200_000, reason
+            return remember((200_000, reason))
         if _is_1m_model(model):
-            return 1_000_000, f"model: {model} (1M)"
+            return remember((1_000_000, f"model: {model} (1M)"))
     # Check config files for model preference
     for cfg_name in ("config.json", "settings.json"):
         cfg_path = CLAUDE_DIR / cfg_name
@@ -1709,15 +1729,15 @@ def detect_context_window():
                         if "claude-3-haiku" in m or "3-haiku" in m:
                             reason += " [WARNING: retires April 19, 2026. Migrate to Haiku 4.5]"
                             print(f"[Token Optimizer] WARNING: {m} retires April 19, 2026. Migrate to claude-haiku-4-5.", file=sys.stderr)
-                        return 200_000, reason
+                        return remember((200_000, reason))
                     if _is_1m_model(m):
-                        return 1_000_000, f"{cfg_name.split('.')[0]}: {m} (1M)"
+                        return remember((1_000_000, f"{cfg_name.split('.')[0]}: {m} (1M)"))
             except (json.JSONDecodeError, PermissionError, OSError):
                 pass
     # Since March 2026: Opus 4.6+/4.7 and Sonnet 4.6 have 1M context GA.
     # Most Claude Code users are on these models. Default to 1M.
     # Users on Haiku or older models can override with TOKEN_OPTIMIZER_CONTEXT_SIZE=200000.
-    return 1_000_000, "default (1M, Opus/Sonnet 4.6+ GA. Override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"
+    return remember((1_000_000, "default (1M, Opus/Sonnet 4.6+ GA. Override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"))
 
 
 # CLI override for context size (set by --context-size flag parsing)

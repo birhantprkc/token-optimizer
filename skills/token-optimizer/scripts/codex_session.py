@@ -17,6 +17,8 @@ from typing import Any
 from runtime_env import codex_home
 
 CHARS_PER_TOKEN = 4
+MAX_PARSE_FILE_BYTES = 96 * 1024 * 1024
+MAX_JSONL_LINE_CHARS = 8 * 1024 * 1024
 TOOL_ALIASES = {
     "exec_command": "Bash",
     "apply_patch": "Edit",
@@ -110,6 +112,35 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
+def _iter_json_records(filepath: str | Path, *, skip_large_file: bool = True):
+    """Yield parsed JSONL records without letting pathological logs dominate.
+
+    Codex can occasionally leave multi-GB session files or individual records
+    with enormous embedded tool output. Dashboard and hook refresh paths need
+    bounded work more than perfect telemetry from those outlier transcripts.
+    """
+    path = Path(filepath)
+    if skip_large_file:
+        try:
+            if path.stat().st_size > MAX_PARSE_FILE_BYTES:
+                return
+        except OSError:
+            return
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if len(line) > MAX_JSONL_LINE_CHARS:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict):
+                    yield record
+    except (PermissionError, OSError):
+        return
+
+
 def _token_usage(payload: dict[str, Any], *, cumulative: bool = True) -> dict[str, int] | None:
     info = payload.get("info")
     if not isinstance(info, dict):
@@ -199,38 +230,22 @@ def find_session_jsonl_by_id(session_id: str) -> Path | None:
 
 
 def _session_meta_id(path: Path) -> str | None:
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("type") != "session_meta":
-                    continue
-                value = _payload(record).get("id")
-                return _safe_session_id(str(value)) if value else None
-    except OSError:
-        return None
+    for record in _iter_json_records(path, skip_large_file=False):
+        if record.get("type") != "session_meta":
+            continue
+        value = _payload(record).get("id")
+        return _safe_session_id(str(value)) if value else None
     return None
 
 
 def _project_name_from_file(path: Path) -> str:
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("type") != "session_meta":
-                    continue
-                cwd = _payload(record).get("cwd")
-                if cwd:
-                    return Path(str(cwd)).name or str(cwd)
-                break
-    except OSError:
-        pass
+    for record in _iter_json_records(path, skip_large_file=False):
+        if record.get("type") != "session_meta":
+            continue
+        cwd = _payload(record).get("cwd")
+        if cwd:
+            return Path(str(cwd)).name or str(cwd)
+        break
     return path.parent.name
 
 
@@ -254,73 +269,64 @@ def parse_session_jsonl(filepath: str | Path) -> dict[str, Any] | None:
     current_model = "unknown"
     per_model_usage: dict[str, dict[str, int]] = {}
 
-    try:
-        with Path(filepath).open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = _payload(record)
-                payload_type = payload.get("type")
+    for record in _iter_json_records(filepath):
+        payload = _payload(record)
+        payload_type = payload.get("type")
 
-                ts = _parse_ts(record.get("timestamp") or payload.get("timestamp"))
-                if ts:
-                    first_ts = first_ts or ts
-                    last_ts = ts
+        ts = _parse_ts(record.get("timestamp") or payload.get("timestamp"))
+        if ts:
+            first_ts = first_ts or ts
+            last_ts = ts
 
-                if record.get("type") == "session_meta":
-                    version = version or payload.get("cli_version")
-                    slug = slug or payload.get("id")
+        if record.get("type") == "session_meta":
+            version = version or payload.get("cli_version")
+            slug = slug or payload.get("id")
 
-                model = _extract_model(payload)
-                if model:
-                    current_model = model
+        model = _extract_model(payload)
+        if model:
+            current_model = model
 
-                if payload_type == "token_count":
-                    usage = _token_usage(payload, cumulative=True)
-                    if usage:
-                        last_usage = usage
-                    turn_usage = _token_usage(payload, cumulative=False)
-                    if turn_usage:
-                        model_key = current_model if current_model != "unknown" else "codex"
-                        bucket = per_model_usage.setdefault(
-                            model_key,
-                            {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "output": 0},
-                        )
-                        bucket["fresh_input"] += turn_usage["input_tokens"]
-                        bucket["cache_read"] += turn_usage["cached_input_tokens"]
-                        bucket["output"] += turn_usage["output_tokens"] + turn_usage["reasoning_output_tokens"]
+        if payload_type == "token_count":
+            usage = _token_usage(payload, cumulative=True)
+            if usage:
+                last_usage = usage
+            turn_usage = _token_usage(payload, cumulative=False)
+            if turn_usage:
+                model_key = current_model if current_model != "unknown" else "codex"
+                bucket = per_model_usage.setdefault(
+                    model_key,
+                    {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "output": 0},
+                )
+                bucket["fresh_input"] += turn_usage["input_tokens"]
+                bucket["cache_read"] += turn_usage["cached_input_tokens"]
+                bucket["output"] += turn_usage["output_tokens"] + turn_usage["reasoning_output_tokens"]
 
-                elif payload_type in {"user_message", "message", "agent_message"}:
-                    text = _extract_text(payload)
-                    role = payload.get("role")
-                    if payload_type == "user_message" or role == "user":
-                        topic = topic or _extract_topic(text)
-                        input_text_chars += len(text)
-                    elif payload_type == "agent_message" or role == "assistant":
-                        output_text_chars += len(text)
-                    else:
-                        input_text_chars += len(text)
-                    message_count += 1
+        elif payload_type in {"user_message", "message", "agent_message"}:
+            text = _extract_text(payload)
+            role = payload.get("role")
+            if payload_type == "user_message" or role == "user":
+                topic = topic or _extract_topic(text)
+                input_text_chars += len(text)
+            elif payload_type == "agent_message" or role == "assistant":
+                output_text_chars += len(text)
+            else:
+                input_text_chars += len(text)
+            message_count += 1
 
-                elif payload_type in {"function_call", "custom_tool_call"}:
-                    raw_name = str(payload.get("name") or "unknown")
-                    name = _tool_name(raw_name)
-                    tool_calls[name] = tool_calls.get(name, 0) + 1
-                    api_calls += 1
-                    if raw_name == "spawn_agent":
-                        args = _parse_arguments(payload)
-                        agent_type = str(args.get("agent_type") or "default")
-                        subagents_used[agent_type] = subagents_used.get(agent_type, 0) + 1
+        elif payload_type in {"function_call", "custom_tool_call"}:
+            raw_name = str(payload.get("name") or "unknown")
+            name = _tool_name(raw_name)
+            tool_calls[name] = tool_calls.get(name, 0) + 1
+            api_calls += 1
+            if raw_name == "spawn_agent":
+                args = _parse_arguments(payload)
+                agent_type = str(args.get("agent_type") or "default")
+                subagents_used[agent_type] = subagents_used.get(agent_type, 0) + 1
 
-                elif payload_type in {"function_call_output", "custom_tool_call_output"}:
-                    tool_output_chars += len(str(payload.get("output") or ""))
-                elif payload_type in {"exec_command_end", "patch_apply_end"}:
-                    tool_output_chars += len(_event_output_text(payload))
-
-    except (PermissionError, OSError):
-        return None
+        elif payload_type in {"function_call_output", "custom_tool_call_output"}:
+            tool_output_chars += len(str(payload.get("output") or ""))
+        elif payload_type in {"exec_command_end", "patch_apply_end"}:
+            tool_output_chars += len(_event_output_text(payload))
 
     if message_count == 0 and api_calls == 0:
         return None
@@ -393,60 +399,52 @@ def parse_session_turns(filepath: str | Path) -> list[dict[str, Any]]:
     pending_usage: dict[str, int] | None = None
     current_model = "unknown"
     turn_index = 0
-    try:
-        with Path(filepath).open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = _payload(record)
-                payload_type = payload.get("type")
-                model = _extract_model(payload)
-                if model:
-                    current_model = model
-                if payload_type in {"function_call", "custom_tool_call"}:
-                    pending_tools.append(_tool_name(str(payload.get("name") or "unknown")))
-                elif payload_type == "token_count":
-                    usage = _token_usage(payload, cumulative=False)
-                    if usage:
-                        if turns:
-                            turn = turns[-1]
-                            turn["input_tokens"] = usage["input_tokens"] + usage["cached_input_tokens"]
-                            turn["output_tokens"] = usage["output_tokens"] + usage["reasoning_output_tokens"]
-                            turn["cache_read"] = usage["cached_input_tokens"]
-                            turn["estimated"] = False
-                        else:
-                            pending_usage = usage
-                elif payload_type == "agent_message":
-                    text = _extract_text(payload)
-                    turn = {
-                        "turn_index": turn_index,
-                        "role": "assistant",
-                        "input_tokens": 0,
-                        "output_tokens": _estimate_tokens(text),
-                        "cache_read": 0,
-                        "cache_creation": 0,
-                        "cache_creation_1h": 0,
-                        "cache_creation_5m": 0,
-                        "model": current_model if current_model != "unknown" else "codex",
-                        "timestamp": record.get("timestamp"),
-                        "gap_since_prev_seconds": None,
-                        "tools_used": pending_tools,
-                        "cost_usd": 0.0,
-                        "estimated": True,
-                    }
-                    if pending_usage:
-                        turn["input_tokens"] = pending_usage["input_tokens"] + pending_usage["cached_input_tokens"]
-                        turn["output_tokens"] = pending_usage["output_tokens"] + pending_usage["reasoning_output_tokens"]
-                        turn["cache_read"] = pending_usage["cached_input_tokens"]
-                        turn["estimated"] = False
-                        pending_usage = None
-                    turns.append(turn)
-                    pending_tools = []
-                    turn_index += 1
-    except (PermissionError, OSError):
-        pass
+    for record in _iter_json_records(filepath):
+        payload = _payload(record)
+        payload_type = payload.get("type")
+        model = _extract_model(payload)
+        if model:
+            current_model = model
+        if payload_type in {"function_call", "custom_tool_call"}:
+            pending_tools.append(_tool_name(str(payload.get("name") or "unknown")))
+        elif payload_type == "token_count":
+            usage = _token_usage(payload, cumulative=False)
+            if usage:
+                if turns:
+                    turn = turns[-1]
+                    turn["input_tokens"] = usage["input_tokens"] + usage["cached_input_tokens"]
+                    turn["output_tokens"] = usage["output_tokens"] + usage["reasoning_output_tokens"]
+                    turn["cache_read"] = usage["cached_input_tokens"]
+                    turn["estimated"] = False
+                else:
+                    pending_usage = usage
+        elif payload_type == "agent_message":
+            text = _extract_text(payload)
+            turn = {
+                "turn_index": turn_index,
+                "role": "assistant",
+                "input_tokens": 0,
+                "output_tokens": _estimate_tokens(text),
+                "cache_read": 0,
+                "cache_creation": 0,
+                "cache_creation_1h": 0,
+                "cache_creation_5m": 0,
+                "model": current_model if current_model != "unknown" else "codex",
+                "timestamp": record.get("timestamp"),
+                "gap_since_prev_seconds": None,
+                "tools_used": pending_tools,
+                "cost_usd": 0.0,
+                "estimated": True,
+            }
+            if pending_usage:
+                turn["input_tokens"] = pending_usage["input_tokens"] + pending_usage["cached_input_tokens"]
+                turn["output_tokens"] = pending_usage["output_tokens"] + pending_usage["reasoning_output_tokens"]
+                turn["cache_read"] = pending_usage["cached_input_tokens"]
+                turn["estimated"] = False
+                pending_usage = None
+            turns.append(turn)
+            pending_tools = []
+            turn_index += 1
     return turns
 
 
@@ -462,74 +460,66 @@ def parse_jsonl_for_quality(filepath: str | Path) -> dict[str, Any] | None:
     last_usage: dict[str, int] | None = None
     idx = 0
 
-    try:
-        with Path(filepath).open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = _payload(record)
-                payload_type = payload.get("type")
-                ts = str(record.get("timestamp") or "")
+    for record in _iter_json_records(filepath):
+        payload = _payload(record)
+        payload_type = payload.get("type")
+        ts = str(record.get("timestamp") or "")
 
-                if record.get("type") == "compacted" or payload_type == "context_compacted":
-                    compactions += 1
-                    reads = []
-                    writes = []
-                    tool_results = []
-                    system_reminders = []
-                    messages = []
-                    agent_dispatches = []
-                    decisions = []
-                    idx += 1
-                    continue
+        if record.get("type") == "compacted" or payload_type == "context_compacted":
+            compactions += 1
+            reads = []
+            writes = []
+            tool_results = []
+            system_reminders = []
+            messages = []
+            agent_dispatches = []
+            decisions = []
+            idx += 1
+            continue
 
-                if payload_type == "token_count":
-                    usage = _token_usage(payload, cumulative=True)
-                    if usage:
-                        last_usage = usage
+        if payload_type == "token_count":
+            usage = _token_usage(payload, cumulative=True)
+            if usage:
+                last_usage = usage
 
-                elif payload_type in {"user_message", "message", "agent_message"}:
-                    text = _extract_text(payload)
-                    role = "assistant" if payload_type == "agent_message" else str(payload.get("role") or "user")
-                    substantive = len(text.split()) > (20 if role == "assistant" else 10)
-                    messages.append((idx, role, len(text), substantive))
-                    if re.search(r"\b(chose|decided|because|switched|going with)\b", text, re.IGNORECASE):
-                        decisions.append((idx, text[:200].strip()))
+        elif payload_type in {"user_message", "message", "agent_message"}:
+            text = _extract_text(payload)
+            role = "assistant" if payload_type == "agent_message" else str(payload.get("role") or "user")
+            substantive = len(text.split()) > (20 if role == "assistant" else 10)
+            messages.append((idx, role, len(text), substantive))
+            if re.search(r"\b(chose|decided|because|switched|going with)\b", text, re.IGNORECASE):
+                decisions.append((idx, text[:200].strip()))
 
-                elif payload_type in {"function_call", "custom_tool_call"}:
-                    name = str(payload.get("name") or "")
-                    args = _parse_arguments(payload)
-                    if name == "exec_command":
-                        cmd = str(args.get("cmd") or "")
-                        if READ_CMD_RE.search(cmd):
-                            for path in _extract_shell_paths(cmd):
-                                reads.append((idx, path, ts))
-                    elif name == "apply_patch":
-                        patch = str(args.get("patch") or "")
-                        for path in PATCH_FILE_RE.findall(patch):
-                            writes.append((idx, path.strip(), ts))
-                    elif name == "spawn_agent":
-                        prompt = str(args.get("message") or args.get("prompt") or "")
-                        agent_dispatches.append((idx, len(prompt), 0))
+        elif payload_type in {"function_call", "custom_tool_call"}:
+            name = str(payload.get("name") or "")
+            args = _parse_arguments(payload)
+            if name == "exec_command":
+                cmd = str(args.get("cmd") or "")
+                if READ_CMD_RE.search(cmd):
+                    for path in _extract_shell_paths(cmd):
+                        reads.append((idx, path, ts))
+            elif name == "apply_patch":
+                patch = str(args.get("patch") or "")
+                for path in PATCH_FILE_RE.findall(patch):
+                    writes.append((idx, path.strip(), ts))
+            elif name == "spawn_agent":
+                prompt = str(args.get("message") or args.get("prompt") or "")
+                agent_dispatches.append((idx, len(prompt), 0))
 
-                elif payload_type in {"function_call_output", "custom_tool_call_output"}:
-                    text = str(payload.get("output") or "")
-                    call_id = str(payload.get("call_id") or idx)
-                    tool_results.append((idx, call_id, len(text), False))
-                    if agent_dispatches and agent_dispatches[-1][2] == 0:
-                        last = agent_dispatches[-1]
-                        agent_dispatches[-1] = (last[0], last[1], len(text))
-                elif payload_type in {"exec_command_end", "patch_apply_end"}:
-                    text = _event_output_text(payload)
-                    if text:
-                        call_id = str(payload.get("call_id") or idx)
-                        tool_results.append((idx, call_id, len(text), False))
+        elif payload_type in {"function_call_output", "custom_tool_call_output"}:
+            text = str(payload.get("output") or "")
+            call_id = str(payload.get("call_id") or idx)
+            tool_results.append((idx, call_id, len(text), False))
+            if agent_dispatches and agent_dispatches[-1][2] == 0:
+                last = agent_dispatches[-1]
+                agent_dispatches[-1] = (last[0], last[1], len(text))
+        elif payload_type in {"exec_command_end", "patch_apply_end"}:
+            text = _event_output_text(payload)
+            if text:
+                call_id = str(payload.get("call_id") or idx)
+                tool_results.append((idx, call_id, len(text), False))
 
-                idx += 1
-    except (PermissionError, OSError):
-        return None
+        idx += 1
 
     if not messages:
         return None
@@ -567,17 +557,10 @@ def extract_session_state(filepath: str | Path, tail_lines: int = 500, max_files
     recent_errors: list[str] = []
 
     records: list[dict[str, Any]] = []
-    try:
-        with Path(filepath).open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-                if len(records) > tail_lines:
-                    records.pop(0)
-    except (PermissionError, OSError):
-        return None
+    for record in _iter_json_records(filepath):
+        records.append(record)
+        if len(records) > tail_lines:
+            records.pop(0)
 
     if not records:
         return None
