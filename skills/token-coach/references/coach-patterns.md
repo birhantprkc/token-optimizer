@@ -67,7 +67,7 @@ Reference file for Token Coach. Loaded for options a/b/d (config optimization).
 ### The 50-Skill Trap
 **Problem**: 50+ skills installed. Menu overhead: 5,000+ tokens every session.
 **Symptoms**: Slow startup feel. Context fills faster than expected.
-**Fix**: Archive unused skills to ~/.claude/skills/_archived/. Keep only what you use this month. Review with `measure.py trends` to see which skills you actually invoke.
+**Fix**: Archive unused skills to ~/.claude/_backups/skills-archived/. A subfolder inside skills/ still loads as a namespace, so move OUTSIDE skills/ entirely. Review with `measure.py trends` to see which skills you actually invoke.
 **Savings**: ~100 tokens per archived skill per session.
 
 ### The Opus Addiction

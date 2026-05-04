@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from plugin_env import is_v5_flag_enabled, resolve_plugin_data_dir
+from runtime_env import runtime_home
 
 # Categorical exclusion: if ANY of these appear in the raw command string,
 # never rewrite. Checked BEFORE shlex tokenization to catch all forms.
@@ -157,8 +158,8 @@ def _is_whitelisted(command_str):
                 return False
         return True
 
-    # Check for sudo/su prefix (never rewrite)
-    if cmd in ("sudo", "su"):
+    # Never rewrite shell interpreters or privilege-escalation wrappers (also prevents recursion on rewritten commands).
+    if cmd in ("bash", "sh", "zsh", "dash", "fish", "sudo", "su"):
         return False
 
     return False
@@ -201,6 +202,12 @@ def main():
     if not compress_path.exists():
         return  # Wrapper missing, exit silently
 
+    # Route through python-launcher.sh so Windows Store shim / py launcher are handled.
+    plugin_root = script_dir.parent.parent.parent
+    launcher_path = plugin_root / "hooks" / "python-launcher.sh"
+    if not launcher_path.exists():
+        return  # Launcher missing, exit silently
+
     # Build rewritten command with proper quoting for each token
     try:
         original_tokens = shlex.split(command)
@@ -208,11 +215,15 @@ def main():
         return
 
     # Re-quote each token to handle paths with spaces safely (ARCH-F3)
-    rewritten = "python3 " + shlex.quote(str(compress_path)) + " " + " ".join(shlex.quote(t) for t in original_tokens)
+    rewritten = (
+        "bash " + shlex.quote(str(launcher_path))
+        + " " + shlex.quote(str(compress_path))
+        + " " + " ".join(shlex.quote(t) for t in original_tokens)
+    )
 
     # Log rewrite event to sidecar JSONL
     try:
-        log_dir = resolve_plugin_data_dir() or (Path.home() / ".claude" / "token-optimizer")
+        log_dir = resolve_plugin_data_dir() or (runtime_home() / "token-optimizer")
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "bash-rewrites.jsonl"
         event = json.dumps({
@@ -229,6 +240,7 @@ def main():
     # Emit updatedInput response
     response = {
         "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
             "updatedInput": {
                 "command": rewritten,

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations  # PEP 604 union syntax compat for Python 3.9
 """Fleet Auditor: Cross-Platform Agent Token Waste Auditor.
 
-Detects agent systems (Claude Code, OpenClaw, NanoClaw, Hermes, OpenCode, IronClaw),
+Detects agent systems (Claude Code, Codex, OpenClaw, NanoClaw, Hermes, OpenCode, IronClaw),
 collects token usage data, identifies waste patterns, and recommends fixes with
 dollar savings estimates.
 
@@ -15,14 +14,14 @@ Usage:
     python3 fleet.py report [--system X] [--json]   # Full report with $ savings
     python3 fleet.py dashboard [--serve]             # Generate fleet dashboard
 """
+from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 import sys
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -32,7 +31,10 @@ from typing import Any
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-from shared import (
+_TOKEN_OPTIMIZER_SCRIPT_DIR = _SCRIPT_DIR.parent.parent / "token-optimizer" / "scripts"
+if _TOKEN_OPTIMIZER_SCRIPT_DIR.exists():
+    sys.path.insert(0, str(_TOKEN_OPTIMIZER_SCRIPT_DIR))
+from shared import (  # noqa: E402 — must follow sys.path.insert above
     HOME,
     CLAUDE_DIR,
     normalize_model_name,
@@ -42,10 +44,29 @@ from shared import (
     find_subagent_jsonl_files,
     clean_project_name,
     init_sqlite_db,
-    migrate_add_columns,
     estimate_tokens_from_file,
     estimate_tokens_from_text,
 )
+
+try:  # noqa: E402
+    import codex_session  # type: ignore
+    from runtime_env import codex_home, detect_runtime, runtime_home  # type: ignore
+except Exception:  # pragma: no cover - optional Codex adapter dependency
+    codex_session = None
+
+    def detect_runtime() -> str:
+        return "claude"
+
+    def runtime_home() -> Path:
+        return CLAUDE_DIR
+
+    def codex_home() -> Path:
+        return HOME / ".codex"
+
+try:  # noqa: E402
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python <3.11
+    tomllib = None
 
 
 # Claude Code adds ~35 tokens of boilerplate wrapper per skill entry
@@ -85,7 +106,7 @@ def _estimate_skill_frontmatter_tokens(skill_md: Path) -> int:
 # Constants
 # ---------------------------------------------------------------------------
 
-FLEET_DB_DIR = CLAUDE_DIR / "_backups" / "token-optimizer"
+FLEET_DB_DIR = runtime_home() / "_backups" / "token-optimizer"
 FLEET_DB = FLEET_DB_DIR / "fleet.db"
 FLEET_DASHBOARD_PATH = FLEET_DB_DIR / "fleet-dashboard.html"
 
@@ -131,7 +152,9 @@ def _load_pricing() -> dict[str, dict[str, float]]:
 def calculate_cost(tokens: "TokenBreakdown", model: str) -> float:
     """Calculate USD cost for a token breakdown at given model rates."""
     pricing = _load_pricing()
-    rates = pricing.get(model, pricing.get("sonnet", {}))
+    rates = pricing.get(model)
+    if not rates:
+        return 0.0
     cost = 0.0
     cost += tokens.input * rates.get("input", 0)
     cost += tokens.output * rates.get("output", 0)
@@ -158,7 +181,7 @@ class TokenBreakdown:
 
 @dataclass
 class AgentRun:
-    system: str                    # "claude", "openclaw", "hermes", "opencode", "nanoclaw", "ironclaw"
+    system: str                    # "claude", "codex", "openclaw", "hermes", "opencode", "nanoclaw", "ironclaw"
     session_id: str = ""
     agent_name: str = ""
     project: str = ""
@@ -640,6 +663,157 @@ class ClaudeCodeAdapter(BaseAdapter):
         return config
 
 
+class CodexAdapter(BaseAdapter):
+    """Adapter for Codex (~/.codex/sessions/ and ~/.codex/archived_sessions/)."""
+
+    name = "codex"
+    display_name = "Codex"
+
+    def detect(self) -> tuple[bool, float, str]:
+        if codex_session is None:
+            return False, 0.0, "Codex parser unavailable"
+        home = codex_home()
+        roots = [home / "sessions", home / "archived_sessions"]
+        if not home.exists():
+            return False, 0.0, "~/.codex/ not found"
+        jsonl_count = 0
+        for root in roots:
+            if root.exists():
+                for _ in root.rglob("*.jsonl"):
+                    jsonl_count += 1
+                    if jsonl_count > 5:
+                        break
+            if jsonl_count > 5:
+                break
+        if jsonl_count == 0:
+            return True, 0.3, "~/.codex/ exists but no session logs found"
+        return True, 1.0, f"Found {jsonl_count}+ session logs in ~/.codex/sessions/"
+
+    def scan(self, since: datetime, conn: sqlite3.Connection | None = None) -> tuple[list[AgentRun], list[str]]:
+        if codex_session is None:
+            return [], ["Codex parser unavailable"]
+        days = max(1, int((datetime.now(timezone.utc) - since).total_seconds() / 86400) + 1)
+        files = codex_session.find_all_jsonl_files(days=days)
+        runs: list[AgentRun] = []
+        errors: list[str] = []
+
+        for filepath, _mtime, project_name in files:
+            session_id = filepath.stem
+            if conn and _is_run_collected(conn, "codex", str(filepath), session_id):
+                continue
+            try:
+                parsed = codex_session.parse_session_jsonl(filepath)
+            except Exception as exc:
+                errors.append(f"{filepath}: {exc}")
+                continue
+            if not parsed:
+                continue
+            run = self._parsed_to_run(filepath, project_name, parsed)
+            if run:
+                runs.append(run)
+        return runs, errors
+
+    def _parsed_to_run(self, filepath: Path, project_name: str, parsed: dict[str, Any]) -> AgentRun | None:
+        input_total = int(parsed.get("total_input_tokens") or 0)
+        cache_read = int(parsed.get("total_cache_read") or 0)
+        output = int(parsed.get("total_output_tokens") or 0)
+        if input_total <= 0 and output <= 0 and int(parsed.get("message_count") or 0) == 0:
+            return None
+
+        model_usage = parsed.get("model_usage") or {}
+        dominant_model_raw = max(model_usage, key=model_usage.get) if model_usage else "codex"
+        model = normalize_model_name(str(dominant_model_raw)) or str(dominant_model_raw)
+        tokens = TokenBreakdown(
+            input=max(0, input_total - cache_read),
+            output=output,
+            cache_read=cache_read,
+            cache_write=int(parsed.get("total_cache_create") or 0),
+        )
+        message_count = int(parsed.get("message_count") or 0)
+        outcome = "success"
+        if message_count <= 2 and output < 200:
+            outcome = "abandoned"
+        elif output < 100 and input_total > 50_000:
+            outcome = "empty"
+
+        first_ts = parse_timestamp(parsed.get("first_ts"))
+        return AgentRun(
+            system="codex",
+            session_id=str(parsed.get("slug") or filepath.stem),
+            agent_name="main",
+            project=project_name or filepath.parent.name,
+            timestamp=first_ts or datetime.fromtimestamp(filepath.stat().st_mtime, timezone.utc),
+            duration_seconds=float(parsed.get("duration_minutes") or 0) * 60,
+            tokens=tokens,
+            cost_usd=calculate_cost(tokens, model),
+            model=model,
+            context_window_size=int(parsed.get("model_context_window") or 200_000),
+            run_type="manual",
+            outcome=outcome,
+            message_count=message_count,
+            tools_used=sorted((parsed.get("tool_calls") or {}).keys()),
+            source_path=str(filepath),
+        )
+
+    def parse_config(self) -> dict:
+        config: dict[str, Any] = {
+            "skills": [],
+            "mcp_servers": [],
+            "claude_md_tokens": 0,
+            "instruction_file_label": "AGENTS.md",
+            "memory_md_tokens": 0,
+            "commands": [],
+            "hooks": {},
+        }
+        home = codex_home()
+
+        for base in (home / "skills", home / "plugins" / "cache"):
+            if not base.exists():
+                continue
+            for skill_md in base.rglob("SKILL.md"):
+                config["skills"].append({
+                    "name": skill_md.parent.name,
+                    "tokens": _estimate_skill_frontmatter_tokens(skill_md),
+                })
+
+        agents_tokens = 0
+        for agents_name in ("AGENTS.override.md", "AGENTS.md"):
+            agents_path = home / agents_name
+            if agents_path.exists():
+                agents_tokens += estimate_tokens_from_file(agents_path)
+        config["claude_md_tokens"] = agents_tokens
+
+        memories_dir = home / "memories"
+        if memories_dir.exists():
+            for mem_file in memories_dir.rglob("*.md"):
+                config["memory_md_tokens"] = max(
+                    config["memory_md_tokens"],
+                    estimate_tokens_from_file(mem_file),
+                )
+
+        config_path = home / "config.toml"
+        if config_path.exists() and tomllib is not None:
+            try:
+                with config_path.open("rb") as handle:
+                    cfg = tomllib.load(handle)
+                mcp = cfg.get("mcp_servers", {})
+                if isinstance(mcp, dict):
+                    config["mcp_servers"] = list(mcp.keys())
+            except (OSError, tomllib.TOMLDecodeError):
+                pass
+
+        hooks_path = Path.cwd() / ".codex" / "hooks.json"
+        if hooks_path.exists():
+            try:
+                hooks_data = json.loads(hooks_path.read_text(encoding="utf-8"))
+                hooks = hooks_data.get("hooks", {})
+                config["hooks"] = hooks if isinstance(hooks, dict) else {}
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        return config
+
+
 # Stubs for Phase 1.5+ adapters
 class OpenClawAdapter(BaseAdapter):
     name = "openclaw"
@@ -710,6 +884,7 @@ class IronClawAdapter(BaseAdapter):
 # Adapter registry
 ADAPTER_REGISTRY: list[type[BaseAdapter]] = [
     ClaudeCodeAdapter,
+    CodexAdapter,
     OpenClawAdapter,
     NanoClawAdapter,
     HermesAdapter,
@@ -798,8 +973,13 @@ class SkillBloat(BaseDetector):
         monthly_sessions = 30  # rough estimate
         monthly_waste = total_skill_tokens * 20 * monthly_sessions
 
-        cost_per_token = 3.0 / 1e6  # sonnet input rate as baseline
-        monthly_cost = monthly_waste * cost_per_token
+        if system == "codex":
+            monthly_cost = 0.0
+            fix_snippet = "# Disable truly stale user skills with:\n# TOKEN_OPTIMIZER_RUNTIME=codex python3 measure.py codex-skill disable --path <skill-dir>"
+        else:
+            cost_per_token = 3.0 / 1e6  # sonnet input rate as baseline
+            monthly_cost = monthly_waste * cost_per_token
+            fix_snippet = "# Move unused skills out of ~/.claude/skills/\n# Check which skills you actually use:\n# python3 measure.py trends --days 30"
 
         return [WasteFinding(
             system=system,
@@ -810,8 +990,8 @@ class SkillBloat(BaseDetector):
             description=f"{len(skills)} skills loaded ({total_skill_tokens:,} tokens overhead per API call)",
             monthly_waste_usd=monthly_cost,
             monthly_waste_tokens=monthly_waste,
-            recommendation=f"Archive unused skills. Each removed skill saves ~100 tokens per API call across all sessions.",
-            fix_snippet="# Move unused skills out of ~/.claude/skills/\n# Check which skills you actually use:\n# python3 measure.py trends --days 30",
+            recommendation="Archive unused skills. Each removed skill saves ~100 tokens per API call across all sessions.",
+            fix_snippet=fix_snippet,
             evidence={"skill_count": len(skills), "skill_names": [s.get("name", "?") for s in skills]},
         )]
 
@@ -850,7 +1030,11 @@ class ToolDefinitionBloat(BaseDetector):
             monthly_waste_tokens=tool_tokens * 20 * 30,  # per call * calls/session * sessions/month
             monthly_waste_usd=0,  # Hard to monetize config overhead accurately
             recommendation="Disable unused MCP servers. Use ToolSearch (deferred loading) for large tool sets.",
-            fix_snippet="# Check which MCP servers are actually used:\n# Review ~/.claude/settings.json mcpServers section",
+            fix_snippet=(
+                "# Check which MCP servers are actually used:\n"
+                "# Codex: review ~/.codex/config.toml [mcp_servers]\n"
+                "# Claude Code: review ~/.claude/settings.json mcpServers section"
+            ),
             evidence={"mcp_count": len(mcp_servers), "servers": mcp_servers[:10]},
         )]
 
@@ -864,6 +1048,7 @@ class MemoryConfigOverhead(BaseDetector):
     def detect(self, runs: list[AgentRun], config: dict, system: str) -> list[WasteFinding]:
         findings = []
 
+        instruction_label = config.get("instruction_file_label", "CLAUDE.md")
         claude_md_tokens = config.get("claude_md_tokens", 0)
         if claude_md_tokens > 5000:
             findings.append(WasteFinding(
@@ -872,11 +1057,11 @@ class MemoryConfigOverhead(BaseDetector):
                 tier=self.tier,
                 severity="medium" if claude_md_tokens <= 10000 else "high",
                 confidence=0.9,
-                description=f"CLAUDE.md is {claude_md_tokens:,} tokens (injected every API call)",
+                description=f"{instruction_label} is {claude_md_tokens:,} tokens (injected every API call)",
                 monthly_waste_tokens=claude_md_tokens * 20 * 30,
                 monthly_waste_usd=0,
-                recommendation="Slim CLAUDE.md to <2,000 tokens. Move reference material to files loaded on demand.",
-                fix_snippet="# Run /token-optimizer for guided CLAUDE.md optimization",
+                recommendation=f"Slim {instruction_label} to <2,000 tokens. Move reference material to files loaded on demand.",
+                fix_snippet=f"# Run token-optimizer for guided {instruction_label} optimization",
                 evidence={"claude_md_tokens": claude_md_tokens},
             ))
 
@@ -935,6 +1120,80 @@ class StaleCronConfig(BaseDetector):
                                     recommendation="Remove or fix the hook referencing a dead path.",
                                     evidence={"hook": hook_name, "command": cmd, "missing_path": part},
                                 ))
+        return findings
+
+
+class BlockingHookDetector(BaseDetector):
+    """Detect Stop hooks that re-invoke the model via decision:block on every turn."""
+    name = "blocking_hook"
+    tier = 1
+    description = "Stop hook re-invokes model every turn via decision:block"
+
+    def detect(self, runs: list[AgentRun], config: dict, system: str) -> list[WasteFinding]:
+        hooks = config.get("hooks", {})
+        if not hooks:
+            return []
+
+        findings = []
+        for hook_name, hook_list in hooks.items():
+            if not isinstance(hook_list, list):
+                continue
+            for entry in hook_list:
+                # Handle both flat {command: ...} and nested {hooks: [{command: ...}]}
+                cmds_to_check = []
+                if isinstance(entry, dict):
+                    if "command" in entry:
+                        cmds_to_check.append(entry["command"])
+                    for inner in entry.get("hooks", []):
+                        if isinstance(inner, dict):
+                            cmds_to_check.append(inner.get("command", ""))
+
+                for cmd in cmds_to_check:
+                    if not cmd:
+                        continue
+                    if '"decision"' in cmd and '"block"' in cmd:
+                        recent_runs = [r for r in runs
+                                       if (datetime.now(timezone.utc) - r.timestamp).days <= 30]
+                        avg_turns = (sum(r.message_count for r in recent_runs) / max(len(recent_runs), 1)
+                                     if recent_runs else 20)
+                        est_per_turn_tokens = 80
+                        est_monthly_cost = 0.0
+                        if recent_runs:
+                            days = max(1, len({r.timestamp.strftime("%Y-%m-%d") for r in recent_runs}))
+                            sessions_per_month = (len(recent_runs) / days) * 30
+                            est_monthly_tokens = sessions_per_month * avg_turns * est_per_turn_tokens
+                            est_monthly_cost = est_monthly_tokens * 3.0 / 1_000_000
+
+                        findings.append(WasteFinding(
+                            system=system,
+                            waste_type=self.name,
+                            tier=self.tier,
+                            severity="medium" if est_monthly_cost > 1.0 else "low",
+                            confidence=0.8,
+                            description=(
+                                f"{hook_name} hook uses decision:block, re-invoking the model "
+                                f"on every turn (~{est_per_turn_tokens} tok/turn, "
+                                f"~{avg_turns:.0f} turns/session)"
+                            ),
+                            recommendation=(
+                                f"Remove the decision:block pattern from the {hook_name} hook. "
+                                "Use additionalContext injection instead of blocking+re-invoking."
+                            ),
+                            evidence={"hook_event": hook_name, "command_preview": cmd[:100]},
+                            monthly_waste_tokens=int(est_monthly_cost / 3.0 * 1_000_000),
+                            monthly_waste_usd=round(est_monthly_cost, 2),
+                        ))
+                    if any(kw in cmd for kw in ("curl ", " anthropic", " openai", " gemini")):
+                        findings.append(WasteFinding(
+                            system=system,
+                            waste_type="heavyweight_hook",
+                            tier=self.tier,
+                            severity="low",
+                            confidence=0.6,
+                            description=f"{hook_name} hook calls external API on every invocation",
+                            recommendation="Consider caching API responses or moving to an async pattern.",
+                            evidence={"hook_event": hook_name, "command_preview": cmd[:80]},
+                        ))
         return findings
 
 
@@ -1056,6 +1315,12 @@ class SessionHistoryBloat(BaseDetector):
         # Estimate what compacted sessions would have cost (roughly 40% savings)
         savings_tokens = int(total_bloat_tokens * 0.4)
         days = max(1, len({r.timestamp.strftime("%Y-%m-%d") for r in long_sessions}))
+        if system == "codex":
+            recommendation = "Use /compact at phase boundaries and install Codex compact prompt guidance plus balanced hooks."
+            fix_snippet = "TOKEN_OPTIMIZER_RUNTIME=codex python3 measure.py codex-install --project ."
+        else:
+            recommendation = "Use /compact at 50-70% context fill. Set up Smart Compaction for automatic protection."
+            fix_snippet = "# Install Smart Compaction:\npython3 measure.py setup-smart-compact"
 
         return [WasteFinding(
             system=system,
@@ -1065,8 +1330,8 @@ class SessionHistoryBloat(BaseDetector):
             confidence=0.6,
             description=f"{len(long_sessions)} long sessions without apparent compaction (30+ messages, 500K+ input tokens)",
             monthly_waste_tokens=int((savings_tokens / days) * 30),
-            recommendation="Use /compact at 50-70% context fill. Set up Smart Compaction for automatic protection.",
-            fix_snippet="# Install Smart Compaction:\npython3 measure.py setup-smart-compact",
+            recommendation=recommendation,
+            fix_snippet=fix_snippet,
             evidence={"long_session_count": len(long_sessions), "total_input_tokens": total_bloat_tokens},
         )]
 
@@ -1165,6 +1430,7 @@ DETECTOR_REGISTRY: list[type[BaseDetector]] = [
     # Tier 1: Static Config
     HeartbeatModelWaste,
     HeartbeatOverFrequency,
+    BlockingHookDetector,
     SkillBloat,
     ToolDefinitionBloat,
     MemoryConfigOverhead,
@@ -1211,7 +1477,7 @@ def cmd_detect(args: list[str]):
             print(f"  {r['display_name']:15s}  [{conf_label}]  {r['detail']}")
     if not found_any:
         print("  No agent systems detected.")
-        print("  Supported: Claude Code, OpenClaw, NanoClaw, Hermes, OpenCode, IronClaw")
+        print("  Supported: Claude Code, Codex, OpenClaw, NanoClaw, Hermes, OpenCode, IronClaw")
     print()
 
 
@@ -1413,8 +1679,6 @@ def cmd_audit(args: list[str]):
     total_monthly_waste = sum(f.monthly_waste_usd for f in all_findings)
 
     for i, f in enumerate(all_findings, 1):
-        sev_marker = {"critical": "!!!", "high": "!!", "medium": "!", "low": "."}
-        marker = sev_marker.get(f.severity, "")
         print(f"\n  {i}. [{f.severity.upper():8s}] {f.description}")
         print(f"     System: {f.system} | Tier {f.tier} | Confidence: {f.confidence:.0%}")
         if f.monthly_waste_usd > 0:
@@ -1551,7 +1815,7 @@ def cmd_report(args: list[str]):
     if waste_rows:
         total_waste = sum((wr[4] or 0) for wr in waste_rows)
         print(f"\n  Waste detected: ${total_waste:.2f}/month potential savings")
-        print(f"  Run 'fleet.py audit' for detailed recommendations.")
+        print("  Run 'fleet.py audit' for detailed recommendations.")
     print()
 
 
@@ -1680,9 +1944,6 @@ def _generate_dashboard_html(daily_rows, waste_rows, system_stats, model_mix, to
     # Daily chart data as JSON
     daily_json = json.dumps(daily_data)
     model_json = json.dumps(model_data)
-    project_json = json.dumps(project_data)
-    waste_json = json.dumps(waste_data)
-    generated_at = datetime.now(timezone.utc).isoformat()
 
     # Build system cards
     sys_html = ""

@@ -3,9 +3,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.5.1-green" alt="Version 5.5.1"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.6.4-green" alt="Version 5.6.4"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.3.1-brightgreen" alt="OpenClaw v2.3.1"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.4.1-brightgreen" alt="OpenClaw v2.4.1"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/blob/main/docs/codex-beta.md"><img src="https://img.shields.io/badge/Codex-v0.1.0--beta-orange" alt="Codex v0.1.0-beta"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg" alt="License: PolyForm Noncommercial"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/token-optimizer" alt="GitHub Stars"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/commits/main"><img src="https://img.shields.io/github/last-commit/alexgreensh/token-optimizer" alt="Last Commit"></a>
@@ -31,7 +32,7 @@ They compress command output, which covers 15-25% of your context on a good day.
 Token Optimizer covers all of it, keeps your work alive across compactions, measures whether the optimization actually helped, and gives you a <strong>live dashboard</strong> that shows every token, every dollar, and every turn, auto-updated after every session. Runs fully local. Zero context tokens used. Zero runtime dependencies.
 </p>
 <p align="center">
-Works on <strong>Claude Code</strong> and <strong>OpenClaw</strong> today. Windsurf, Cursor, and more on the way.
+Works on <strong>Claude Code</strong>, <strong>OpenClaw</strong>, and <strong>Codex</strong> (beta) today. Windsurf, Cursor, and more on the way.
 </p>
 
 <p align="center">
@@ -86,13 +87,58 @@ Works on Claude Code and [OpenClaw](#openclaw-plugin). Each platform has its own
 
 </details>
 
+<details>
+<summary><h3>Codex (beta)</h3></summary>
+
+Token Optimizer works on OpenAI Codex (CLI and Desktop). Same core engine, adapted for AGENTS.md, GPT-5.x models, and Codex's hook surface. This is a **beta** -- core audit, coaching, dashboard, and fleet scanning work. Some advanced features (Delta Mode, Structure Map, invisible Bash compression) are waiting on upstream Codex hook parity.
+
+```bash
+codex plugin marketplace add alexgreensh/token-optimizer
+```
+
+Then in the Codex TUI: `/plugins` and install Token Optimizer. Ask for it conversationally: "Run Token Optimizer".
+
+After install, set up hooks and the bookmarkable dashboard:
+
+```bash
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --project "$PWD"
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py setup-daemon
+```
+
+Dashboard: `http://localhost:24843/token-optimizer` (separate port from Claude Code's 24842, both can run side by side).
+
+Auto-updates on startup via `git ls-remote`. Manual: `codex plugin marketplace upgrade`.
+
+See [`docs/codex-beta.md`](docs/codex-beta.md) for the full feature parity table, hook profiles, and Codex model pricing.
+
+</details>
+
+<details>
+<summary><h3>OpenClaw</h3></summary>
+
+Native TypeScript plugin for OpenClaw agent systems. Zero Python dependency, zero runtime dependencies, zero telemetry. Works with any model your gateway is configured against: Claude, GPT-5, Gemini, DeepSeek, local via Ollama.
+
+```bash
+# From GitHub (recommended)
+openclaw plugins install github:alexgreensh/token-optimizer
+
+# From ClawHub
+openclaw plugins install token-optimizer
+```
+
+Inside OpenClaw, run `/token-optimizer` for a guided audit with coaching.
+
+See [`openclaw/README.md`](openclaw/README.md) for full docs.
+
+</details>
+
 ---
 
 ## Full Visibility: See Every Token, Every Dollar, Every Turn
 
 Most tools tell you your context is full. Token Optimizer shows you exactly where every token went, how much each turn cost, which skills and MCP servers actually fired, and which ones are just sitting there eating your budget.
 
-![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-overview.png)
+![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-demo.gif)
 
 One single-file HTML dashboard. Auto-regenerates after every session via the SessionEnd hook. Bookmark `http://localhost:24842/token-optimizer` and it's always current. Zero tokens from your context, zero network calls, zero setup after install.
 
@@ -136,7 +182,7 @@ Token Optimizer handles both. And because it also checkpoints your session befor
 
 ### Fully local, zero dependencies, zero telemetry
 
-Pure Python stdlib on Claude Code. Pure Node stdlib on OpenClaw. Nothing to `pip install`, nothing to `npm install` at runtime, no analytics endpoint, no phone-home. Every measurement is a local SQLite write to a file you own at `~/.claude/_backups/token-optimizer/trends.db`. You can inspect it, export it, or delete it.
+Pure Python stdlib on Claude Code and Codex. Pure Node stdlib on OpenClaw. Nothing to `pip install`, nothing to `npm install` at runtime, no analytics endpoint, no phone-home. Every measurement is a local SQLite write to a file you own under your runtime home, such as `~/.claude/_backups/token-optimizer/trends.db` or `~/.codex/_backups/token-optimizer/trends.db`. You can inspect it, export it, or delete it.
 
 ### Zero context tokens consumed
 
@@ -198,15 +244,15 @@ No. All hooks are non-blocking with fail-open design. If a Token Optimizer scrip
 <details>
 <summary>📦 <strong>Does it have any runtime dependencies?</strong></summary>
 
-No. Pure Python stdlib on Claude Code. Pure Node stdlib on OpenClaw. Nothing to `pip install`, nothing to `npm install` at runtime. What you clone is everything it needs.
+No. Pure Python stdlib on Claude Code and Codex. Pure Node stdlib on OpenClaw. Nothing to `pip install`, nothing to `npm install` at runtime. What you clone is everything it needs.
 </details>
 
 <details>
 <summary>🧰 <strong>Which platforms does it support?</strong></summary>
 
-Claude Code and OpenClaw today, with native plugins for each (Python for Claude Code, TypeScript for OpenClaw, no shared runtime, no cross-platform bridging).
+Claude Code and OpenClaw today, with native plugins for each. Codex support is in beta, with a Python adapter for chat-first status, coaching, dashboard refresh, and fleet scans.
 
-Windsurf and Cursor are next on the roadmap. Codex is waiting for the plugin API to stabilize.
+Windsurf and Cursor are next on the roadmap. Full Codex parity is waiting on upstream hook/cache surfaces for invisible read substitution, structure-map substitution, and compact lifecycle hooks.
 </details>
 
 ---
@@ -320,21 +366,23 @@ Real session. 708 messages, 2 compactions, 88% of the original context gone. Wit
 
 ## Active Compression (v5)
 
-Token Optimizer no longer just measures context bloat. It actively reduces it. Five features target specific waste patterns, each with honest risk assessment and dashboard toggles.
+Token Optimizer no longer just measures context bloat. It actively reduces it. Seven features target specific waste patterns, each with honest risk assessment and dashboard toggles.
 
 ![v5 Active Compression overview](skills/token-optimizer/assets/v5-hero.svg)
 
-**On by default**: Quality Nudges, Loop Detection, Delta Mode, Structure Map, Bash Compression (16 handlers).
+**On by default**: Quality Nudges, Loop Detection, Delta Mode, Structure Map, Bash Compression (16 handlers), Activity Mode Detection, Decision Extraction.
 
 All features are independently toggleable from the Manage tab in the dashboard, via CLI (`measure.py v5 enable|disable <feature>`), or with environment variables.
 
 | Feature | Default | Potential Savings | Risk |
 |---|---|---|---|
-| Quality Nudges | ON | ~5% (prevented waste) | None |
-| Loop Detection | ON | ~8% (caught loops) | None |
+| Quality Nudges | ON | Measured per-compact (fill% recovery) | None |
+| Loop Detection | ON | Measured per-loop (actual turn content) | None |
 | Delta Mode | ON | ~20% (smart re-reads) | Low |
 | Structure Map | ON (soft-block) | ~30% (large file re-reads, up to 99% per file) | Low |
 | Bash Compression | ON | ~10% (CLI output) | Low |
+| Activity Mode | ON | Adapts compaction to session phase | None |
+| Decision Extraction | ON | Preserves decisions across compactions | None |
 
 > **Privacy note**: Every feature runs 100% on your machine. Nothing is ever sent anywhere. No analytics endpoint, no phone-home, no cloud sync. "Measurement" and "beta telemetry" always mean local-only SQLite writes to a file you own, and you can inspect, export, or delete that file at any time. Token Optimizer has zero network calls by design.
 
@@ -354,9 +402,9 @@ Claude sees that note on the next turn and surfaces the warning to you naturally
 
 ### Loop Detection (ON by default, fully automatic)
 
-Catches the AI getting stuck on a retry loop before it burns through tokens. When similarity crosses the threshold, a short inline note lands in the context flagging the loop so the model breaks out of it, with no user action needed. A single caught loop typically saves 10-50K tokens.
+Catches the AI getting stuck on a retry loop before it burns through tokens. When similarity crosses the threshold, a short inline note lands in the context flagging the loop so the model breaks out of it, with no user action needed. Savings are measured from the actual content of the looping turns, not estimated.
 
-**Value**: post-hoc detectors found that loop sessions average 47K wasted tokens. Real-time detection prevents this.
+**Value**: post-hoc detectors found that loop sessions average 47K wasted tokens. Real-time detection prevents this. Every caught loop logs the measured token cost of the loop turns to your local telemetry.
 
 **How it works**: compares the last 4 user messages and last 5 tool results for similarity. Fires at confidence ≥0.7 with a session cap of 2 notes. Uses fixed message templates and never echoes user content back.
 
@@ -403,6 +451,22 @@ Together with the existing git and pytest handlers, that's full coverage for ~90
 **How to disable**: `measure.py v5 disable bash_compress` or `TOKEN_OPTIMIZER_BASH_COMPRESS=0`
 
 **Risk**: low. Compression is lossy by design. For routine checks this is fine. For careful diff review or debugging specific test failures, disable temporarily with the command above.
+
+### Activity Mode Detection (ON by default, v5.6)
+
+Classifies your session into one of five modes (code, debug, review, infra, general) using a sliding window of the last 10 tool calls. The mode label feeds into compaction guidance so PRESERVE/DROP priorities adapt to what you're actually doing: debug mode preserves error signals and stack traces, code mode preserves edited files and their tests, review mode keeps findings and decisions while dropping full file contents.
+
+**How it works**: the PostToolUse hook classifies each tool call into a bucket (edit, read, bash_infra, bash_git, web, etc.) and stores it in the per-session SQLite. Mode classification runs on every tool call with zero latency impact (single INSERT + bounded SELECT). The activity log auto-prunes at 30 rows.
+
+**Risk**: none. Mode detection is read-only context, never modifies or blocks anything.
+
+### Decision Extraction (ON by default, v5.6)
+
+Detects decision statements ("chose X because Y", "going with Z over W", "switched to") in real-time from tool outputs and stores them incrementally in the session database. At compaction time, these decisions are injected as CRITICAL DECISIONS that the compaction summary must preserve verbatim. Combined with the new anchored compact state (which persists intent, changes, decisions, and errors across compaction cycles), this prevents the decision drift that makes post-compaction sessions lose context.
+
+**How it works**: regex-based extraction on the PostToolUse path (runs only on outputs >500 chars). Uses atomic read-modify-write (SQLite BEGIN IMMEDIATE) to prevent lost updates under concurrent hooks. Capped at 10 decisions per session.
+
+**Risk**: none. Only adds structured data to the compaction guidance, never removes anything.
 
 ### Managing v5 features
 
@@ -481,11 +545,11 @@ Token Optimizer is not just reactive. It's also proactive.
 
 Tell it your goal. Get back specific, prioritized fixes with exact token savings. Detects 8 named anti-patterns (The Kitchen Sink, The Hoarder, The Monolith, and more) and recommends multi-agent design patterns that actually save context.
 
-**Building a new project?** Run `/token-coach` before writing your first CLAUDE.md. Start with a clean, optimized setup instead of accumulating waste for months and fixing it later.
+**Building a new project?** Run `/token-coach` before writing your first `CLAUDE.md` or Codex `AGENTS.md`. Start with a clean, optimized setup instead of accumulating waste for months and fixing it later.
 
 ### Waste Detectors
 
-9 automated detectors analyze your session patterns and surface actionable findings:
+11 automated detectors analyze your session patterns and surface actionable findings:
 
 | Detector | What it catches |
 |---|---|
@@ -498,10 +562,12 @@ Tell it your goal. Get back specific, prioritized fixes with exact token savings
 | Weak model | Haiku on complex tasks needing a stronger model |
 | Bad decomposition | Monolithic 500+ word prompts doing too much |
 | Wasteful thinking | Extended thinking >2x output for small edits |
+| Output waste | Verbose responses to simple operations, repeated explanations |
+| Cache instability | CLAUDE.md patterns that break Anthropic's prompt cache prefix |
 
 ### Fleet Auditor
 
-Managing multiple agent systems? Fleet Auditor scans across Claude Code, OpenClaw, and custom setups to find idle burns, model misrouting, and config bloat with dollar savings per finding. One command, one report, every ecosystem.
+Managing multiple agent systems? Fleet Auditor scans across Claude Code, Codex, OpenClaw, and custom setups to find idle burns, model misrouting, and config bloat with dollar savings per finding. One command, one report, every ecosystem.
 
 ### Subagent Cost Breakdown
 
@@ -565,13 +631,13 @@ Hover help on every column explains `Cache`, `TTL`, `Pacing`, `Cache R`, and `Ca
 | Runtime output compression | 16 CLI handlers, credential-safe, individually toggleable | No | Yes | Yes, always-on (cannot disable) |
 | Measures if compression actually helped | Yes, local telemetry with before/after tokens | No | No | No |
 | Read deduplication and smart diff on re-reads | Yes | No | No | No |
-| Behavioral coaching and model routing | 9 detectors, cost-ranked subagent breakdown | Basic suggestions | No | No |
+| Behavioral coaching and model routing | 11 detectors, cost-ranked subagent breakdown | Basic suggestions | No | No |
 | CLAUDE.md and MEMORY.md structural health | 8 auditors plus attention-curve scoring | No | No | No |
 | Fleet-level waste detection across agents | Yes | No | No | No |
 | Zero context tokens consumed | Yes, external process | Adds ~200 tokens | MCP overhead | Injects instructions into context |
 | Zero runtime dependencies | Yes, pure stdlib | N/A | Varies | External binary |
 | Zero telemetry | Yes | Yes | Varies | Opt-out telemetry |
-| Works across platforms | Claude Code and OpenClaw (Windsurf and Cursor coming) | Claude Code only | Several platforms | Several platforms |
+| Works across platforms | Claude Code, Codex beta, and OpenClaw (Windsurf and Cursor coming) | Claude Code only | Several platforms | Several platforms |
 
 A few notes on the compression column: proxy tools quote big compression ratios on the commands they handle best, like `git status` or `tree`. Those numbers are real for those specific commands, but they cover only 15-25% of what you're actually burning. Everything else (configs, skills, memory, compaction loss) stays untouched. And most proxy compressors inject their own instructions into your context, which costs tokens on the way in.
 
@@ -720,42 +786,15 @@ Using Claude Code in the VS Code extension? Most of Token Optimizer works identi
 
 ---
 
-## OpenClaw Plugin
+## Other Platforms
 
-Native TypeScript plugin for OpenClaw agent systems. Zero Python dependency, zero runtime dependencies, zero telemetry. Works with any model your gateway is configured against: Claude, GPT-5, Gemini, DeepSeek, local via Ollama.
+### OpenClaw
 
-```bash
-# From GitHub (recommended)
-openclaw plugins install github:alexgreensh/token-optimizer
+Native TypeScript plugin with session audits, 10 waste detectors, coach mode, Smart Compaction, and interactive dashboard adapted for OpenClaw's architecture. Works with any model (Claude, GPT-5, Gemini, DeepSeek, local via Ollama). Install instructions in the [Install section above](#openclaw). Full docs: [`openclaw/README.md`](openclaw/README.md).
 
-# From ClawHub
-openclaw plugins install token-optimizer
+### Codex (Beta)
 
-# From source
-git clone https://github.com/alexgreensh/token-optimizer
-cd token-optimizer/openclaw && npm install && npm run build
-openclaw plugins install ./
-```
-
-Inside OpenClaw, run `/token-optimizer` for a guided audit with coaching.
-
-### What the OpenClaw plugin does
-
-**Session audits and cost tracking.** Parses your OpenClaw session data, calculates per-turn costs against your configured pricing (falls back to built-in rates for 20+ models), surfaces costly prompts, and ranks subagents by spend so you can see which orchestrator-worker pairs are actually pulling their weight.
-
-**9 waste detectors native to OpenClaw.** Idle burn detection, model misrouting, unused skills, retry churn, tool cascades, looping patterns, overpowered model use, weak model on complex tasks, and wasteful thinking. Each finding comes with a dollar estimate.
-
-**Coach tab adapted for OpenClaw.** Scoring adapts to OpenClaw concepts (SOUL.md instead of CLAUDE.md, agent configs instead of hooks). Health score surfaces earned signals, neutral signals, and anti-patterns.
-
-**7-signal ContextQ tuned for OpenClaw's architecture.** Message Efficiency, Compression Opportunity, Model Routing, and related signals that match how OpenClaw actually runs, rather than a direct port of Claude Code's signals.
-
-**Smart Compaction.** Checkpoint and restore across compaction events, so your agent systems survive auto-compact the same way Claude Code sessions do.
-
-**Interactive HTML dashboard.** Same single-file, bookmarkable dashboard as on Claude Code, adapted to OpenClaw session data and agent topology.
-
-**Active Compression features**: v5 feature registry, Delta Mode (smart re-reads with proper offset/limit scoping), Structure Map Beta local-only measurement, plus the dashboard, CLI, and first-run welcome flow. Bash Output Compression, Quality Nudges, and Loop Detection are on the OpenClaw track pending upstream hook support.
-
-See [`openclaw/README.md`](openclaw/README.md) for full docs.
+Python adapter for OpenAI Codex (CLI and Desktop). Same core engine, adapted for AGENTS.md, GPT-5.x models, intelligence levels, and Codex's hook surface. Install instructions in the [Install section above](#codex-beta). Full docs with feature parity table, hook profiles, and model pricing: [`docs/codex-beta.md`](docs/codex-beta.md).
 
 ---
 
