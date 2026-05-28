@@ -10,6 +10,34 @@
 
 set -eu
 
+# Known-safe prefixes for Python interpreter binaries.
+# Binaries outside these directories are rejected even if on PATH.
+# This prevents a compromised PATH entry from hijacking the interpreter.
+# All prefixes are hardcoded (not derived from PATH-controlled binaries
+# like `brew --prefix`, which would be circular trust).
+_SAFE_PREFIXES="/usr/bin /usr/local/bin /opt/homebrew/bin /opt/homebrew/opt /home/linuxbrew/.linuxbrew/bin"
+
+_is_safe_prefix() {
+    local IFS=$' \t\n'
+    local binpath="$1" prefix
+    for prefix in $_SAFE_PREFIXES; do
+        case "$binpath" in
+            "$prefix"/*) return 0 ;;
+        esac
+    done
+    # Windows install locations (git-bash/MSYS path form, e.g. /c/...).
+    # Drive-letter-anchored to preserve the anti-PATH-hijack intent.
+    # Version-number suffixes block directory-name spoofing (e.g. Python3-evil).
+    case "$binpath" in
+        /[a-zA-Z]/Program\ Files/Python[23]*)                          return 0 ;;
+        /[a-zA-Z]/Program\ Files\ \(x86\)/Python[23]*)                 return 0 ;;
+        /[a-zA-Z]/Python3[0-9]*)                                       return 0 ;;
+        /[a-zA-Z]/Users/*/AppData/Local/Programs/Python/*)              return 0 ;;
+        /[a-zA-Z]/Users/*/AppData/Local/Microsoft/WindowsApps/*)        return 0 ;;
+    esac
+    return 1
+}
+
 find_interpreter() {
     local name="$1"
     local IFS=:
@@ -20,6 +48,9 @@ find_interpreter() {
             binpath="${dir}/${name}${ext}"
             [ -x "$binpath" ] || continue
             [ -s "$binpath" ] || continue
+            # Reject interpreters outside known-safe prefix directories.
+            # Prevents PATH-order attacks where a malicious dir appears first.
+            _is_safe_prefix "$binpath" || continue
             case "$binpath" in
                 */WindowsApps/*|*/windowsapps/*)
                     # WindowsApps may contain real Store-installed Python OR
@@ -51,7 +82,16 @@ if pyl=$(find_interpreter "py"); then
     exec "$pyl" -3 "$@"
 fi
 
+# Direct probe: hook environments often have a stripped PATH that excludes
+# the user's Python. Check known locations directly as a fallback.
+for _direct in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3 \
+               /home/linuxbrew/.linuxbrew/bin/python3; do
+    if [ -x "$_direct" ] && [ -s "$_direct" ]; then
+        exec "$_direct" "$@"
+    fi
+done
+
 echo "token-optimizer: no usable Python 3 interpreter found" >&2
-echo "  tried: python3, python, py -3" >&2
+echo "  tried: python3, python, py -3, direct paths" >&2
 echo "  on Windows: install Python from https://python.org/ and restart Claude Code" >&2
 exit 127

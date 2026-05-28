@@ -69,8 +69,8 @@ except ModuleNotFoundError:  # pragma: no cover - Python <3.11
     tomllib = None
 
 
-# Claude Code adds ~35 tokens of boilerplate wrapper per skill entry
-SKILL_WRAPPER_OVERHEAD = 35
+# Measurements show wrapper overhead is negligible (synced with measure.py)
+SKILL_WRAPPER_OVERHEAD = 0
 
 def _estimate_skill_frontmatter_tokens(skill_md: Path) -> int:
     """Estimate tokens of a skill's YAML frontmatter only.
@@ -867,6 +867,11 @@ class OpenCodeAdapter(BaseAdapter):
         oc_dir = HOME / ".local" / "share" / "opencode"
         if oc_dir.exists():
             return True, 0.8, "Found ~/.local/share/opencode/"
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            win_dir = Path(appdata) / "opencode"
+            if win_dir.exists():
+                return True, 0.8, f"Found {win_dir}"
         return False, 0.0, "No OpenCode data directory found"
 
 

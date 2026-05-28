@@ -178,8 +178,11 @@ def main():
         return  # Feature disabled, exit silently
 
     try:
-        payload = json.loads(sys.stdin.read(1_000_000))
-    except (json.JSONDecodeError, OSError):
+        from hook_io import read_stdin_hook_input
+        payload = read_stdin_hook_input()
+        if not payload:
+            return
+    except (json.JSONDecodeError, OSError, ImportError):
         return  # Bad input, exit silently
 
     tool_name = payload.get("tool_name", "")
@@ -199,7 +202,9 @@ def main():
     if not _is_whitelisted(command):
         return
 
-    # Resolve bash_compress.py path from __file__ (never from env vars)
+    # Resolve bash_compress.py path from __file__ (stable, not from env vars).
+    # CLAUDE_PLUGIN_ROOT is used for cross-checking only — we do not derive
+    # the primary path from it to avoid env var injection attacks.
     script_dir = Path(__file__).resolve().parent
     compress_path = script_dir / "bash_compress.py"
     if not compress_path.exists():
@@ -210,6 +215,21 @@ def main():
     launcher_path = plugin_root / "hooks" / "python-launcher.sh"
     if not launcher_path.exists():
         return  # Launcher missing, exit silently
+
+    # Cross-check: when CLAUDE_PLUGIN_ROOT is set by the dispatcher, verify that
+    # the __file__-derived paths land within the declared plugin root.  A mismatch
+    # means the hook is running from a symlinked or relocated path and we should
+    # fail closed rather than execute an unexpected binary.
+    _env_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
+    if _env_root:
+        try:
+            _declared_root = Path(_env_root).resolve(strict=True)
+            if not compress_path.is_relative_to(_declared_root):
+                return  # compress_path outside declared root — refuse to run
+            if not launcher_path.is_relative_to(_declared_root):
+                return  # launcher_path outside declared root — refuse to run
+        except (OSError, ValueError):
+            return  # CLAUDE_PLUGIN_ROOT unresolvable — fail closed
 
     # Build rewritten command with proper quoting for each token
     try:
@@ -242,7 +262,7 @@ def main():
             "command_name": tokens_split[0] if tokens_split else "",
             "arg_count": len(tokens_split) - 1,
             "compressed": True,
-            "session_id": payload.get("session_id", ""),
+            "session_id": str(payload.get("session_id", ""))[:64],
         })
         fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as f:

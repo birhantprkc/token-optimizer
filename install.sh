@@ -6,7 +6,7 @@
 #   bash ~/.claude/token-optimizer/install.sh
 #
 # What it does:
-#   1. Checks prerequisites (Python 3.8+, git, ~/.claude/)
+#   1. Checks prerequisites (Python 3.9+, git, ~/.claude/)
 #   2. Clones (or updates) the repo into ~/.claude/token-optimizer
 #   3. Symlinks the skill into ~/.claude/skills/token-optimizer
 #   4. Prints success + usage instructions
@@ -18,8 +18,9 @@
 
 set -euo pipefail
 
-REPO_HTTPS="https://github.com/alexgreensh/token-optimizer.git"
-REPO_SSH="git@github.com:alexgreensh/token-optimizer.git"
+GITHUB_REPO="alexgreensh/token-optimizer"
+REPO_HTTPS="https://github.com/${GITHUB_REPO}.git"
+REPO_SSH="git@github.com:${GITHUB_REPO}.git"
 INSTALL_DIR="${HOME}/.claude/token-optimizer"
 SKILL_DIR="${HOME}/.claude/skills"
 
@@ -43,17 +44,17 @@ fail()  { printf "${RED}x${NC} %s\n" "$1"; exit 1; }
 
 info "Checking prerequisites..."
 
-# Python 3.8+
+# Python 3.9+
 if ! command -v python3 &>/dev/null; then
-    fail "python3 not found. Install Python 3.8+ first."
+    fail "python3 not found. Install Python 3.9+ first."
 fi
 
 PY_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)
 PY_MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
 PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
 
-if [ "$PY_MAJOR" -lt 3 ] 2>/dev/null || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 8 ]; } 2>/dev/null; then
-    fail "Python ${PY_VERSION} found, but 3.8+ is required."
+if [ "$PY_MAJOR" -lt 3 ] 2>/dev/null || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 9 ]; } 2>/dev/null; then
+    fail "Python ${PY_VERSION} found, but 3.9+ is required."
 fi
 info "Python ${PY_VERSION} OK"
 
@@ -62,6 +63,11 @@ if ! command -v git &>/dev/null; then
     fail "git not found. Install git first."
 fi
 info "git OK"
+
+# curl (needed for out-of-band checksum verification)
+if ! command -v curl &>/dev/null; then
+    fail "curl not found. Install curl first."
+fi
 
 # Claude Code directory
 if [ ! -d "${HOME}/.claude" ]; then
@@ -98,10 +104,10 @@ clone_repo() {
     try_clone() {
         local url="$1"
         git clone --depth 1 --filter=blob:none --sparse "$url" "$INSTALL_DIR" 2>"$clone_log" || return 1
+        # Cone mode only accepts directories; root-level files are included automatically
         git -C "$INSTALL_DIR" sparse-checkout set \
             skills/ hooks/ .claude-plugin/ .codex-plugin/ .codex/ \
-            install.sh README.md LICENSE NOTICE PRIVACY.md \
-            2>>"$clone_log" || true
+            2>>"$clone_log" || return 1
     }
 
     if try_clone "$REPO_HTTPS"; then
@@ -129,9 +135,9 @@ if [ -d "${INSTALL_DIR}/.git" ]; then
        git -C "$INSTALL_DIR" sparse-checkout list 2>/dev/null | grep -q "^/$"; then
         info "Migrating to sparse checkout (removing OpenClaw files)..."
         git -C "$INSTALL_DIR" sparse-checkout init --cone 2>/dev/null || true
+        # Cone mode only accepts directories; root-level files are included automatically
         git -C "$INSTALL_DIR" sparse-checkout set \
             skills/ hooks/ .claude-plugin/ .codex-plugin/ .codex/ \
-            install.sh README.md LICENSE NOTICE PRIVACY.md \
             2>/dev/null || true
     fi
 
@@ -139,6 +145,24 @@ if [ -d "${INSTALL_DIR}/.git" ]; then
         warn "git pull failed. Try: cd ${INSTALL_DIR} && git pull"
         warn "Continuing with existing version."
     }
+
+    # Self-heal: v5.7.5-5.7.9 had a sparse-checkout bug that pruned skills/ and hooks/.
+    # If they're missing after update, fix the sparse checkout config.
+    if [ ! -d "${INSTALL_DIR}/skills" ] || [ ! -d "${INSTALL_DIR}/hooks" ]; then
+        warn "Broken sparse checkout detected (skills/ or hooks/ missing). Repairing..."
+        git -C "$INSTALL_DIR" sparse-checkout set \
+            skills/ hooks/ .claude-plugin/ .codex-plugin/ .codex/ \
+            2>/dev/null || git -C "$INSTALL_DIR" sparse-checkout disable 2>/dev/null || true
+        if [ ! -d "${INSTALL_DIR}/skills" ]; then
+            warn "Sparse checkout repair failed. Disabling sparse checkout..."
+            git -C "$INSTALL_DIR" sparse-checkout disable 2>/dev/null || true
+        fi
+        if [ -d "${INSTALL_DIR}/skills" ]; then
+            info "Sparse checkout repaired"
+        else
+            fail "Could not restore skills/ directory. Try: cd ${INSTALL_DIR} && git sparse-checkout disable"
+        fi
+    fi
 elif [ -d "$INSTALL_DIR" ]; then
     BACKUP="${INSTALL_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
     warn "Non-git install found at ${INSTALL_DIR}"
@@ -152,29 +176,54 @@ else
 fi
 
 # ── Integrity Verification ────────────────────────────────────
-# Checksums verify file integrity post-clone/pull.
-# For full supply-chain security, pin to a specific commit SHA in your
-# deployment pipeline instead of relying on HEAD.
-# This check is advisory: it warns but does not block, because the
-# CHECKSUMS.sha256 file itself is updated with each code change.
+# Checksums are fetched from the GitHub release (out-of-band), NOT from
+# the repo tree. This prevents a single compromised commit from swapping
+# both code and checksums simultaneously.
+# Set TOKEN_OPTIMIZER_SKIP_VERIFY=1 to bypass (air-gapped installs).
 
-CHECKSUM_FILE="${INSTALL_DIR}/CHECKSUMS.sha256"
-if [ -f "$CHECKSUM_FILE" ]; then
-    info "Verifying file integrity..."
-    (
-        cd "$INSTALL_DIR" || exit 1
-        if sha256sum -c "$CHECKSUM_FILE" --quiet 2>/dev/null || \
-           shasum -a 256 -c "$CHECKSUM_FILE" --quiet 2>/dev/null; then
-            printf "${GREEN}>${NC} Integrity check passed\n"
-        else
-            printf "${YELLOW}!${NC} WARNING: Integrity check failed or checksums are outdated.\n"
-            printf "${YELLOW}!${NC} This is expected immediately after a code update (checksums\n"
-            printf "${YELLOW}!${NC} are regenerated with each release). If you did not just\n"
-            printf "${YELLOW}!${NC} update, verify your clone manually: cd ${INSTALL_DIR} && git log --oneline -5\n"
-        fi
-    )
+CHECKSUM_FILE="/tmp/token-optimizer-checksums-$$.sha256"
+trap 'rm -f "$CHECKSUM_FILE"' EXIT
+
+fetch_release_checksums() {
+    local asset_url
+    asset_url=$(curl -fsSL \
+        "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
+        2>/dev/null \
+        | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    for a in data.get("assets", []):
+        if a["name"] == "CHECKSUMS.sha256":
+            print(a["browser_download_url"])
+            break
+except Exception:
+    pass
+' 2>/dev/null)
+
+    if [ -z "$asset_url" ]; then
+        return 1
+    fi
+
+    curl -fsSL -o "$CHECKSUM_FILE" "$asset_url" 2>/dev/null && [ -s "$CHECKSUM_FILE" ]
+}
+
+if [ "${TOKEN_OPTIMIZER_SKIP_VERIFY:-}" = "1" ]; then
+    warn "Skipping integrity verification (TOKEN_OPTIMIZER_SKIP_VERIFY=1)"
 else
-    warn "CHECKSUMS.sha256 not found, skipping integrity check."
+    info "Fetching checksums from GitHub release..."
+    if fetch_release_checksums; then
+        info "Verifying file integrity (out-of-band checksums)..."
+        (
+            cd "$INSTALL_DIR" || exit 1
+            sha256sum -c "$CHECKSUM_FILE" --quiet 2>/dev/null || \
+            shasum -a 256 -c "$CHECKSUM_FILE" --quiet 2>/dev/null
+        ) || fail "Integrity check FAILED. Files do not match release checksums. Your install may be compromised. Re-clone from: https://github.com/${GITHUB_REPO}"
+        info "Integrity check passed"
+    else
+        warn "No checksums in GitHub release. Skipping integrity verification."
+        warn "To verify manually: shasum -a 256 -c CHECKSUMS.sha256 (in ${INSTALL_DIR})"
+    fi
 fi
 
 # Log the current commit SHA so users can audit which version is installed.

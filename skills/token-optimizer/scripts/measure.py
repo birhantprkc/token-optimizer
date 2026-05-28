@@ -60,6 +60,7 @@ Snapshots are saved to SNAPSHOT_DIR under the active runtime home.
 Copyright (C) 2026 Alex Greenshpun
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """
+from __future__ import annotations
 
 import hashlib
 import heapq
@@ -348,6 +349,7 @@ def _resolve_session_model(session_id=None):
 
     # 1. Try session JSONL
     if session_id:
+        session_id = sanitize_session_id(session_id)
         try:
             projects_dir = find_projects_dir()
             if projects_dir:
@@ -1920,8 +1922,8 @@ def _auto_snapshot(components, totals, ctx_window):
             "fixed_tokens": totals["fixed_tokens"],
             "skill_count": components.get("skills", {}).get("count", 0),
             "skill_tokens": components.get("skills", {}).get("tokens", 0),
-            "mcp_server_count": components.get("mcp_servers", {}).get("count", 0),
-            "mcp_tokens": components.get("mcp_servers", {}).get("tokens", 0),
+            "mcp_server_count": components.get("mcp_tools", {}).get("count", 0),
+            "mcp_tokens": components.get("mcp_tools", {}).get("tokens", 0),
             "claude_md_tokens": sum(
                 components[k].get("tokens", 0)
                 for k in components if k.startswith("claude_md") and components[k].get("exists")
@@ -1968,10 +1970,9 @@ def quick_scan(as_json=False):
     if skills.get("count", 0) > 0:
         offenders.append(("skills", skills.get("count", 0), skills.get("tokens", 0),
                          f"{skills.get('count', 0)} skill metadata entries"))
-    mcp = components.get("mcp_servers", {})
+    mcp = components.get("mcp_tools", {})
     mcp_count = mcp.get("count", 0)
     if detect_runtime() == "codex":
-        mcp = components.get("mcp_tools", {})
         mcp_count = mcp.get("server_count", 0)
     if mcp_count > 0:
         eager = mcp.get("eager_tool_count", 0)
@@ -2166,11 +2167,11 @@ def doctor(as_json=False):
     # 2. Python version
     total += 1
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    if sys.version_info >= (3, 8):
-        checks.append(("OK", f"Python {py_ver}", ">= 3.8"))
+    if sys.version_info >= (3, 9):
+        checks.append(("OK", f"Python {py_ver}", ">= 3.9"))
         score += 1
     else:
-        checks.append(("!!", f"Python {py_ver}", "requires >= 3.8"))
+        checks.append(("!!", f"Python {py_ver}", "requires >= 3.9"))
 
     # 3. Context window detection
     total += 1
@@ -2224,6 +2225,7 @@ def doctor(as_json=False):
         try:
             import sqlite3
             conn = sqlite3.connect(str(TRENDS_DB))
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
             count = conn.execute("SELECT COUNT(*) FROM session_log").fetchone()[0]
             conn.close()
@@ -2547,8 +2549,8 @@ def drift_check(as_json=False):
         "total_overhead": totals["estimated_total"],
         "skill_count": components.get("skills", {}).get("count", 0),
         "skill_tokens": components.get("skills", {}).get("tokens", 0),
-        "mcp_server_count": components.get("mcp_servers", {}).get("count", 0),
-        "mcp_tokens": components.get("mcp_servers", {}).get("tokens", 0),
+        "mcp_server_count": components.get("mcp_tools", {}).get("count", 0),
+        "mcp_tokens": components.get("mcp_tools", {}).get("tokens", 0),
         "claude_md_tokens": sum(
             components[k].get("tokens", 0)
             for k in components if k.startswith("claude_md") and components[k].get("exists")
@@ -3176,6 +3178,10 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
         def end_headers(self):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Content-Security-Policy", _DASHBOARD_CSP,
+            )
             super().end_headers()
 
         def _is_dashboard_request(self):
@@ -3236,6 +3242,9 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
                 return
             if not self._check_allowed():
                 return
+            if not _is_localhost_host_header(self.headers.get("Host", "")):
+                self.send_error(421, "Misdirected Request")
+                return
             super().do_HEAD()
 
         def do_POST(self):
@@ -3287,7 +3296,7 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
                     self._json_response(400, {"error": "Missing 'jsonl_path' field"})
                     return
                 try:
-                    jsonl_path = Path(raw_path).resolve()
+                    jsonl_path = Path(raw_path).expanduser().resolve()
                     allowed_root = (CLAUDE_DIR / "projects").resolve()
                     jsonl_path.relative_to(allowed_root)
                 except (ValueError, OSError):
@@ -3396,7 +3405,7 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
             if origin in (f"http://127.0.0.1:{server_port}", f"http://localhost:{server_port}"):
                 self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-TO-Token")
             self.end_headers()
 
     display_host = "localhost" if host == "127.0.0.1" else host
@@ -3413,18 +3422,35 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
             print("\n  Server stopped.")
 
 
-def _sanitize_codex_dashboard_paths(data):
-    """Avoid embedding full Codex session paths in dashboard HTML."""
-    if data.get("runtime") != "codex":
-        return data
+def _sanitize_dashboard_paths(data):
+    """Redact home-directory prefixes from paths embedded in dashboard HTML.
+
+    Applies to ALL runtimes (Claude Code and Codex). Replaces /Users/xxx
+    or /home/xxx with ~ so the rendered dashboard doesn't expose the full
+    filesystem path. Paths that the daemon API needs (e.g. jsonl_path for
+    on-demand session-turn loading) are kept functional since ~ is only
+    cosmetic in the JSON, and the API endpoint resolves paths itself.
+    """
     trends = data.get("trends")
-    if not isinstance(trends, dict):
-        return data
-    for day in trends.get("daily", []) or []:
-        for session in day.get("session_details", []) or []:
-            path = session.get("jsonl_path")
-            if path:
-                session["jsonl_path"] = Path(path).name
+    if isinstance(trends, dict):
+        for day in trends.get("daily", []) or []:
+            for session in day.get("session_details", []) or []:
+                path = session.get("jsonl_path")
+                if path:
+                    session["jsonl_path"] = _display_path(path)
+
+    quality = data.get("quality")
+    if isinstance(quality, dict):
+        sf = quality.get("session_file")
+        if sf:
+            quality["session_file"] = Path(sf).name
+
+    mr = data.get("memory_review")
+    if isinstance(mr, dict):
+        target = mr.get("target")
+        if target:
+            mr["target"] = _display_path(target)
+
     return data
 
 
@@ -3558,7 +3584,7 @@ def generate_dashboard(coord_path):
         "runtime": detect_runtime(),
         "runtime_label": runtime_name_for_humans(),
     }
-    data = _sanitize_codex_dashboard_paths(data)
+    data = _sanitize_dashboard_paths(data)
 
     # Load template and inject data
     template = template_path.read_text(encoding="utf-8")
@@ -3604,6 +3630,20 @@ def generate_dashboard(coord_path):
     return str(out_path)
 
 
+def _display_path(absolute_path):
+    """Replace the user's home directory with ~ for display purposes.
+
+    Avoids exposing full filesystem paths like /Users/alex/.claude/... in the UI.
+    """
+    home = str(Path.home())
+    s = str(absolute_path)
+    if s == home:
+        return "~"
+    if s.startswith(home + os.sep):
+        return "~" + s[len(home):]
+    return s
+
+
 def _collect_hook_status_for_dashboard():
     """Collect hook installation status for dashboard toggle panel."""
     if detect_runtime() == "codex":
@@ -3615,16 +3655,16 @@ def _collect_hook_status_for_dashboard():
     session_end_installed = _is_hook_installed(settings)
     smart_compact_status = _is_smart_compact_installed(settings)
 
-    # Build measure.py path for commands
-    mp = str(Path(__file__).resolve())
+    # For executable commands: absolute path with shlex.quote (handles spaces/quotes)
+    mp_cmd = shlex.quote(str(Path(__file__).resolve()))
 
     return {
         "session_end": {
             "installed": session_end_installed,
             "label": "Session Tracking",
             "description": "Collects usage data after each session. Powers Trends and Health tabs.",
-            "install_cmd": f"python3 '{mp}' setup-hook",
-            "uninstall_cmd": f"python3 '{mp}' setup-hook --uninstall",
+            "install_cmd": f"python3 {mp_cmd} setup-hook",
+            "uninstall_cmd": f"python3 {mp_cmd} setup-hook --uninstall",
         },
         "smart_compact": {
             "installed": all(smart_compact_status.values()),
@@ -3632,8 +3672,8 @@ def _collect_hook_status_for_dashboard():
             "detail": smart_compact_status,
             "label": "Smart Compaction",
             "description": "Captures session state before compaction, restores it after. Protects your working memory.",
-            "install_cmd": f"python3 '{mp}' setup-smart-compact",
-            "uninstall_cmd": f"python3 '{mp}' setup-smart-compact --uninstall",
+            "install_cmd": f"python3 {mp_cmd} setup-smart-compact",
+            "uninstall_cmd": f"python3 {mp_cmd} setup-smart-compact --uninstall",
         },
     }
 
@@ -3642,7 +3682,7 @@ def _collect_codex_hook_status_for_dashboard():
     """Collect Codex project hook status for dashboard toggle panel."""
     import codex_doctor
 
-    mp = str(Path(__file__).resolve())
+    mp_cmd = shlex.quote(str(Path(__file__).resolve()))
     project = Path.cwd().resolve(strict=False)
     checks = codex_doctor.run_checks(project=project)
     by_name = {check["name"]: check for check in checks}
@@ -3651,7 +3691,7 @@ def _collect_codex_hook_status_for_dashboard():
         return by_name.get(name, {}).get("status") == "OK"
 
     project_arg = shlex.quote(str(project))
-    base = f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} codex-install --project {project_arg}"
+    base = f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-install --project {project_arg}"
     try:
         hooks_text = (project / ".codex" / "hooks.json").read_text(encoding="utf-8")
     except OSError:
@@ -3669,7 +3709,7 @@ def _collect_codex_hook_status_for_dashboard():
             "partial": by_name.get("Compact prompt", {}).get("status") == "WARN",
             "label": "Codex Compact Prompt",
             "description": "Adds Token Optimizer compact guidance to Codex config so manual compaction preserves decisions, files, and continuation state.",
-            "install_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} codex-compact-prompt --install",
+            "install_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-compact-prompt --install",
             "uninstall_cmd": "Edit ~/.codex/config.toml and remove compact_prompt / experimental_compact_prompt_file",
         },
         "codex_bash_compression": {
@@ -3772,6 +3812,7 @@ def _collect_codex_skill_inventory(cfg: dict, *, project: Path) -> dict[str, lis
     active = []
     disabled = []
     seen: set[str] = set()
+    mp_cmd = shlex.quote(str(Path(__file__).resolve()))
     for path, source in candidates:
         resolved = str(path.expanduser().resolve(strict=False))
         if resolved in seen:
@@ -3784,9 +3825,9 @@ def _collect_codex_skill_inventory(cfg: dict, *, project: Path) -> dict[str, lis
             "description": meta.get("description", ""),
             "tokens": meta.get("tokens", 0),
             "source": source,
-            "path": resolved,
-            "disable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(str(Path(__file__).resolve()))} codex-skill disable --path {shlex.quote(resolved)}",
-            "enable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(str(Path(__file__).resolve()))} codex-skill enable --path {shlex.quote(resolved)}",
+            "path": _display_path(resolved),
+            "disable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-skill disable --path {shlex.quote(resolved)}",
+            "enable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-skill enable --path {shlex.quote(resolved)}",
         }
         if resolved in disabled_paths:
             disabled.append(item)
@@ -3802,7 +3843,7 @@ def _collect_codex_mcp_inventory(cfg: dict) -> list[dict]:
     if not isinstance(servers, dict):
         return []
     items = []
-    mp = shlex.quote(str(Path(__file__).resolve()))
+    mp_cmd = shlex.quote(str(Path(__file__).resolve()))
     for name, server in servers.items():
         if not isinstance(server, dict):
             server = {}
@@ -3815,8 +3856,8 @@ def _collect_codex_mcp_inventory(cfg: dict) -> list[dict]:
             "transport": transport,
             "tokens": TOKENS_PER_DEFERRED_TOOL,
             "enabled": enabled,
-            "disable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp} codex-mcp disable {shlex.quote(str(name))}",
-            "enable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp} codex-mcp enable {shlex.quote(str(name))}",
+            "disable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-mcp disable {shlex.quote(str(name))}",
+            "enable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-mcp enable {shlex.quote(str(name))}",
         })
     return sorted(items, key=lambda item: item["name"])
 
@@ -3928,13 +3969,13 @@ def _codex_skill_target(raw_path: str | None = None, name: str | None = None) ->
         if target.name != "SKILL.md":
             target = target / "SKILL.md"
         for item in all_items:
-            if Path(item["path"]).resolve(strict=False) == target:
+            if Path(item["path"]).expanduser().resolve(strict=False) == target:
                 return target
         return target if target.exists() else None
     if name:
         matches = [item for item in all_items if item["name"] == name or item.get("skill_name") == name]
         if len(matches) == 1:
-            return Path(matches[0]["path"]).resolve(strict=False)
+            return Path(matches[0]["path"]).expanduser().resolve(strict=False)
     return None
 
 
@@ -4011,11 +4052,11 @@ def _collect_management_data(components=None, trends=None):
     if components is None:
         components = measure_components()
 
-    mp = str(Path(__file__).resolve())
+    mp_cmd = shlex.quote(str(Path(__file__).resolve()))
     if detect_runtime() == "codex":
         project = Path.cwd().resolve(strict=False)
         project_arg = shlex.quote(str(project))
-        base = f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} codex-install --project {project_arg}"
+        base = f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-install --project {project_arg}"
         cfg = _read_codex_config()
         codex_skills = _collect_codex_skill_inventory(cfg, project=project)
         codex_mcp = _collect_codex_mcp_inventory(cfg)
@@ -4025,7 +4066,7 @@ def _collect_management_data(components=None, trends=None):
         return {
             "mode": "codex",
             "codex": {
-                "project": str(project),
+                "project": _display_path(project),
                 "install_cmd": base,
                 "install_quiet_profile_cmd": base + " --profile quiet",
                 "install_balanced_profile_cmd": base + " --profile balanced",
@@ -4034,9 +4075,9 @@ def _collect_management_data(components=None, trends=None):
                 "install_with_bash_compression_cmd": base + " --enable-bash-compression",
                 "install_with_hot_path_hooks_cmd": base + " --enable-hot-path-hooks --enable-prompt-hooks",
                 "install_with_status_line_cmd": base + " --enable-status-line",
-                "refresh_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} session-end-flush --trigger manual",
-                "doctor_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} codex-doctor --project {project_arg}",
-                "dashboard_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {shlex.quote(mp)} dashboard",
+                "refresh_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} session-end-flush --trigger manual",
+                "doctor_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-doctor --project {project_arg}",
+                "dashboard_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} dashboard",
             },
             "skills": {"active": codex_skills["active"], "archived": [], "disabled": codex_skills["disabled"]},
             "mcp_servers": {"active": codex_mcp_active, "disabled": codex_mcp_disabled, "cloud": []},
@@ -4056,7 +4097,7 @@ def _collect_management_data(components=None, trends=None):
             "skill_name": sd.get("skill_name", name),
             "tokens": sd.get("frontmatter_tokens", 100),
             "description": sd.get("description", ""),
-            "archive_cmd": f"python3 '{mp}' skill archive {name}",
+            "archive_cmd": f"python3 {mp_cmd} skill archive {shlex.quote(name)}",
         })
 
     # Archived skills (scan backup dirs)
@@ -4085,7 +4126,7 @@ def _collect_management_data(components=None, trends=None):
                         "archived_date": date_part,
                         "archive_dir": archive_dir.name,
                         "description": desc,
-                        "restore_cmd": f"python3 '{mp}' skill restore {item.name}",
+                        "restore_cmd": f"python3 {mp_cmd} skill restore {shlex.quote(item.name)}",
                     })
 
     # MCP servers (local settings.json)
@@ -4102,7 +4143,7 @@ def _collect_management_data(components=None, trends=None):
             "source": "local",
             "tool_count": tool_count,
             "command": cfg.get("command", ""),
-            "disable_cmd": f"python3 '{mp}' mcp disable {name}",
+            "disable_cmd": f"python3 {mp_cmd} mcp disable {shlex.quote(name)}",
         })
 
     disabled_mcps = []
@@ -4110,7 +4151,7 @@ def _collect_management_data(components=None, trends=None):
         disabled_mcps.append({
             "name": name,
             "source": "local",
-            "enable_cmd": f"python3 '{mp}' mcp enable {name}",
+            "enable_cmd": f"python3 {mp_cmd} mcp enable {shlex.quote(name)}",
         })
 
     # Cloud-synced MCP servers (Claude Desktop config)
@@ -4322,7 +4363,7 @@ def _manage_skill(action, name):
         return False
     skills_dir = CLAUDE_DIR / "skills"
     resolved = (skills_dir / name).resolve()
-    if not str(resolved).startswith(str(skills_dir.resolve())):
+    if not resolved.is_relative_to(skills_dir.resolve()):
         print(f"  [!] Path traversal detected: {name}")
         return False
     backups_dir = CLAUDE_DIR / "_backups"
@@ -4507,9 +4548,12 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
             for session in day.get("session_details", []):
                 session_key = session.get("session_key")
                 jsonl_path = session.get("jsonl_path")
-                if not session_key or session_key in session_turns or not jsonl_path or not os.path.exists(jsonl_path):
+                if not session_key or session_key in session_turns or not jsonl_path:
                     continue
-                turns = parse_session_turns(jsonl_path)
+                jsonl_resolved = str(Path(jsonl_path).expanduser()) if jsonl_path.startswith("~") else jsonl_path
+                if not os.path.exists(jsonl_resolved):
+                    continue
+                turns = parse_session_turns(jsonl_resolved)
                 if turns:
                     session_turns[session_key] = turns
     except Exception:
@@ -4623,7 +4667,7 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
         "runtime": detect_runtime(),
         "runtime_label": runtime_name_for_humans(),
     }
-    data = _sanitize_codex_dashboard_paths(data)
+    data = _sanitize_dashboard_paths(data)
 
     template = template_path.read_text(encoding="utf-8")
     data_json = json.dumps(data, ensure_ascii=True, default=str)
@@ -4661,7 +4705,7 @@ def generate_standalone_dashboard(days=30, quiet=False, force=False):
     if not quiet:
         print(f"  Dashboard: {DASHBOARD_PATH}")
         print(f"  Local:  {DASHBOARD_PATH.as_uri()}")
-        print(f"  Remote: python3 {Path(__file__).resolve()} dashboard --serve")
+        print(f"  Remote: python3 {_display_path(Path(__file__).resolve())} dashboard --serve")
 
     return str(DASHBOARD_PATH)
 
@@ -4678,7 +4722,10 @@ def _acquire_session_end_flush_lock(max_age_seconds=120):
             age = time.time() - lock_dir.stat().st_mtime
             if age > max_age_seconds:
                 lock_dir.rmdir()
-                lock_dir.mkdir(mode=0o700)
+                try:
+                    lock_dir.mkdir(mode=0o700)
+                except FileExistsError:
+                    return None
                 return lock_dir
         except OSError:
             pass
@@ -5588,6 +5635,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
         score -= 3
 
     # Check model mix from trends
+    _opus_addiction_fired = False
     default_model = components.get("settings_local", {}).get("defaultModel")
     if trends:
         model_mix = trends.get("model_mix", {})
@@ -7470,6 +7518,7 @@ def conn_total_sessions():
     """Quick count of total sessions in the DB."""
     try:
         conn = sqlite3.connect(str(TRENDS_DB))
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
         cur = conn.execute("SELECT COUNT(*) FROM session_log")
         count = cur.fetchone()[0]
@@ -7550,7 +7599,6 @@ def _query_trends_db(conn, days):
 
     session_count = row["cnt"]
     if session_count == 0:
-        conn.close()
         return None
 
     total_duration = row["total_dur"]
@@ -9366,7 +9414,8 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.7.1"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.7.11"  # Keep in sync with plugin.json + marketplace.json
+_DASHBOARD_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 _DAEMON_RUNTIME = detect_runtime()
 _DAEMON_RUNTIME_SUFFIX = "codex" if _DAEMON_RUNTIME == "codex" else "claude"
 DAEMON_LABEL = "com.token-optimizer.codex-dashboard" if _DAEMON_RUNTIME == "codex" else "com.token-optimizer.dashboard"
@@ -9558,6 +9607,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        )
         super().end_headers()
 
     def _is_dashboard_request(self):
@@ -9788,6 +9842,9 @@ except OSError:
 def _generate_plist():
     """Generate the launchd plist XML for the dashboard daemon."""
     from xml.sax.saxutils import escape as _xml_escape
+    import shutil as _shutil
+    _which = _shutil.which("python3") or ""
+    python3_path = _which if (_which and "/shims/" not in _which) else "/usr/bin/python3"
     daemon_script = _xml_escape(str(SNAPSHOT_DIR / "dashboard-server.py"))
     log_out = _xml_escape(str(DAEMON_LOG_DIR / "stdout.log"))
     log_err = _xml_escape(str(DAEMON_LOG_DIR / "stderr.log"))
@@ -9799,7 +9856,7 @@ def _generate_plist():
     <string>{DAEMON_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>{_xml_escape(python3_path)}</string>
         <string>{daemon_script}</string>
     </array>
     <key>RunAtLoad</key>
@@ -14268,7 +14325,7 @@ def expand_archived(tool_use_id=None, session_id=None, list_all=False):
             session_dirs = [d for d in session_dirs if d.name == sid]
 
         for sd in session_dirs:
-            if not sd.is_dir():
+            if sd.is_symlink() or not sd.is_dir():
                 continue
             manifest_path = sd / "manifest.jsonl"
             if not manifest_path.exists():
@@ -14350,7 +14407,7 @@ def archive_cleanup(session_id=None):
     import shutil
 
     archive_root = SNAPSHOT_DIR / "tool-archive"
-    if not archive_root.is_dir():
+    if not archive_root.is_dir() or archive_root.is_symlink():
         print("[Tool Archive] No archive directory found. Nothing to clean.")
         return
 
@@ -14360,6 +14417,9 @@ def archive_cleanup(session_id=None):
     if session_id:
         sid = sanitize_session_id(session_id)
         target = archive_root / sid
+        if target.is_symlink():
+            print(f"[Tool Archive] Skipping symlink: {sid}")
+            return
         if target.is_dir():
             # Count before removing
             manifest_path = target / "manifest.jsonl"
@@ -14386,7 +14446,7 @@ def archive_cleanup(session_id=None):
     # Clean up archives older than 24 hours
     cutoff = time.time() - 86400
     for sd in list(archive_root.iterdir()):
-        if not sd.is_dir():
+        if sd.is_symlink() or not sd.is_dir():
             continue
         # Check manifest timestamp or directory mtime
         try:
@@ -14658,12 +14718,10 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
     ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     ts_file = now.strftime("%Y%m%d-%H%M%S")
 
-    if transcript_path and not codex_session.is_codex_session_path(transcript_path):
-        transcript_path = None
-    if not transcript_path:
-        filepath = _find_current_session_jsonl()
-    else:
+    if transcript_path:
         filepath = Path(transcript_path)
+    else:
+        filepath = _find_current_session_jsonl()
 
     # Build trigger suffix for filename so restore/list logic can rank all semantic checkpoints.
     trigger_suffix = f"-{trigger}" if trigger and trigger != "auto" else ""
@@ -16694,7 +16752,7 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
             "compactions": 0,
             "turns": 0,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "session_file": str(filepath),
+            "session_file": Path(filepath).name,
         }
         _write_quality_cache(cache_path, result)
         return 100
@@ -16720,7 +16778,7 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
     result["compactions"] = quality_data["compactions"]
     result["turns"] = len([m for m in quality_data["messages"] if m[1] == "user"])
     result["timestamp"] = datetime.now(timezone.utc).isoformat()
-    result["session_file"] = str(filepath)
+    result["session_file"] = Path(filepath).name
     result["model"] = quality_data.get("model")
     result["topic"] = quality_data.get("topic")
     # Add degradation band for status line
@@ -18071,6 +18129,7 @@ def validate_impact(strategy="auto", days=30, as_json=False):
         if TRENDS_DB.exists():
             try:
                 conn = sqlite3.connect(str(TRENDS_DB))
+                conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA busy_timeout=5000")
                 row = conn.execute(
                     "SELECT MAX(timestamp) as latest FROM savings_events"

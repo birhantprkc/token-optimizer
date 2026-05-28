@@ -8,7 +8,7 @@ Python 3 interpreter on macOS, Linux, and Windows:
 
 The launcher handles Windows-specific gotchas (Program Files spaced paths,
 Microsoft Store zero-byte stubs in WindowsApps, py launcher fallback) so
-this file can assume it's running under a real Python 3.8+.
+this file can assume it's running under a real Python 3.9+.
 
 This dispatcher resolves the target script under CLAUDE_PLUGIN_ROOT,
 checks it exists, and runs it with the same interpreter (sys.executable).
@@ -26,7 +26,7 @@ from pathlib import Path
 # Defense in depth: the launcher script already filters interpreters, but
 # if a user's PATH has a stale Python 3.7 that slipped through, bail early
 # so later imports don't explode with confusing SyntaxError noise.
-if sys.version_info < (3, 8):
+if sys.version_info < (3, 9):
     sys.exit(0)
 
 
@@ -72,7 +72,10 @@ def main() -> int:
             # the child alive would leak a process holding the trends.db
             # SQLite lock, starving the next hook invocation.
             try:
-                proc.kill()
+                # Guard: check if process already exited between TimeoutExpired
+                # and this point — avoids killing a reused PID on some POSIX impl.
+                if proc.poll() is None:
+                    proc.kill()
                 proc.wait(timeout=5)
             except (subprocess.SubprocessError, OSError):
                 pass
