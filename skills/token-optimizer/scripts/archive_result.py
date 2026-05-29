@@ -314,9 +314,11 @@ def archive_result(quiet: bool = False) -> None:
             store.close()
 
     # For MCP tools (tool_name contains "__"): output replacement via stdout
+    # No pressure gate here: the compressed replacement SAVES tokens.
+    # Suppressing it would cause the full uncompressed response to flow through.
     if "__" in tool_name:
-        output_type = _detect_output_type(tool_response)
-        preview = _compress_mcp_preview(tool_response, output_type)
+        output_type = _detect_output_type(safe_response)
+        preview = _compress_mcp_preview(safe_response, output_type)
         suffix = f" ({output_type})" if output_type != "text" else ""
         if original_char_count > _ARCHIVE_MAX_SIZE:
             replacement = preview + f"\n\n[Full result archived ({original_char_count:,} chars{suffix}, truncated to 5MB).]"
