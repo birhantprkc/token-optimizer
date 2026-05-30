@@ -151,7 +151,8 @@ Output file: {COORD_PATH}/audit/skills.md
    - Unused domain skills (e.g., 5 n8n skills but user doesn't do n8n work)
    - Plugin skill bundles where most skills go unused (plugin installs 20 skills, user uses 3)
    - **Phantom skills from gitignored dirs** (pre-v2.1.82 only): If Claude Code version < 2.1.82, warn that skills from node_modules/, .git/, or other gitignored dirs load silently. Recommend upgrading. On v2.1.82+, skip this check (fixed).
-   - **Skill description length check** (v2.1.86+): Claude Code caps skill descriptions at 250 characters in /skills listing. Read each SKILL.md frontmatter `description` field. Flag any over 250 chars (truncated silently, wasting the extra tokens).
+   - **Skill description length check**: Claude Code truncates the combined `description` + `when_to_use` text at 1,536 characters in the skill listing (raised from 250 in v2.1.105). Read each SKILL.md frontmatter `description` field (and `when_to_use` if present). Flag descriptions over 1,536 total chars as "truncated by Claude Code, wasting the overflow tokens." Flag descriptions over 200 chars as an efficiency opportunity (every char loads every session), but do NOT call them truncated.
+   - **skillListingBudgetFraction** (v2.1.129+): Claude Code allocates a fraction of remaining context budget for the skill listing (default 4%). In long sessions with high context fill, skills at the bottom of the listing are silently dropped and cannot be invoked. Check `~/.claude/settings.json` for `skillListingBudgetFraction`. If the user has many skills (30+) and no override, warn that skills may be silently dropped in long sessions. Suggest setting `"skillListingBudgetFraction": 0.08` to double headroom.
 
 4. Write findings to {COORD_PATH}/audit/skills.md:
    # Skills Audit
@@ -215,6 +216,7 @@ Output file: {COORD_PATH}/audit/mcp.md
    - Check ToolSearch listing in system prompt for "Available deferred tools"
    - With Tool Search active: each deferred tool ~15 tokens (name only in menu)
    - Without Tool Search: each tool loads FULL definition (300-850 tokens each)
+   - **alwaysLoad servers** (v2.1.121+): Check each MCP server config for `"alwaysLoad": true`. When set, ALL tools from that server load as eager tools (~150-850 tokens each) instead of being deferred (~15 tokens each). Exclude alwaysLoad server tools from the deferred count and add them to the eager tool overhead. Flag alwaysLoad servers with 10+ tools as high token overhead.
 
 4. **Per-tool description + server instructions size check** (v2.1.84+):
    - Claude Code caps BOTH tool descriptions AND server instructions at 2KB since v2.1.84
@@ -330,7 +332,9 @@ Output file: {COORD_PATH}/audit/advanced.md
 1. Hooks configuration:
    - Check ~/.claude/settings.json for hooks config
    - Check .claude/settings.json (project-level)
-   - Check for PreCompact, SessionStart, PostToolUse hooks
+   - Check for PreCompact, SessionStart, PostCompact, PostToolUse hooks
+   - **PostCompact hook** (v2.1.85+): fires after compaction with `trigger` ("manual"/"auto") and `compact_summary` in the input payload. Useful for compaction event tracking. No token counts in payload, just the summary text. If user has PreCompact but not PostCompact, note the opportunity for post-compaction analytics.
+   - **Conditional hooks** (v2.1.85+): hooks support an `if` field for conditional execution. Check if any hooks could benefit from conditional guards to reduce per-turn overhead.
    - If no hooks: flag as HIGH PRIORITY opportunity
    - Flag Stop hooks containing "decision":"block" — these re-invoke the model
      every turn (~80+ tokens per turn overhead, adds up fast in long sessions)
@@ -400,8 +404,10 @@ Output file: {COORD_PATH}/audit/advanced.md
 
 11. **Skill frontmatter quality**:
     - Scan ~/.claude/skills/*/SKILL.md frontmatter
-    - Flag descriptions >200 chars (~50 tokens, twice the typical)
+    - Flag descriptions >1,536 chars as TRUNCATED (Claude Code silently cuts at this limit since v2.1.105)
+    - Flag descriptions >200 chars as verbose (efficiency opportunity, not a correctness bug)
     - Report which skills have `disable-model-invocation: true` set
+    - Check for `disallowed-tools` frontmatter (v2.1.152+) on narrow-scope skills
     - Verbose frontmatter = higher per-message menu overhead
 
 12. **Compact instructions check**:
@@ -499,8 +505,10 @@ Output file: {COORD_PATH}/audit/advanced.md
    **Token-relevant overrides**: [list any env overrides]
 
    ## Skill Frontmatter Quality
-   **Verbose descriptions (>200 chars)**: [list]
+   **Truncated descriptions (>1,536 chars)**: [list, CRITICAL - these are silently cut]
+   **Verbose descriptions (>200 chars)**: [list, efficiency opportunity]
    **Skills with disable-model-invocation**: [list]
+   **Skills with disallowed-tools**: [list]
 
    ## Compact Instructions
    **Has compact instructions section**: [Yes / No]
@@ -651,7 +659,7 @@ Output file: {COORD_PATH}/verification/results.md
    **Total Savings**: ~X tokens/message (Y% reduction)
 
    ## Context Budget Impact
-   - Context overhead reduced from X% to Y% of 200K window
+   - Context overhead reduced from X% to Y% of context window (1M for Opus/Sonnet 4.6+, 200K for Haiku)
    - Estimated Z fewer compaction cycles per long session
    - Quality zone extended: peak performance lasts N more messages before degradation
 

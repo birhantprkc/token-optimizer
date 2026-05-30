@@ -249,6 +249,13 @@ export const TokenOptimizerPlugin: Plugin = async (
         store.recordMessage(idx, "tool_result", resultSize, resultSize > 100);
         const assistantIdx = store.incrementOperationIndex();
         store.recordMessage(assistantIdx, "assistant", resultSize, true);
+
+        // Refresh quality during autonomous tool runs, not just on chat.message.
+        // Otherwise token_status reports a stale (falsely high) score mid-run when
+        // the agent makes many tool calls without a user prompt. maybeComputeQuality
+        // is throttled (2min), so this is cheap on the hot path.
+        const fillPct = estimateFillFromSession(store, currentModel);
+        maybeComputeQuality(store, fillPct);
       } catch (err) {
         console.warn("[Token Optimizer] tool.execute.after hook error:", err);
       }
@@ -364,6 +371,8 @@ export const TokenOptimizerPlugin: Plugin = async (
                     sessionId: currentSessionId,
                     project: ctx.project.id ?? null,
                     model: currentModel ?? null,
+                    // TODO: OpenCode session.deleted events do not expose token usage.
+                    // Cost is computed later by measure.py collect from the session JSONL.
                     tokensInput: 0,
                     tokensOutput: 0,
                     tokensCacheRead: 0,
