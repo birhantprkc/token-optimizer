@@ -109,6 +109,17 @@ HOME = Path.home()
 RUNTIME_DIR = runtime_home()
 CLAUDE_DIR = claude_home()
 
+# Sentinel file written inside an archived symlinked skill, recording the
+# original link target so restore can recreate the symlink (issue #48). A dir
+# holds EITHER SKILL.md (real skill) XOR this marker (symlinked skill).
+SYMLINK_TARGET_MARKER = ".symlink-target"
+
+# Backup directories that hold restorable skills. Manual `skill archive` writes
+# to skills-archived-DATE; the auto-dedup pass writes to skills-deduped-DATE.
+# Restore and the dashboard scan must recognize BOTH so dedup'd skills stay
+# recoverable from the UI and the CLI.
+SKILL_ARCHIVE_DIR_PREFIXES = ("skills-archived", "skills-deduped")
+
 # Plugin-data-aware paths: prefer runtime-specific plugin data when set,
 # else discover via installed_plugins.json so dashboard CLI runs find live data
 # (v5.4.23+), else fall back to legacy paths for symlink/script installs.
@@ -166,33 +177,36 @@ PRICING_TIERS = {
     "anthropic": {
         "label": "Anthropic API",
         "claude_models": {
-            "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25},
-            "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75},
-            "haiku":  {"input": 1.0,  "output": 5.0,  "cache_read": 0.1,  "cache_write": 1.25},
+            # cache_write = 5-minute TTL (1.25x input); cache_write_1h = 1-hour TTL (2x input).
+            # Verified 2026-05-30 from platform.claude.com/docs pricing.
+            "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25,  "cache_write_1h": 10.0},
+            "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75,  "cache_write_1h": 6.0},
+            "haiku":  {"input": 1.0,  "output": 5.0,  "cache_read": 0.1,  "cache_write": 1.25,  "cache_write_1h": 2.0},
         },
     },
     "vertex-global": {
         "label": "Vertex AI Global",
         "claude_models": {
-            "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25},
-            "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75},
-            "haiku":  {"input": 1.0,  "output": 5.0,  "cache_read": 0.1,  "cache_write": 1.25},
+            "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25,  "cache_write_1h": 10.0},
+            "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75,  "cache_write_1h": 6.0},
+            "haiku":  {"input": 1.0,  "output": 5.0,  "cache_read": 0.1,  "cache_write": 1.25,  "cache_write_1h": 2.0},
         },
     },
     "vertex-regional": {
         "label": "Vertex AI Regional",
         "claude_models": {
-            "opus":   {"input": 5.5,  "output": 27.5, "cache_read": 0.55, "cache_write": 6.875},
-            "sonnet": {"input": 3.3,  "output": 16.5, "cache_read": 0.33, "cache_write": 4.125},
-            "haiku":  {"input": 1.1,  "output": 5.5,  "cache_read": 0.11, "cache_write": 1.375},
+            # Vertex regional applies a +10% surcharge on all Claude rates.
+            "opus":   {"input": 5.5,  "output": 27.5, "cache_read": 0.55, "cache_write": 6.875, "cache_write_1h": 11.0},
+            "sonnet": {"input": 3.3,  "output": 16.5, "cache_read": 0.33, "cache_write": 4.125, "cache_write_1h": 6.6},
+            "haiku":  {"input": 1.1,  "output": 5.5,  "cache_read": 0.11, "cache_write": 1.375, "cache_write_1h": 2.2},
         },
     },
     "bedrock": {
         "label": "AWS Bedrock",
         "claude_models": {
-            "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25},
-            "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75},
-            "haiku":  {"input": 1.0,  "output": 5.0,  "cache_read": 0.1,  "cache_write": 1.25},
+            "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25,  "cache_write_1h": 10.0},
+            "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75,  "cache_write_1h": 6.0},
+            "haiku":  {"input": 1.0,  "output": 5.0,  "cache_read": 0.1,  "cache_write": 1.25,  "cache_write_1h": 2.0},
         },
     },
 }
@@ -222,7 +236,7 @@ OPENAI_MODEL_PRICING = {
     "o3-pro": {"input": 20.0, "cache_read": 5.0, "output": 80.0},
     "o3-mini": {"input": 1.10, "cache_read": 0.55, "output": 4.40},
     "o3": {"input": 2.0, "cache_read": 0.50, "output": 8.0},
-    "o4-mini": {"input": 0.55, "cache_read": 0.14, "output": 2.20},
+    "o4-mini": {"input": 1.10, "cache_read": 0.275, "output": 4.40},
 }
 OPENAI_LONG_CONTEXT_PRICING = {
     "gpt-5.4": {"input": 5.0, "cache_read": 0.50, "output": 22.5},
@@ -277,11 +291,18 @@ def _save_pricing_tier(tier):
     _write_config_flag("pricing_tier", tier)
 
 
-def _get_model_cost(model, input_tokens, output_tokens, cache_read=0, cache_create=0, tier=None):
+def _get_model_cost(model, input_tokens, output_tokens, cache_read=0, cache_create=0, tier=None,
+                    cache_create_1h=None, cache_create_5m=None):
     """Calculate USD cost for a given model and token counts using the active pricing tier.
 
     Returns cost in USD. OpenAI/Codex and Gemini models use provider-specific
     rate cards; Claude models use the selected Claude provider tier.
+
+    For Claude models, cache_create tokens are priced by TTL tier when the split is known:
+      - cache_create_1h: 1-hour TTL writes (2x input rate, e.g. $10/MTok for Opus)
+      - cache_create_5m: 5-minute TTL writes (1.25x input rate, e.g. $6.25/MTok for Opus)
+    When the split is unavailable (both None), the total cache_create uses the 5m rate
+    (conservative; 5m is the more common tier for most Claude Code workloads).
     """
     if tier is None:
         tier = _load_pricing_tier()
@@ -313,11 +334,25 @@ def _get_model_cost(model, input_tokens, output_tokens, cache_read=0, cache_crea
         if rates is None:
             return 0.0
 
+    # Price cache-write tokens by TTL tier when the split is available.
+    # 1h tier = 2x input (cache_write_1h); 5m tier = 1.25x input (cache_write).
+    # Fall back to 5m rate for the full total when no split is stored.
+    if cache_create_1h is not None and cache_create_5m is not None:
+        split_1h = int(cache_create_1h or 0)
+        split_5m = int(cache_create_5m or 0)
+        unsplit = max(0, int(cache_create or 0) - split_1h - split_5m)
+        cc_write_cost = (
+            split_1h * rates.get("cache_write_1h", rates["cache_write"]) / 1e6
+            + (split_5m + unsplit) * rates["cache_write"] / 1e6
+        )
+    else:
+        cc_write_cost = int(cache_create or 0) * rates["cache_write"] / 1e6
+
     cost = (
         input_tokens * rates["input"] / 1e6
         + output_tokens * rates["output"] / 1e6
         + cache_read * rates["cache_read"] / 1e6
-        + cache_create * rates["cache_write"] / 1e6
+        + cc_write_cost
     )
     return cost
 
@@ -340,6 +375,8 @@ def _normalize_openai_model_name(model):
     if not model:
         return None
     value = str(model).strip().lower()
+    while re.match(r"^[a-z0-9_.-]+[/:]", value):
+        value = re.sub(r"^[a-z0-9_.-]+[/:]", "", value, count=1)
     if not value or value in {"codex", "openai", "unknown"}:
         return None
     aliases = (
@@ -378,6 +415,8 @@ def _normalize_gemini_model_name(model):
     if not model:
         return None
     value = str(model).strip().lower()
+    while re.match(r"^[a-z0-9_.-]+[/:]", value):
+        value = re.sub(r"^[a-z0-9_.-]+[/:]", "", value, count=1)
     if not value.startswith("gemini-"):
         return None
     if value.startswith("gemini-2.0"):
@@ -516,7 +555,7 @@ def _simulate_model_switch(session_data, target_model="sonnet"):
     }
 
 
-def _cost_from_model_breakdown(model_usage_breakdown, tier=None):
+def _cost_from_model_breakdown(model_usage_breakdown, tier=None, cache_create_1h=None, cache_create_5m=None):
     """Calculate exact known cost from per-model token buckets."""
     if not isinstance(model_usage_breakdown, dict):
         return 0.0
@@ -524,6 +563,11 @@ def _cost_from_model_breakdown(model_usage_breakdown, tier=None):
     for model, parts in model_usage_breakdown.items():
         if not isinstance(parts, dict):
             continue
+        part_1h = parts.get("cache_create_1h")
+        part_5m = parts.get("cache_create_5m")
+        if part_1h is None and part_5m is None and len(model_usage_breakdown) == 1:
+            part_1h = cache_create_1h
+            part_5m = cache_create_5m
         total += _get_model_cost(
             model,
             int(parts.get("fresh_input") or 0),
@@ -531,6 +575,8 @@ def _cost_from_model_breakdown(model_usage_breakdown, tier=None):
             int(parts.get("cache_read") or 0),
             int(parts.get("cache_create") or 0),
             tier=tier,
+            cache_create_1h=part_1h,
+            cache_create_5m=part_5m,
         )
     return total
 
@@ -4123,6 +4169,33 @@ def _codex_config_lock():
         os.close(fd)
 
 
+@contextmanager
+def _skill_mgmt_lock():
+    """Advisory file lock serializing skill archive/restore mutations.
+
+    Mirrors _config_lock: blocking flock with kernel auto-release on process
+    death; no-op fallback on Windows. The dashboard daemon and a CLI
+    `measure.py skill archive|restore` run in separate processes with no
+    in-process serialization, so this cross-process lock closes the
+    archive/restore TOCTOU windows (issue #48 hardening).
+    """
+    if not _HAS_FCNTL:
+        yield
+        return
+    lock_path = CLAUDE_DIR / "_backups" / ".skill-mgmt.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        yield
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def _write_codex_config(text: str) -> None:
     path = _safe_codex_config_path()
     with _codex_config_lock():
@@ -4304,13 +4377,29 @@ def _collect_management_data(components=None, trends=None):
     archived_skills = []
     if backups_dir.exists():
         for archive_dir in sorted(backups_dir.iterdir(), reverse=True):
-            if not archive_dir.is_dir() or not archive_dir.name.startswith("skills-archived"):
+            if not archive_dir.is_dir() or not archive_dir.name.startswith(SKILL_ARCHIVE_DIR_PREFIXES):
                 continue
-            date_part = archive_dir.name.replace("skills-archived-", "").replace("skills-archived", "")
-            for item in sorted(archive_dir.iterdir()):
-                if item.is_dir() and (item / "SKILL.md").exists():
-                    desc = ""
-                    try:
+            # "skills-archived-DATE" / "skills-deduped-DATE" -> "DATE"
+            date_part = archive_dir.name.split("-", 2)[2] if archive_dir.name.count("-") >= 2 else ""
+            try:
+                entries = sorted(archive_dir.iterdir())
+            except OSError:
+                continue
+            for item in entries:
+                # One unreadable entry must not blank the whole Manage tab.
+                try:
+                    if not item.is_dir():
+                        continue
+                    # A real archived skill carries SKILL.md; a symlinked skill is
+                    # archived as a dir holding only the marker (issue #48). SKILL.md
+                    # takes precedence so a real skill is never mislabeled as a link.
+                    # Surface both so symlinked skills stay restorable from the UI.
+                    has_skill_md = (item / "SKILL.md").exists()
+                    is_symlink_record = not has_skill_md and (item / SYMLINK_TARGET_MARKER).exists()
+                    if not has_skill_md and not is_symlink_record:
+                        continue
+                    desc = "Symlinked skill" if is_symlink_record else ""
+                    if not is_symlink_record:
                         content = (item / "SKILL.md").read_text(encoding="utf-8")[:2000]
                         if content.startswith("---"):
                             end = content.find("---", 3)
@@ -4319,15 +4408,16 @@ def _collect_management_data(components=None, trends=None):
                                     if line.strip().startswith("description:"):
                                         desc = line.strip()[12:].strip()[:100]
                                         break
-                    except OSError:
-                        pass
-                    archived_skills.append({
-                        "name": item.name,
-                        "archived_date": date_part,
-                        "archive_dir": archive_dir.name,
-                        "description": desc,
-                        "restore_cmd": f"python3 {mp_cmd} skill restore {shlex.quote(item.name)}",
-                    })
+                except OSError:
+                    continue
+                archived_skills.append({
+                    "name": item.name,
+                    "archived_date": date_part,
+                    "archive_dir": archive_dir.name,
+                    "description": desc,
+                    "symlink": is_symlink_record,
+                    "restore_cmd": f"python3 {mp_cmd} skill restore {shlex.quote(item.name)}",
+                })
 
     # MCP servers (local settings.json)
     settings, _ = _read_settings_json()
@@ -4531,7 +4621,7 @@ def plugin_cleanup(dry_run=False, quiet=False):
                         # For symlinks: record target, then remove the symlink
                         target = os.readlink(item)
                         dest.mkdir(parents=True, exist_ok=True)
-                        (dest / ".symlink-target").write_text(target)
+                        (dest / SYMLINK_TARGET_MARKER).write_text(target, encoding="utf-8")
                         item.unlink()
                     else:
                         shutil.move(str(item), str(dest))
@@ -4556,14 +4646,33 @@ def plugin_cleanup(dry_run=False, quiet=False):
 
 
 def _manage_skill(action, name):
-    """Archive or restore a skill."""
+    """Archive or restore a skill.
+
+    Skills in ~/.claude/skills are often symlinks pointing into a shared skills
+    repo. Archiving a symlinked skill records the link target and removes only
+    the link, never the real source (issue #48).
+
+    Held under a cross-process lock so a dashboard-daemon call and a CLI call
+    can't interleave their archive/restore mutations.
+    """
+    with _skill_mgmt_lock():
+        return _manage_skill_locked(action, name)
+
+
+def _manage_skill_locked(action, name):
+    import shutil
+
     # Validate name: prevent path traversal
-    if not name or "/" in name or "\\" in name or name in (".", "..") or "\0" in name:
+    if not isinstance(name, str) or not name or "/" in name or "\\" in name or name in (".", "..") or "\0" in name:
         print(f"  [!] Invalid skill name: {name}")
         return False
     skills_dir = CLAUDE_DIR / "skills"
-    resolved = (skills_dir / name).resolve()
-    if not resolved.is_relative_to(skills_dir.resolve()):
+    # Containment check on the UN-resolved path. The name is already validated as
+    # a single path component, so the join cannot escape skills_dir. Do NOT use
+    # .resolve() here: legitimate skills are often symlinks pointing outside
+    # ~/.claude/skills, and resolving the target would misflag them (issue #48).
+    candidate = skills_dir / name
+    if candidate.parent != skills_dir:
         print(f"  [!] Path traversal detected: {name}")
         return False
     backups_dir = CLAUDE_DIR / "_backups"
@@ -4572,12 +4681,26 @@ def _manage_skill(action, name):
 
     if action == "archive":
         src = skills_dir / name
-        if not src.exists():
+        if not src.exists() and not src.is_symlink():
             print(f"  Skill '{name}' not found in {skills_dir}")
             return False
-        archive_dir.mkdir(parents=True, exist_ok=True)
         dst = archive_dir / name
-        src.rename(dst)
+        if dst.exists() or dst.is_symlink():
+            print(f"  Skill '{name}' already archived. Remove it first.")
+            return False
+        try:
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            if src.is_symlink():
+                # Record the link target, remove only the link (not the real source)
+                target = os.readlink(src)
+                dst.mkdir(parents=True, exist_ok=True)
+                (dst / SYMLINK_TARGET_MARKER).write_text(target, encoding="utf-8")
+                src.unlink()
+            else:
+                shutil.move(str(src), str(dst))
+        except OSError as e:
+            print(f"  [!] Failed to archive '{name}': {e}")
+            return False
         print(f"  Archived: {name} -> {archive_dir.name}/")
         return True
 
@@ -4585,24 +4708,50 @@ def _manage_skill(action, name):
         # Search all archive dirs for this skill
         if backups_dir.exists():
             for ad in sorted(backups_dir.iterdir(), reverse=True):
-                if not ad.is_dir() or not ad.name.startswith("skills-archived"):
+                if not ad.is_dir() or not ad.name.startswith(SKILL_ARCHIVE_DIR_PREFIXES):
                     continue
                 src = ad / name
-                if src.exists():
-                    dst = skills_dir / name
-                    if dst.exists():
-                        print(f"  Skill '{name}' already exists in skills/. Remove it first.")
-                        return False
-                    src.rename(dst)
-                    print(f"  Restored: {name} from {ad.name}/")
-                    # Clean up empty archive dir
-                    try:
-                        remaining = list(ad.iterdir())
-                        if not remaining:
-                            ad.rmdir()
-                    except OSError:
-                        pass
-                    return True
+                if not src.exists() and not src.is_symlink():
+                    continue
+                dst = skills_dir / name
+                if dst.exists() or dst.is_symlink():
+                    print(f"  Skill '{name}' already exists in skills/. Remove it first.")
+                    return False
+                # A symlink record is a dir holding the marker and NO SKILL.md.
+                # Requiring SKILL.md to be absent stops a real skill that happens
+                # to ship the marker file from being turned into a link + deleted.
+                marker = src / SYMLINK_TARGET_MARKER
+                is_symlink_record = (
+                    src.is_dir() and marker.exists() and not (src / "SKILL.md").exists()
+                )
+                try:
+                    if is_symlink_record:
+                        target = marker.read_text(encoding="utf-8").strip()
+                        if not target:
+                            print(f"  [!] Archived link target for '{name}' is empty; cannot restore.")
+                            return False
+                        dst.symlink_to(target)
+                        # Link recreated; drop the archive record. If that fails,
+                        # remove the just-created link so a retry isn't blocked.
+                        try:
+                            shutil.rmtree(src)
+                        except OSError as e:
+                            dst.unlink(missing_ok=True)
+                            print(f"  [!] Failed to clear archive for '{name}': {e}")
+                            return False
+                    else:
+                        shutil.move(str(src), str(dst))
+                except OSError as e:
+                    print(f"  [!] Failed to restore '{name}': {e}")
+                    return False
+                print(f"  Restored: {name} from {ad.name}/")
+                # Clean up empty archive dir
+                try:
+                    if not list(ad.iterdir()):
+                        ad.rmdir()
+                except OSError:
+                    pass
+                return True
         print(f"  Skill '{name}' not found in any archive directory.")
         return False
     else:
@@ -6718,11 +6867,13 @@ def _parse_session_jsonl(filepath):
         model_usage[model] = model_usage.get(model, 0) + billable
         bd = model_usage_breakdown.setdefault(
             model,
-            {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "output": 0},
+            {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "cache_create_1h": 0, "cache_create_5m": 0, "output": 0},
         )
         bd["fresh_input"] += u["inp"]
         bd["cache_read"] += u["cr"]
         bd["cache_create"] += u["cc"]
+        bd["cache_create_1h"] += u["cc_1h"]
+        bd["cache_create_5m"] += u["cc_5m"]
         bd["output"] += u["out"]
 
     # Calculate duration
@@ -6848,7 +6999,12 @@ def parse_session_turns(filepath):
                         prev_call_ts = call_ts
                     except (ValueError, TypeError):
                         pass
-                cost = _get_model_cost(model, inp_tok, out_tok, cr, cc, tier=tier)
+                # Price cache-create by TTL tier when the per-turn split is available.
+                if cc_1h or cc_5m:
+                    cost = _get_model_cost(model, inp_tok, out_tok, cr, cc, tier=tier,
+                                           cache_create_1h=cc_1h, cache_create_5m=cc_5m)
+                else:
+                    cost = _get_model_cost(model, inp_tok, out_tok, cr, cc, tier=tier)
 
                 turns.append({
                     "turn_index": turn_index,
@@ -7040,6 +7196,7 @@ CREATE TABLE IF NOT EXISTS session_log (
     subagents_json TEXT,
     tool_calls_json TEXT,
     model_usage_json TEXT,
+    all_model_usage_json TEXT,
     model_usage_breakdown_json TEXT,
     version TEXT,
     slug TEXT,
@@ -7136,6 +7293,8 @@ def _init_trends_db():
             conn.execute("ALTER TABLE session_log ADD COLUMN p95_call_gap_seconds REAL")
         if "model_usage_breakdown_json" not in cols:
             conn.execute("ALTER TABLE session_log ADD COLUMN model_usage_breakdown_json TEXT")
+        if "all_model_usage_json" not in cols:
+            conn.execute("ALTER TABLE session_log ADD COLUMN all_model_usage_json TEXT")
         if "quality_score" not in cols:
             conn.execute("ALTER TABLE session_log ADD COLUMN quality_score REAL")
         if "quality_grade" not in cols:
@@ -7462,6 +7621,83 @@ def _is_file_collected(conn, jsonl_path):
     return cur.fetchone() is not None
 
 
+def _safe_json_dict(raw):
+    try:
+        data = json.loads(raw) if raw else {}
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _rebuild_aggregate_tables(conn):
+    """Recompute daily aggregate tables from session_log to avoid double counts."""
+    conn.execute("DELETE FROM daily_stats")
+    conn.execute("DELETE FROM model_daily")
+    conn.execute("DELETE FROM skill_daily")
+    conn.execute("DELETE FROM subagent_daily")
+
+    rows = conn.execute(
+        """SELECT date, input_tokens, output_tokens, duration_minutes, cache_hit_rate,
+                  quality_score, quality_grade, skills_json, subagents_json,
+                  model_usage_json, all_model_usage_json
+           FROM session_log"""
+    ).fetchall()
+    for row in rows:
+        date, input_tokens, output_tokens, duration, cache_hit, quality_score, quality_grade, skills_json, subagents_json, model_usage_json, all_model_usage_json = row
+        conn.execute(
+            """INSERT INTO daily_stats (date, session_count, total_input, total_output, total_duration, avg_cache_hit,
+                 avg_quality_score, worst_grade)
+               VALUES (?, 1, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(date) DO UPDATE SET
+                 session_count = session_count + 1,
+                 total_input = total_input + excluded.total_input,
+                 total_output = total_output + excluded.total_output,
+                 total_duration = total_duration + excluded.total_duration,
+                 avg_cache_hit = (avg_cache_hit * session_count + excluded.avg_cache_hit) / (session_count + 1),
+                 avg_quality_score = CASE
+                   WHEN avg_quality_score IS NULL THEN excluded.avg_quality_score
+                   ELSE (avg_quality_score * session_count + excluded.avg_quality_score) / (session_count + 1)
+                 END,
+                 worst_grade = CASE
+                   WHEN worst_grade IS NULL THEN excluded.worst_grade
+                   WHEN INSTR('FDCBAS', excluded.worst_grade) < INSTR('FDCBAS', worst_grade) THEN excluded.worst_grade
+                   ELSE worst_grade
+                 END""",
+            (date, input_tokens or 0, output_tokens or 0, duration or 0, cache_hit or 0, quality_score, quality_grade),
+        )
+        for skill, invocations in _safe_json_dict(skills_json).items():
+            conn.execute(
+                """INSERT INTO skill_daily (date, skill, session_count, invocations)
+                   VALUES (?, ?, 1, ?)
+                   ON CONFLICT(date, skill) DO UPDATE SET
+                     session_count = session_count + 1,
+                     invocations = invocations + excluded.invocations""",
+                (date, skill, int(invocations or 0)),
+            )
+        model_usage_for_daily = _safe_json_dict(all_model_usage_json)
+        if not model_usage_for_daily:
+            model_usage_for_daily = _safe_json_dict(model_usage_json)
+        for model_id, tokens in model_usage_for_daily.items():
+            normalized = _normalize_model_name(model_id)
+            if normalized is None:
+                continue
+            conn.execute(
+                """INSERT INTO model_daily (date, model, total_tokens)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(date, model) DO UPDATE SET
+                     total_tokens = total_tokens + excluded.total_tokens""",
+                (date, normalized, int(tokens or 0)),
+            )
+        for agent_type, count in _safe_json_dict(subagents_json).items():
+            conn.execute(
+                """INSERT INTO subagent_daily (date, agent_type, spawn_count)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(date, agent_type) DO UPDATE SET
+                     spawn_count = spawn_count + excluded.spawn_count""",
+                (date, agent_type, int(count or 0)),
+            )
+
+
 def _needs_model_daily_rebuild(conn):
     """Check if DB predates the #18 model attribution fix (schema version < 2)."""
     try:
@@ -7635,16 +7871,16 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         sq = score_session_quality(parsed)
 
         # Insert session_log
-        conn.execute(
+        cur = conn.execute(
             """INSERT OR IGNORE INTO session_log
                (jsonl_path, date, project, duration_minutes, input_tokens,
                 output_tokens, message_count, api_calls, cache_hit_rate,
                 cache_create_1h_tokens, cache_create_5m_tokens, cache_ttl_scanned,
                 avg_call_gap_seconds, max_call_gap_seconds, p95_call_gap_seconds,
                 skills_json, subagents_json, tool_calls_json, model_usage_json,
-                model_usage_breakdown_json, version, slug, topic, collected_at,
+                all_model_usage_json, model_usage_breakdown_json, version, slug, topic, collected_at,
                 quality_score, quality_grade)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 str(filepath), date, project_name,
                 parsed["duration_minutes"],
@@ -7663,6 +7899,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                 json.dumps(subagents_used),
                 json.dumps(parsed["tool_calls"]),
                 json.dumps(parsed["model_usage"]),
+                json.dumps(all_model_usage),
                 json.dumps(parsed.get("model_usage_breakdown", {})),
                 parsed["version"],
                 parsed.get("slug"),
@@ -7672,68 +7909,12 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                 sq["grade"],
             ),
         )
-
-        # Upsert daily_stats
-        conn.execute(
-            """INSERT INTO daily_stats (date, session_count, total_input, total_output, total_duration, avg_cache_hit,
-                 avg_quality_score, worst_grade)
-               VALUES (?, 1, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(date) DO UPDATE SET
-                 session_count = session_count + 1,
-                 total_input = total_input + excluded.total_input,
-                 total_output = total_output + excluded.total_output,
-                 total_duration = total_duration + excluded.total_duration,
-                 avg_cache_hit = (avg_cache_hit * session_count + excluded.avg_cache_hit) / (session_count + 1),
-                 avg_quality_score = CASE
-                   WHEN avg_quality_score IS NULL THEN excluded.avg_quality_score
-                   ELSE (avg_quality_score * session_count + excluded.avg_quality_score) / (session_count + 1)
-                 END,
-                 worst_grade = CASE
-                   WHEN worst_grade IS NULL THEN excluded.worst_grade
-                   WHEN INSTR('FDCBAS', excluded.worst_grade) < INSTR('FDCBAS', worst_grade) THEN excluded.worst_grade
-                   ELSE worst_grade
-                 END""",
-            (date, parsed["total_input_tokens"], parsed["total_output_tokens"],
-             parsed["duration_minutes"], parsed["cache_hit_rate"],
-             sq["score"], sq["grade"]),
-        )
-
-        # Upsert skill_daily (session-level: count each skill once per session)
-        for skill, invocations in skills_used.items():
-            conn.execute(
-                """INSERT INTO skill_daily (date, skill, session_count, invocations)
-                   VALUES (?, ?, 1, ?)
-                   ON CONFLICT(date, skill) DO UPDATE SET
-                     session_count = session_count + 1,
-                     invocations = invocations + excluded.invocations""",
-                (date, skill, invocations),
-            )
-
-        # Upsert model_daily (uses all_model_usage which includes subagent tokens)
-        for model_id, tokens in all_model_usage.items():
-            normalized = _normalize_model_name(model_id)
-            if normalized is None:
-                continue
-            conn.execute(
-                """INSERT INTO model_daily (date, model, total_tokens)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(date, model) DO UPDATE SET
-                     total_tokens = total_tokens + excluded.total_tokens""",
-                (date, normalized, tokens),
-            )
-
-        # Upsert subagent_daily
-        for agent_type, count in subagents_used.items():
-            conn.execute(
-                """INSERT INTO subagent_daily (date, agent_type, spawn_count)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(date, agent_type) DO UPDATE SET
-                     spawn_count = spawn_count + excluded.spawn_count""",
-                (date, agent_type, count),
-            )
+        if cur.rowcount != 1:
+            continue
 
         new_count += 1
 
+    _rebuild_aggregate_tables(conn)
     conn.commit()
     # Ensure schema version is set (idempotent, also set in migration and rebuild)
     conn.execute("PRAGMA user_version = 3")
@@ -8009,9 +8190,16 @@ def _query_trends_db(conn, days):
                 session_priced_tokens = model_tokens
             else:
                 session_unpriced_tokens = model_tokens
-        session_cost = _cost_from_model_breakdown(mb, tier=pricing_tier)
+        session_cost = _cost_from_model_breakdown(mb, tier=pricing_tier,
+                                                   cache_create_1h=cache_create_1h if cache_create_1h or cache_create_5m else None,
+                                                   cache_create_5m=cache_create_5m if cache_create_1h or cache_create_5m else None)
         if session_cost == 0.0:
-            session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total, tier=pricing_tier)
+            # Use the stored 1h/5m split when available; fall back to 5m-only rate otherwise.
+            if cache_create_1h or cache_create_5m:
+                session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total,
+                                               tier=pricing_tier, cache_create_1h=cache_create_1h, cache_create_5m=cache_create_5m)
+            else:
+                session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total, tier=pricing_tier)
         if session_cost == 0.0 and session_priced_tokens == 0 and session_unpriced_tokens == 0 and (inp_total or out_total):
             session_unpriced_tokens = inp_total + out_total
         total_cost_usd += session_cost
@@ -8282,7 +8470,13 @@ def _collect_trends_from_jsonl(days=30):
         cc = s.get("total_cache_create", 0)
         # uncached input = total - cache_read - cache_create
         uncached = max(0, s["total_input_tokens"] - cr - cc)
-        session_cost = _get_model_cost(dom_model, uncached, s["total_output_tokens"], cr, cc, tier=pricing_tier)
+        cc_1h = s.get("total_cache_create_1h", 0) or 0
+        cc_5m = s.get("total_cache_create_5m", 0) or 0
+        if cc_1h or cc_5m:
+            session_cost = _get_model_cost(dom_model, uncached, s["total_output_tokens"], cr, cc,
+                                           tier=pricing_tier, cache_create_1h=cc_1h, cache_create_5m=cc_5m)
+        else:
+            session_cost = _get_model_cost(dom_model, uncached, s["total_output_tokens"], cr, cc, tier=pricing_tier)
         session_tokens_for_cost = s["total_input_tokens"] + s["total_output_tokens"]
         if _is_priced_model(dom_model, tier=pricing_tier):
             session_priced_tokens = session_tokens_for_cost
@@ -9646,7 +9840,7 @@ def setup_hook(dry_run=False):
 
 # ========== Persistent Dashboard Daemon ==========
 
-TOKEN_OPTIMIZER_VERSION = "5.8.0"  # Keep in sync with plugin.json + marketplace.json
+TOKEN_OPTIMIZER_VERSION = "5.8.4"  # Keep in sync with plugin.json + marketplace.json
 _DASHBOARD_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 _DAEMON_RUNTIME = detect_runtime()
 _DAEMON_RUNTIME_SUFFIX = "codex" if _DAEMON_RUNTIME == "codex" else "claude"
@@ -14334,87 +14528,14 @@ def _ensure_private_dir(path):
 
 
 def archive_result(quiet=False):
-    """PostToolUse hook handler: archive large tool results to disk.
-
-    Reads hook JSON from stdin. If tool_response >= _ARCHIVE_THRESHOLD chars,
-    saves the full result to disk and (for MCP tools) outputs a trimmed
-    replacement via stdout with updatedMCPToolOutput.
-    """
-    hook_input = _read_stdin_hook_input()
-    if not hook_input:
-        return
-
-    tool_name = hook_input.get("tool_name", "")
-    tool_use_id = hook_input.get("tool_use_id", "")
-    tool_response = hook_input.get("tool_response", "")
-    session_id = hook_input.get("session_id", "")
-
-    if not tool_response or len(tool_response) < _ARCHIVE_THRESHOLD:
-        return
-
-    if not tool_use_id or not session_id:
+    """Compatibility wrapper for the canonical standalone PostToolUse handler."""
+    try:
+        from archive_result import archive_result as archive_result_main
+    except Exception as exc:
         if not quiet:
-            print("[Tool Archive] Missing tool_use_id or session_id, skipping.", file=sys.stderr)
+            print(f"[Tool Archive] Failed to load standalone archive_result.py: {exc}", file=sys.stderr)
         return
-
-    # Sanitize tool_use_id (same pattern as session_id)
-    if not tool_use_id or not re.match(r'^[a-zA-Z0-9_-]+$', tool_use_id):
-        if not quiet:
-            print("[Tool Archive] Invalid tool_use_id, skipping", file=sys.stderr)
-        return
-
-    archive_base = _archive_dir_for_session(session_id)
-    if not archive_base:
-        return
-    archive_dir = _ensure_private_dir(archive_base)
-
-    now = datetime.now(timezone.utc)
-    char_count = len(tool_response)
-    token_est = int(char_count / CHARS_PER_TOKEN)
-
-    # Save full result
-    entry_data = {
-        "tool_name": tool_name,
-        "tool_use_id": tool_use_id,
-        "chars": char_count,
-        "tokens_est": token_est,
-        "timestamp": now.isoformat(),
-        "archived_from": "PostToolUse",
-        "response": tool_response,
-    }
-    entry_path = archive_dir / f"{tool_use_id}.json"
-    fd = os.open(str(entry_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(entry_data, f)
-
-    # Update manifest (append-only JSONL for crash safety)
-    manifest_path = archive_dir / "manifest.jsonl"
-
-    manifest_entry = {
-        "tool_name": tool_name,
-        "tool_use_id": tool_use_id,
-        "chars": char_count,
-        "tokens_est": token_est,
-        "timestamp": now.isoformat(),
-        "archived_from": "PostToolUse",
-    }
-
-    fd = os.open(str(manifest_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    with os.fdopen(fd, "a", encoding="utf-8") as f:
-        f.write(json.dumps(manifest_entry) + "\n")
-
-    # Log savings event for tracking
-    _log_savings_event("tool_archive", int(char_count / CHARS_PER_TOKEN), session_id=session_id, detail=f"archived {tool_name} ({char_count} chars)")
-
-    if not quiet:
-        print(f"[Tool Archive] Archived {tool_name} result ({char_count:,} chars, ~{token_est:,} tokens): {tool_use_id}", file=sys.stderr)
-
-    # For MCP tools (tool_name contains "__"): output replacement via stdout
-    if "__" in tool_name:
-        preview = tool_response[:_ARCHIVE_PREVIEW_SIZE]
-        replacement = preview + f"\n\n[Full result archived ({char_count:,} chars). Use 'expand {tool_use_id}' to retrieve.]"
-        output = json.dumps({"updatedMCPToolOutput": replacement})
-        print(output)
+    archive_result_main(quiet=quiet)
 
 
 def _sanitize_tool_use_id(tool_use_id):
@@ -14440,6 +14561,8 @@ def _codex_backfill_tool_archive(filepath=None, session_id=None, max_outputs=20)
     avoids noisy per-tool hooks, so the Stop worker scans the bounded transcript
     and archives large/high-signal outputs into the same on-disk archive and
     SessionStore. Duplicate writes are skipped by filename and SQLite keys.
+    Backfill is durability metadata, not token savings, because the original
+    output already entered the transcript.
     """
     if not _use_codex_session_adapter(filepath):
         return 0
@@ -14452,7 +14575,6 @@ def _codex_backfill_tool_archive(filepath=None, session_id=None, max_outputs=20)
     if not archive_dir:
         return 0
     archived = 0
-    archived_tokens = 0
     try:
         outputs = codex_session.iter_tool_outputs(
             path,
@@ -14535,7 +14657,6 @@ def _codex_backfill_tool_archive(filepath=None, session_id=None, max_outputs=20)
                 except Exception:
                     pass
             archived += 1
-            archived_tokens += token_est
     finally:
         if store is not None:
             try:
@@ -14543,8 +14664,6 @@ def _codex_backfill_tool_archive(filepath=None, session_id=None, max_outputs=20)
             except Exception:
                 pass
 
-    if archived:
-        _log_savings_event("tool_archive", archived_tokens, session_id=sid, detail=f"codex backfilled {archived} tool outputs")
     return archived
 
 
@@ -15268,12 +15387,12 @@ def compact_restore(session_id=None, cwd=None, is_compact=False, new_session_onl
         # Post-compaction: find best checkpoint for this session.
         # Progressive checkpoints (captured at 50/65/80% fill) are preferred because
         # they contain richer context than emergency checkpoints at ~98%.
-        # IMPORTANT: progressive checkpoints are EXEMPT from TTL check because they
-        # are created early (at 50% fill) but consumed much later (at ~98% compaction).
+        # Long-lived checkpoint types use the retention-days window; stop/end
+        # checkpoints still use the short TTL to avoid stale auto-injection.
         def _checkpoint_restore_rank(trigger):
             if trigger.startswith("progressive-"):
                 try:
-                    return int(trigger.split("-", 1)[1])
+                    return 100 - int(trigger.split("-", 1)[1])
                 except (IndexError, ValueError):
                     return 100
             if trigger.startswith("quality-"):
@@ -15293,15 +15412,21 @@ def compact_restore(session_id=None, cwd=None, is_compact=False, new_session_onl
                 return 320
             return 400
 
+        now = datetime.now()
+        retention_cutoff = now - timedelta(days=_CHECKPOINT_RETENTION_DAYS)
         session_checkpoints = []
         for cp in checkpoints:
             if sid_safe not in cp["filename"]:
                 continue
             trigger = cp.get("trigger", "auto")
-            is_progressive = trigger.startswith("progressive-")
-            age_seconds = (datetime.now() - cp["created"]).total_seconds()
-            # Progressive checkpoints skip TTL, others must be within TTL
-            if not is_progressive and age_seconds >= _CHECKPOINT_TTL_SECONDS:
+            long_lived = (
+                trigger.startswith("progressive-")
+                or trigger.startswith("quality-")
+                or trigger in ("milestone-pre-fanout", "milestone-edit-batch")
+            )
+            if cp["created"] < retention_cutoff:
+                continue
+            if not long_lived and (now - cp["created"]).total_seconds() > _CHECKPOINT_TTL_SECONDS:
                 continue
             rank = _checkpoint_restore_rank(trigger)
             session_checkpoints.append((rank, cp))
@@ -15325,21 +15450,12 @@ def compact_restore(session_id=None, cwd=None, is_compact=False, new_session_onl
                 pass
             return
 
-        # No matching checkpoint found, try most recent (any session)
+        # No matching checkpoint found for this session. Never auto-restore a
+        # different session's body into post-compaction context; only surface a
+        # short pointer so the user can opt in if it is actually relevant.
         latest = checkpoints[0]
-        age_seconds = (datetime.now() - latest["created"]).total_seconds()
-        if age_seconds < _CHECKPOINT_TTL_SECONDS:
-            _print_checkpoint_body(latest["path"], "[Token Optimizer] Post-compaction context recovery:")
-            _print_intel_digest(sid_safe)
-            # Log savings for fallback checkpoint restore
-            try:
-                cp_size = latest["path"].stat().st_size
-                est_tokens_recovered = int(cp_size / CHARS_PER_TOKEN)
-                if est_tokens_recovered > 0:
-                    _log_savings_event("checkpoint_restore", est_tokens_recovered,
-                                       session_id=sid_safe, detail="restored from fallback checkpoint")
-            except (OSError, KeyError):
-                pass
+        if latest["created"] >= retention_cutoff:
+            print(f"[Token Optimizer] No checkpoint matched this session. Recent checkpoint available at {latest['path']}. Ask me to load it if relevant.")
         return
 
 
@@ -18050,8 +18166,14 @@ _LEGACY_SAVINGS_LABELS = {
     "setup_optimization": "Setup optimization",
     "tool_digest": "Tool digests",
     "checkpoint_restore": "Checkpoint restores",
-    "tool_archive": "Tool archives",
+    "tool_archive": "Tool replacements",
     "structure_map": "Structure maps",
+    # mcp_cap: ESTIMATED (not measured). Claude Code truncates MCP output
+    # before PostToolUse fires, so the true pre-cap size is invisible to TO.
+    # Logged by archive_result.py when an MCP result is at/near the configured
+    # MAX_MCP_OUTPUT_TOKENS cap. Label carries [est] to distinguish from
+    # measured categories. Phase 2 will replace with actual measurement.
+    "mcp_cap": "MCP output cap [est]",
 }
 
 # v5 Active Compression categories — stored in compression_events and
@@ -18463,7 +18585,8 @@ def validate_impact(strategy="auto", days=30, as_json=False):
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA busy_timeout=5000")
                 row = conn.execute(
-                    "SELECT MAX(timestamp) as latest FROM savings_events"
+                    "SELECT MAX(timestamp) as latest FROM savings_events "
+                    "WHERE event_type NOT IN ('tool_archive', 'mcp_cap', 'checkpoint_restore')"
                 ).fetchone()
                 if row and row[0]:
                     try:
@@ -18505,15 +18628,28 @@ def validate_impact(strategy="auto", days=30, as_json=False):
             dom_model = max(parsed["model_usage"], key=parsed["model_usage"].get) if parsed["model_usage"] else "unknown"
             total_input = parsed["total_input_tokens"]
             chr_val = parsed.get("cache_hit_rate", 0)
-            cache_read_est = int(total_input * chr_val)
-            cost = _get_model_cost(
-                dom_model,
-                max(0, total_input - cache_read_est),
-                parsed["total_output_tokens"],
-                cache_read_est,
-                0,
+            mb = parsed.get("model_usage_breakdown", {})
+            cost = _cost_from_model_breakdown(
+                mb,
                 tier=tier,
+                cache_create_1h=parsed.get("total_cache_create_1h", 0),
+                cache_create_5m=parsed.get("total_cache_create_5m", 0),
             )
+            if cost == 0.0:
+                cache_create_1h = parsed.get("total_cache_create_1h", 0) or 0
+                cache_create_5m = parsed.get("total_cache_create_5m", 0) or 0
+                cache_create = cache_create_1h + cache_create_5m
+                cache_read_est = int(total_input * chr_val)
+                cost = _get_model_cost(
+                    dom_model,
+                    max(0, total_input - cache_read_est - cache_create),
+                    parsed["total_output_tokens"],
+                    cache_read_est,
+                    cache_create,
+                    tier=tier,
+                    cache_create_1h=cache_create_1h if cache_create else None,
+                    cache_create_5m=cache_create_5m if cache_create else None,
+                )
             sessions.append({
                 "mtime": mtime,
                 "input_tokens": total_input,
@@ -18642,8 +18778,8 @@ def run_ensure_health():
     Side effects: writes settings.json (cleanupPeriodDays, hook heal, path
     repair, quality bar install), writes config flags (heal timestamp,
     welcome shown, nudge shown), creates / prunes checkpoint and cache
-    files, and may spawn a detached git pull subprocess on script-install
-    systems. All side effects are idempotent.
+    files, and may spawn a detached verified installer subprocess on
+    script-install systems. All side effects are idempotent.
 
     Task ordering matters: fast, always-safe writes (cleanupPeriodDays,
     bad env var removal) run first so they are guaranteed to complete
@@ -19001,11 +19137,14 @@ def run_ensure_health():
                     setup_quality_bar()
         except Exception as _e:
             print(f"  [Token Optimizer] quality bar setup failed: {_e}", file=sys.stderr)
-    # Auto-update check (once per day, script-installed users only)
+    # Auto-update check (once per day, script-installed users only).
+    # Route through install.sh so script installs update to the latest verified
+    # release tag and pass out-of-band checksums instead of pulling moving main.
     try:
         install_dir = RUNTIME_DIR / "token-optimizer"
         update_marker = install_dir / ".last-update-check"
-        if (install_dir / ".git").is_dir():
+        installer = install_dir / "install.sh"
+        if (install_dir / ".git").is_dir() and installer.exists():
             should_check = True
             if update_marker.exists():
                 age = time.time() - update_marker.stat().st_mtime
@@ -19015,7 +19154,8 @@ def run_ensure_health():
                 update_log = install_dir / ".last-update.log"
                 log_fd = os.open(str(update_log), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                 subprocess.Popen(
-                    ["git", "-C", str(install_dir), "pull", "--ff-only"],
+                    ["bash", str(installer)],
+                    cwd=str(install_dir),
                     stdout=log_fd, stderr=subprocess.STDOUT,
                     start_new_session=True
                 )
@@ -19029,7 +19169,7 @@ def run_ensure_health():
     # so they get future bug fixes automatically. Shown exactly once,
     # suppressed if the user has opted out of the quality bar entirely,
     # and skipped for script-install / dev-symlink users (they get their
-    # updates via the daily git pull above or via their local checkout).
+    # updates via the daily verified installer above or via their local checkout).
     try:
         already_shown = _read_config_flag("autoupdate_nudge_shown", False)
         qb_disabled = _read_config_flag("quality_bar_disabled", False)
@@ -19689,7 +19829,8 @@ if __name__ == "__main__":
         if new_session_only:
             compact_restore(session_id=sid, new_session_only=True)
         else:
-            is_compact = hook_input.get("is_compact", False)
+            source = str(hook_input.get("source") or hook_input.get("hook_event_name") or "").lower()
+            is_compact = bool(hook_input.get("is_compact", False)) or source == "compact" or "--compact" in args
             compact_restore(session_id=sid, is_compact=is_compact)
     elif args[0] in ("continue-last", "codex-continue-last"):
         topic = ""
